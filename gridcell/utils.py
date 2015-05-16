@@ -103,8 +103,9 @@ def gaussian(x, mean=0.0, cov=1.0):
     Seriously, you never know when you're gonna need a Gaussian. Best to keep it
     here in the utils module.
 
-    :x: array-like of shape (m, n), giving m n-dimensional x-values at which to
-        evaluate the gaussian
+    :x: array-like of shape (m, n1, n2, ...), giving m n-dimensional x-values at
+        which to evaluate the gaussian, where n = n1 * n2 * .... In the 1d case,
+        the array can be of shape (m,).
     :mean: array-like, broadcastable to shape (n,), giving the n-dimensional
            location of the Gaussian peak (the mean of the distribution for which
            this is the pdf).
@@ -114,10 +115,13 @@ def gaussian(x, mean=0.0, cov=1.0):
 
     """
     x = numpy.asarray(x)
-    __, n = x.shape
+    m = x.shape[0]
+    n = 1
+    for d in x.shape[1:]:
+        n *= d
     mean = numpy.asarray(mean) * numpy.ones(n)
     cov = numpy.eye(n).dot(numpy.asarray(cov))
-    return stats.multivariate_normal.pdf(x, mean=mean, cov=cov)
+    return stats.multivariate_normal.pdf(x.reshape(m, n), mean=mean, cov=cov)
 
 
 def sensibly_divide(num, denom, masked=False):
