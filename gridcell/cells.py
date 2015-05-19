@@ -576,72 +576,71 @@ class BaseCell(AlmostImmutable):
                                           pearson=pearson,
                                           normalized=normalized)
 
+    def features(self, roll=0):
+        """
+        Compute an array of features of this cell
+
+        The purpose of the feature array is to embed the cell into
+        a high-dimensional space where the euclidean distance between cells
+        correspond to some concept of closeness. This is useful for clustering
+        cells into modules.
+
+        The present definition consists of the x and y coordinates of each of
+        the six inner peaks in the autocorrelogram, scaled by the factor log(r)
+        / r, where r = self.scale().
+
+        :roll: quantities related to individual peaks are listed in
+               counterclockwise order in the feature array. The parameter 'roll'
+               decides which peak to start at: self.peaks()[roll] is used first,
+               and self.peaks()[roll - 1] last (this can be thought of as
+               replacing self.peaks() with numpy.roll(self.peaks(), roll,
+               axis=0)).
+        :returns: one-dimensional feature array
+
+        """
+        scale = self.scale()
+        peaks = numpy.roll(self.peaks(), roll, axis=0)
+        return peaks.ravel() * numpy.log(scale) / scale
+
     @memoize_method
     def distance(self, other):
         """
         Compute a distance between the grid patterns of grid cells
 
         This method defines a metric on the space of grid patterns from grid
-        cells. The distance is defined as the
-            square root of the
-        sum of the squared euclidean distances between the most closely
-        corresponding pairs of inner ring peaks in the autocorrelogram, divided
-        by the
-            arithmetic
-            #geometric
-            #harmonic
-        mean of the
-            scales of the cells.
-            #squared scales of the cells (which is proportional to the mean area
-            # of the grid ellipses).
-        This metric incorporates differences in both scale,
-        orientation and eccentricity, while only comparing quantities of the
-        same dimension, specified in the same unit, this giving a well-defined
-        and presumably scale-invariant distance. The metric is not sensitive to
-        grid phase.
+        cells. The distance is defined as the Euclidean distance between the
+        feature arrays of the cells, using the relative peak roll that minimizes
+        this distance.
 
         :other: Cell instance to measure distance to.
-        :returns: distance between cells, and the peak roll required to obtain
-                  it. The peak roll 'roll' is defined such that self.peaks and
-                  numpy.roll(other.peaks, roll, axis=0) give coordinates to the
-                  most closely corresponding peaks in self and other
+        :returns: distance between cells, and the peak roll applied to 'other'
+                  to obtain it. The peak roll 'roll' is defined such that
+                  self.peaks and numpy.roll(other.peaks(), roll, axis=0) give
+                  coordinates to the most closely corresponding peaks in self
+                  and other
 
         """
         if self is other:
-            dr = 0.0
-            r = 0
+            distance = 0.0
+            roll = 0
 
         else:
-            sscale = self.scale()
-            oscale = other.scale()
-            speaks_t = self.peaks().transpose()  # / sscale
-            opeaks_t = other.peaks().transpose()  # / oscale
-
-            dx, dy = speaks_t - opeaks_t
-            dr = numpy.sum(dx * dx + dy * dy)
-            r = 0
+            sfeat = self.features(roll=0)
+            dfeat = sfeat - other.features(roll=0)
+            distance = numpy.sum(dfeat * dfeat)
+            roll = 0
 
             # To make sure that the most closesly corresponding peaks are used,
             # the metric is computed as the minimum of three different relative
             # peak orderings.
-            for r_ in (-1, 1):
-                dx, dy = (speaks_t - numpy.roll(opeaks_t, r_, axis=1))
-                dr_ = numpy.sum(dx * dx + dy * dy)
-                if dr_ < dr:
-                    dr = dr_
-                    r = r_
+            for r in (-1, 1):
+                dfeat = sfeat - other.features(roll=r)
+                dist = numpy.sum(dfeat * dfeat)
+                if dist < distance:
+                    distance = dist
+                    roll = r
 
-            #dr *= max(sscale, oscale) / min(sscale, oscale)
-
-            #dr *= 2.0 / (sscale + oscale)
-
-            dr = 2.0 * numpy.sqrt(dr) / (sscale + oscale)
-            #dr = numpy.sqrt(dr / (sscale * oscale))
-            #dr = numpy.sqrt(dr) * ((sscale + oscale) /
-            #                       (2.0 * sscale * other.scale))
-            #dr = numpy.sqrt(2.0 * dr / (sscale * sscale + oscale * oscale))
-
-        return dr, r
+        return distance, roll
 
     @memoize_method
     def phase(self, other):
@@ -1571,16 +1570,9 @@ class CellCollection(AlmostImmutable, Mapping):
         __, rollmatrix = self.distances(keys=keys)
         rolls = rollmatrix[refkey]
 
-        feature_arr = numpy.vstack(
-            [numpy.roll(cell.peaks(), rolls[key], axis=1).ravel()
-             for (key, cell) in zip(keys, cells)])
+        feature_arr = numpy.vstack([cell.features(roll=rolls[key])
+                                    for (key, cell) in zip(keys, cells)])
 
-        ## Can this possibly make sense?
-        #for (i, row) in enumerate(feature_arr):
-        #    length = numpy.sqrt(numpy.sum(row * row))
-        #    scale = numpy.log(length) / length
-        #    feature_arr[i] *= scale
-        #
         __, labels = cluster.mean_shift(feature_arr, cluster_all=False,
                                         **kwargs)
 
@@ -1605,8 +1597,7 @@ class CellCollection(AlmostImmutable, Mapping):
 
         modules_ = {}
         outliers_ = {}
-        for (index, label) in enumerate(labels):
-            key = keys[index]
+        for (key, label) in zip(keys, labels):
             if label == -1:
                 outliers_[key] = self[key]
             else:
