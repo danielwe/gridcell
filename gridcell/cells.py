@@ -1566,7 +1566,7 @@ class CellCollection(AlmostImmutable, Mapping):
                among. If None (default), all cells are included.
         :mod_kw: dict of keyword arguments to pass to the Module constructor.
         :kwargs: passed through to cluster.dbscan()
-        :returns: list of Module instances, and a BaseCellCollection instance
+        :returns: list of Module instances, and a CellCollection instance
                   containing any outliers
 
         """
@@ -1586,7 +1586,7 @@ class CellCollection(AlmostImmutable, Mapping):
                among. If None (default), all cells are included.
         :mod_kw: dict of keyword arguments to pass to the Module constructor.
         :kwargs: passed through to cluster.mean_shift()
-        :returns: list of Module instances, and a BaseCellCollection instance
+        :returns: list of Module instances, and a CellCollection instance
                   containing any outliers
 
         """
@@ -1607,8 +1607,8 @@ class CellCollection(AlmostImmutable, Mapping):
                among. If None (default), all cells are included.
         :mod_kw: dict of keyword arguments to pass to the Module constructor.
         :kwargs: passed through to cluster.k_means()
-        :returns: list of Module instances, and a BaseCellCollection instance
-                  containing any outliers
+        :returns: list of Module instances, and a CellCollection instance
+                   containing any outliers
 
         """
         features = self.features(keys=keys)
