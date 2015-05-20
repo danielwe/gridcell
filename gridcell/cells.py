@@ -1523,6 +1523,22 @@ class CellCollection(AlmostImmutable, Mapping):
         return mean_tilt, mean_ecc
 
     @memoize_method
+    def stacked_firing_rate(self, keys=None):
+        """
+        Compute the stacked firing rate map of cells in the collection
+
+        The stacked firing rate map is defined as the sum of the firing rates of
+        all the cells.
+
+        :keys: sequence of cell keys to select cells to compute the stacked
+               firing rate from. If None, all cells are included.
+        :returns: IntensityMap2D instance containing the stacked firing rate.
+
+        """
+        __, cells = self.lookup(keys)
+        return sum(cell.firing_rate for cell in cells)
+
+    @memoize_method
     def distances(self, keys=None):
         """
         Compute a distance matrix between cells
@@ -1875,6 +1891,44 @@ class CellCollection(AlmostImmutable, Mapping):
         axes.set_ylim((0.0, 1.0))
 
         return lines
+
+    def plot_stacked_firing_rate(self, axes=None, keys=None, cax=None,
+                                 cmap=None, cbar_kw=None, **kwargs):
+        """
+        Plot the stacked firing rate map for cells in the collection
+
+        The stacked firing rate can be added to an existing plot via the
+        optional 'axes' argument.
+
+        This method is just a wrapper around self.stacked_firing_rate.plot().
+
+        :axes: Axes instance to add the intensity map to. If None (default),
+               a new Figure is created (this method never plots to the current
+               Figure or Axes). In the latter case, equal aspect ration will be
+               enforced on the newly created Axes instance.
+        :keys: sequence of cell keys to select cells to plot the stacked firing
+               rate of. If None (default), all cells are included.
+        :cax: Axes instance to plot the colorbar into. If None (default),
+              matplotlib automatically makes space for a colorbar on the
+              right-hand side of the plot.
+        :cmap: colormap to use for the plot. All valid matplotlib colormap
+               arguments can be used. If None (default), the default colormap
+               from rcParams is used (BEWARE: the default map might be 'jet',
+               and this is something you certainly DON'T WANT to use! If you're
+               clueless, try "YlGnBu_r" or "gray").
+        :cbar_kw: dict of keyword arguments to pass to the pyplot.colorbar()
+                  function. Default: None (empty dict)
+        :kwargs: additional keyword arguments passed on to axes.pcolormesh()
+        :returns: the axes instance containing the plot, and the colorbar
+                  instance
+
+        """
+        axes, cbar = self.stacked_firing_rate(keys=keys).plot(axes=axes,
+                                                              cax=cax,
+                                                              cmap=cmap,
+                                                              cbar_kw=cbar_kw,
+                                                              **kwargs)
+        return axes, cbar
 
 
 class Module(CellCollection):
