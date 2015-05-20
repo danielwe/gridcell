@@ -876,6 +876,14 @@ class IntensityMap(AlmostImmutable):
         """
         return self.data.shape
 
+    @property
+    def range_(self):
+        """
+        The range of values spanned by the underlying BinnedSet along each axis
+
+        """
+        return self.bset.range_
+
     def reflected(self):
         """
         Create a spatially reflected copy of the IntensityMap instance

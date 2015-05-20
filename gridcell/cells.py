@@ -313,6 +313,8 @@ class BaseCell(AlmostImmutable):
 
         """
         self.firing_rate = firing_rate
+        self.bins = firing_rate.shape
+        self.range_ = firing_rate.range_
         self.threshold = threshold
 
     def autocorrelate(self, mode='full', pearson=True, normalized=True):
