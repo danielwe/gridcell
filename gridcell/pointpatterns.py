@@ -33,7 +33,6 @@ if speedups.available:
     speedups.enable()
 
 
-EPS = numpy.finfo(numpy.float64).eps
 RSAMPLES = 80
 QUADLIMIT = 480
 
