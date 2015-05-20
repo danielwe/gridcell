@@ -1085,8 +1085,10 @@ class IntensityMap(AlmostImmutable):
         :returns: array of labels, and the number of labeled regions
 
         """
-        data = self.data
-        data_thres = data * (data > threshold)
+        data = numpy.ma.filled(self.data, fill_value=-numpy.inf)
+        regions = (data > threshold)
+        data_thres = numpy.zeros_like(data)
+        data_thres[regions] = data[regions]
         labels, n = measurements.label(data_thres)
         return labels, n
 
