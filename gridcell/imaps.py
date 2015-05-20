@@ -1426,19 +1426,22 @@ def _safe_mmap(normalized, mapfunc, *arrs):
     :returns: result of the mapping, optionally normalized
 
     """
+    def mask_nans(arr):
+        return numpy.ma.masked_array(arr, mask=numpy.isnan(arr))
+
     if normalized:
         filled_arrs = []
         indicators = []
         for arr in arrs:
-            marr = numpy.ma.masked_array(arr, mask=numpy.isnan(arr))
+            marr = mask_nans(arr)
             filled_arrs.append(marr.filled(0.0))
             indicators.append((~marr.mask).astype(float))
         new_arr = sensibly_divide(mapfunc(*filled_arrs), mapfunc(*indicators),
                                   masked=True)
     else:
-        if any(numpy.isnan(arr).any() for arr in arrs):
-            raise ValueError("cannot filter arrays with nans unless normalize "
-                             "== True")
+        if any(mask_nans(arr).mask.any() for arr in arrs):
+            raise ValueError("cannot filter IntensityMap instances that are "
+                             "masked or contain nans unless normalized == True")
         new_arr = mapfunc(*arrs)
 
     return new_arr
