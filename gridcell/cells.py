@@ -2,13 +2,26 @@
 
 """File: cells.py
 Module defining classes to represent multiple tetrode spike train recordings
-from neurons during behavior, and facilitate the analysis of the positional
+from neurons during behavior, and facilitate the analysis of the spatial
 modulation of the neuronal activity. The module is specifically geared at
 analyzing spatial firing rate maps from grid cells, and the grid patterns they
 define, but can be extended to analyze all kinds of cells with spatially
 modulated behavior.
 
 """
+# Copyright 2015 Daniel Wennberg
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 from __future__ import (absolute_import, division, print_function,
                         unicode_literals)
