@@ -167,13 +167,16 @@ def sensibly_divide(num, denom, masked=False):
         num_zero_or_nan = numpy.logical_or(num_filled == 0.0,
                                            numpy.isnan(num_filled))
         match = numpy.logical_and(denom_zero, num_zero_or_nan)
+
         if masked:
             denom = numpy.ma.masked_where(match, denom)
         else:
+            denom = numpy.copy(denom)
             try:
                 denom[match] = numpy.nan
             except TypeError:
-                denom = numpy.nan
+                denom *= numpy.ones_like(num)
+                denom[match] = numpy.nan
 
     return num / denom
 

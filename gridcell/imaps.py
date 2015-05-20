@@ -692,6 +692,9 @@ class IntensityMap(AlmostImmutable):
 
         return self.__class__(new_data, sbset)
 
+    def __radd__(self, other):
+        return self.__add__(other)
+
     @memoize_method
     def __sub__(self, other):
         """
@@ -719,6 +722,9 @@ class IntensityMap(AlmostImmutable):
             new_data = self.data - other.data
 
         return self.__class__(new_data, sbset)
+
+    def __rsub__(self, other):
+        return -self.__sub__(other)
 
     @memoize_method
     def __mul__(self, other):
@@ -748,8 +754,11 @@ class IntensityMap(AlmostImmutable):
 
         return self.__class__(new_data, sbset)
 
+    def __rmul__(self, other):
+        return self.__mul__(other)
+
     @memoize_method
-    def __div__(self, other):
+    def __truediv__(self, other):
         """
         Define division of IntensityMap instances defined over equal-comparing
         BinnedSet instances, and of IntensityMap instances with scalars
@@ -767,7 +776,7 @@ class IntensityMap(AlmostImmutable):
         try:
             obset = other.bset
         except AttributeError:
-            new_data = self.data / other
+            new_data = sensibly_divide(self.data, other, masked=True)
         else:
             if not (sbset == obset):
                 raise ValueError("instances of {} must be defined over "
@@ -780,8 +789,29 @@ class IntensityMap(AlmostImmutable):
 
         return self.__class__(new_data, sbset)
 
-    def __truediv__(self, other):
-        return self.__div__(other)
+    def __div__(self, other):
+        return self.__truediv__(other)
+
+    @memoize_method
+    def __rtruediv__(self, other):
+        """
+        Define division of other objects (e.g. scalars) with IntensityMap
+        instances
+
+        The division is performed using the sensibly_divide() function from the
+        utils module, with masked == True. This returns an intensity map
+        which is masked in bins where a "0 / 0"- or "nan / 0"-situation occured
+        (instead of raising a ZeroDivisionError).
+
+        :other: object to divide by the IntensityMap instance
+        :returns: new, divided IntensityMap instance
+
+        """
+        new_data = sensibly_divide(other, self.data, masked=True)
+        return self.__class__(new_data, self.bset)
+
+    def __rdiv__(self, other):
+        return self.__rtruediv__(other)
 
     def __neg__(self):
         """
