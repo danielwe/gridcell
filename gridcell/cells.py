@@ -1182,11 +1182,11 @@ class Cell(BaseCell):
                   smoothed firing rate map.
 
         """
-        xedges, yedges = timemap.bset.xedges, timemap.bset.yedges
+        bset = timemap.bset
         spike_hist, __, __ = numpy.histogram2d(spike_x, spike_y,
-                                               bins=(xedges, yedges),
+                                               bins=(bset.xedges, bset.yedges),
                                                normed=False)
-        spikemap = IntensityMap2D(spike_hist, timemap.bset)
+        spikemap = IntensityMap2D(spike_hist, bset)
 
         if filter_size is not None:
             if smoothing_mode == 'pre':
