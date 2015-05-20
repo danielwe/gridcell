@@ -1597,6 +1597,27 @@ class CellCollection(AlmostImmutable, Mapping):
 
         return self.modules_from_labels(keys, labels, mod_kw=mod_kw)
 
+    def k_means(self, n_clusters, keys=None, mod_kw=None, **kwargs):
+        """
+        Use the K-means clustering algorithm to find modules in the collection
+        of cells
+
+        :n_clusters: the number of clusters (and thus modules) to form
+        :keys: sequence of cell keys to select cells to search for modules
+               among. If None (default), all cells are included.
+        :mod_kw: dict of keyword arguments to pass to the Module constructor.
+        :kwargs: passed through to cluster.k_means()
+        :returns: list of Module instances, and a BaseCellCollection instance
+                  containing any outliers
+
+        """
+        keys, __ = self.lookup(keys)
+        features = numpy.array(self.features(keys=keys))
+
+        labels = cluster.k_means(features, n_clusters, **kwargs)[1]
+
+        return self.modules_from_labels(keys, labels, mod_kw=mod_kw)
+
     def modules_from_labels(self, keys, labels, mod_kw=None):
         """
         Use a list of keys and corresponding labels to instantiate Module
