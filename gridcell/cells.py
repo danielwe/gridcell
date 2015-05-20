@@ -1520,11 +1520,11 @@ class CellCollection(AlmostImmutable, Mapping):
         distdict, rolldict = {}, {}
         for (key, cell1) in zip(keys, cells):
             dist, roll = zip(*[cell1.distance(cell2) for cell2 in cells])
-            distdict[key] = dist
-            rolldict[key] = roll
+            distdict[key] = pandas.Series(dist, index=keys)
+            rolldict[key] = pandas.Series(roll, index=keys)
 
-        distmatrix = pandas.DataFrame(distdict, index=keys)
-        rollmatrix = pandas.DataFrame(rolldict, index=keys)
+        distmatrix = pandas.DataFrame(distdict)
+        rollmatrix = pandas.DataFrame(rolldict)
 
         return distmatrix, rollmatrix
 
