@@ -45,21 +45,22 @@ class Position(AlmostImmutable):
 
     """
 
-    def __init__(self, t, x, y, window=0.0, min_speed=0.0, **kwargs):
+    def __init__(self, t, x, y, speed_window=0.0, min_speed=0.0, **kwargs):
         """
         Initialize the Position instance
 
         :t: array-like, giving the times of position samples. Should be close to
-            regularly spaced if window != 0.0.
+            regularly spaced if speed_window != 0.0.
         :x: array-like, giving the x coordinates of position samples
         :y: array-like, giving the y coordinates of position samples
-        :window: length of the time interval over which to compute the average
-                 speed at each sample. The length of the averaging interval is
-                 rounded up to the nearest odd number of samples to get
-                 a symmetric window. Must be a non-negative number, given in the
-                 same unit as 't'.  Default is 0.0 (average speed computed over
-                 the shortest possible interval -- a central difference around
-                 the current sample).
+        :speed_window: length of the time interval over which to compute the
+                       average speed at each sample. The length of the averaging
+                       interval is rounded up to the nearest odd number of
+                       samples to get a symmetric window. Must be a non-negative
+                       number, given in the same unit as 't'.  Default is 0.0
+                       (average speed computed over the shortest possible
+                       interval -- a central difference around the current
+                       sample).
         :min_speed: lower speed limit for valid data. Sampled positions are only
                     considered valid if the computed average speed at the sample
                     is larger than this. Must be a non-negative number, given in
@@ -78,16 +79,17 @@ class Position(AlmostImmutable):
         self._x = numpy.ma.masked_array(x, mask=nanmask)
         self._y = numpy.ma.masked_array(y, mask=nanmask)
 
-        self.window = window
+        self.speed_window = speed_window
         self.min_speed = min_speed
 
         if not self.min_speed >= 0.0:
             raise ValueError("'min_speed' must be a non-negative number")
-        if not self.window >= 0.0:
-            raise ValueError("'smoothing_time' must be a non-negative number")
+        if not self.speed_window >= 0.0:
+            raise ValueError("'speed_window' must be a non-negative number")
 
         self.speed, tweights, __ = self.speed_and_weights(self.t, self._x,
-                                                          self._y, self.window)
+                                                          self._y,
+                                                          self.speed_window)
 
         speedmask = (self.speed < min_speed)
         mask = numpy.logical_or(nanmask, speedmask)
@@ -97,7 +99,7 @@ class Position(AlmostImmutable):
         self.tweights = numpy.ma.masked_array(tweights, mask=mask)
 
     @staticmethod
-    def speed_and_weights(t, x, y, window):
+    def speed_and_weights(t, x, y, speed_window):
         """
         Compute speed and time- and distance weights for position samples
 
@@ -106,16 +108,16 @@ class Position(AlmostImmutable):
         interval and a distance interval to each sample.
 
         :t: array-like, giving the times of position samples. Should be close to
-            regularly spaced if window != 0.0.
+            regularly spaced if speed_window != 0.0.
         :x: array-like (possibly masked), giving the x coordinates of position
             samples
         :y: array-like (possibly masked), giving the y coordinates of position
             samples
-        :window: length of the time interval around each sample over which to
-                 average the speed at each sample. The length of the time
-                 interval is rounded up to the nearest odd number of samples to
-                 get a symmetric window. Must be a non-negative number, given in
-                 the same unit as 't'.
+        :speed_window: length of the time interval around each sample over which
+                       to average the speed at each sample. The length of the
+                       time interval is rounded up to the nearest odd number of
+                       samples to get a symmetric window. Must be a non-negative
+                       number, given in the same unit as 't'.
         :returns: array with speed at each position sample, and time- and
                   distance weight arrays
 
@@ -133,7 +135,7 @@ class Position(AlmostImmutable):
         dweights_mask = numpy.ma.getmaskarray(dweights)
         dweights_filled = numpy.ma.filled(dweights, fill_value=0.0)
 
-        window_length = 2 * int(0.5 * window / numpy.mean(tsteps)) + 1
+        window_length = 2 * int(0.5 * speed_window / numpy.mean(tsteps)) + 1
         window_sequence = numpy.ones((window_length,)) * (1.0 / window_length)
 
         tweights_filt = (
@@ -1280,7 +1282,8 @@ class CellCollection(AlmostImmutable, Mapping):
 
         :session: session mapping containing at least the following fields:
             't': array-like, giving the times of position samples. Should be
-                 close to regularly spaced if the kwarg window is provided.
+                 close to regularly spaced if the kwarg speed_window is
+                 provided.
             'x': array-like, giving the x coordinates of position samples
             'y': array-like, giving the y coordinates of position samples
             'spike_ts': mapping of cell labels to spike time arrays giving the
@@ -1299,7 +1302,7 @@ class CellCollection(AlmostImmutable, Mapping):
                      a default value, and only set explicit thresholds other
                      than the default when necessary.
         :kwargs: Passed through to the Position and Cell constructors. Note:
-                 'window', 'min_speed' (Position), 'filter_size' (Cell).
+                 'speed_window', 'min_speed' (Position), 'filter_size' (Cell).
 
         """
         t, x, y, spike_ts = (session[skey]
@@ -1321,7 +1324,8 @@ class CellCollection(AlmostImmutable, Mapping):
                    session mappings. Each session mapping should contain at
                    least the following fields:
             't': array-like, giving the times of position samples. Should be
-                 close to regularly spaced if the kwarg window is provided.
+                 close to regularly spaced if the kwarg speed_window is
+                 provided.
             'x': array-like, giving the x coordinates of position samples
             'y': array-like, giving the y coordinates of position samples
             'spike_ts': mapping of cell labels to spike time arrays giving the
@@ -1341,7 +1345,7 @@ class CellCollection(AlmostImmutable, Mapping):
                      and only set explicit thresholds other than the default
                      when necessary.
         :kwargs: Passed through to the Position and Cell constructors. Note:
-                 'window', 'min_speed' (Position), 'filter_size',
+                 'speed_window', 'min_speed' (Position), 'filter_size',
                  'threshold' (Cell).
 
         """
