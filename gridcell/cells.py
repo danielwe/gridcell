@@ -1528,7 +1528,6 @@ class CellCollection(AlmostImmutable, Mapping):
 
         return distmatrix, rollmatrix
 
-    @memoize_method
     def dbscan(self, eps, min_samples, keys=None, mod_kw=None):
         """
         Use the DBSCAN clustering algorithm to find modules in the collection of
@@ -1551,7 +1550,6 @@ class CellCollection(AlmostImmutable, Mapping):
 
         return self.modules_from_labels(cellkeys, labels, mod_kw=mod_kw)
 
-    @memoize_method
     def mean_shift(self, keys=None, mod_kw=None, **kwargs):
         """
         Use the mean shift clustering algorithm to find modules in the
