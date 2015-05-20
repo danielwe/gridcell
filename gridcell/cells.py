@@ -578,9 +578,9 @@ class BaseCell(AlmostImmutable):
 
     def features(self, roll=0):
         """
-        Compute an array of features of this cell
+        Compute a series of features of this cell
 
-        The purpose of the feature array is to embed the cell into
+        The purpose of the feature series is to embed the cell into
         a high-dimensional space where the euclidean distance between cells
         correspond to some concept of closeness. This is useful for clustering
         cells into modules.
@@ -595,7 +595,7 @@ class BaseCell(AlmostImmutable):
                and self.peaks()[roll - 1] last (this can be thought of as
                replacing self.peaks() with numpy.roll(self.peaks(), roll,
                axis=0)).
-        :returns: one-dimensional feature array
+        :returns: one-dimensional array of features
 
         """
         scale = self.scale()
@@ -1528,6 +1528,33 @@ class CellCollection(AlmostImmutable, Mapping):
 
         return distmatrix, rollmatrix
 
+    @memoize_method
+    def features(self, keys=None):
+        """
+        Compute a feature array of the cells
+
+        The feature series comprising the array is computed with the roll
+        required for consitency.
+
+        :keys: sequence of cell keys to select cells to compute the feature
+               array for. If None, all cells are included.
+        :returns: DataFrame containing the feature array. The DataFrame row
+                  indices are the cell keys, while the DataFrame columns contain
+                  the features.
+
+        """
+        keys, cells = self.lookup(keys)
+        __, rollmatrix = self.distances(keys=keys)
+
+        ref = keys[0]
+        rolls = rollmatrix[ref]
+
+        features = pandas.DataFrame(
+            {key: cell.features(roll=rolls[key])
+             for (key, cell) in zip(keys, cells)}).transpose()
+
+        return features
+
     def dbscan(self, eps, min_samples, keys=None, mod_kw=None):
         """
         Use the DBSCAN clustering algorithm to find modules in the collection of
@@ -1563,16 +1590,10 @@ class CellCollection(AlmostImmutable, Mapping):
                   containing any outliers
 
         """
-        keys, cells = self.lookup(keys)
-        refkey = keys[0]
-        __, rollmatrix = self.distances(keys=keys)
-        rolls = rollmatrix[refkey]
+        keys, __ = self.lookup(keys)
+        features = numpy.array(self.features(keys=keys))
 
-        feature_arr = numpy.vstack([cell.features(roll=rolls[key])
-                                    for (key, cell) in zip(keys, cells)])
-
-        __, labels = cluster.mean_shift(feature_arr, cluster_all=False,
-                                        **kwargs)
+        __, labels = cluster.mean_shift(features, cluster_all=False, **kwargs)
 
         return self.modules_from_labels(keys, labels, mod_kw=mod_kw)
 
