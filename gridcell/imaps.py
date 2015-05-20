@@ -1011,7 +1011,7 @@ class IntensityMap(AlmostImmutable):
         return self.__class__(new_data, new_bset)
 
     @memoize_method
-    def correlate(self, other, mode='full', pearson=False, normalized=False):
+    def correlate(self, other, mode='full', pearson=True, normalized=False):
         """
         Compute the cross-correlogram of this and another IntensityMap instance
 
@@ -1026,7 +1026,7 @@ class IntensityMap(AlmostImmutable):
                   and variance 1.0 before correlating. The result of the
                   computation will then be the Pearson product-moment
                   correlation coefficient between displaced intensity arrays,
-                  evaluated at each possible displacement. Default is False.
+                  evaluated at each possible displacement.
         :normalized: if True, any masked values or nans in the intensity arrays,
                      as well as values beyond the their edges, are treated as
                      missing values, and the correlogram is renormalized for
@@ -1060,7 +1060,7 @@ class IntensityMap(AlmostImmutable):
 
         return self.__class__(new_data, new_bset)
 
-    def autocorrelate(self, mode='full', pearson=False, normalized=False):
+    def autocorrelate(self, mode='full', pearson=True, normalized=False):
         """
         Compute the autocorrelogram of this IntensityMap instance
 
