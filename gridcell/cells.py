@@ -1543,15 +1543,14 @@ class CellCollection(AlmostImmutable, Mapping):
                   the features.
 
         """
-        keys, cells = self.lookup(keys)
         __, rollmatrix = self.distances(keys=keys)
+        keys = rollmatrix.index
 
         ref = keys[0]
         rolls = rollmatrix[ref]
 
-        features = pandas.DataFrame(
-            {key: cell.features(roll=rolls[key])
-             for (key, cell) in zip(keys, cells)}).transpose()
+        features = pandas.DataFrame({key: self[key].features(roll=rolls[key])
+                                     for key in keys}).transpose()
 
         return features
 
@@ -1572,11 +1571,11 @@ class CellCollection(AlmostImmutable, Mapping):
 
         """
         distmatrix, __ = self.distances(keys=keys)
-        cellkeys, dists = distmatrix.columns, distmatrix.values
+        keys, dists = distmatrix.index, distmatrix.values
         labels = cluster.dbscan(dists, eps=eps, min_samples=min_samples,
                                 metric='precomputed')[1]
 
-        return self.modules_from_labels(cellkeys, labels, mod_kw=mod_kw)
+        return self.modules_from_labels(keys, labels, mod_kw=mod_kw)
 
     def mean_shift(self, keys=None, mod_kw=None, **kwargs):
         """
@@ -1591,10 +1590,10 @@ class CellCollection(AlmostImmutable, Mapping):
                   containing any outliers
 
         """
-        keys, __ = self.lookup(keys)
-        features = numpy.array(self.features(keys=keys))
+        features = self.features(keys=keys)
+        keys, feature_arr = features.index, features.values
 
-        labels = cluster.mean_shift(features, cluster_all=False, **kwargs)[1]
+        labels = cluster.mean_shift(feature_arr, cluster_all=False, **kwargs)[1]
 
         return self.modules_from_labels(keys, labels, mod_kw=mod_kw)
 
@@ -1612,10 +1611,10 @@ class CellCollection(AlmostImmutable, Mapping):
                   containing any outliers
 
         """
-        keys, __ = self.lookup(keys)
-        features = numpy.array(self.features(keys=keys))
+        features = self.features(keys=keys)
+        keys, feature_arr = features.index, features.values
 
-        labels = cluster.k_means(features, n_clusters, **kwargs)[1]
+        labels = cluster.k_means(feature_arr, n_clusters, **kwargs)[1]
 
         return self.modules_from_labels(keys, labels, mod_kw=mod_kw)
 
