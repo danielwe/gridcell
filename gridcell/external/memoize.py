@@ -28,6 +28,7 @@ def memoize_function(f):
     # Copyright (c) 2012 Martin Miller
     # Copyright (c) 2012 Oren Tirosh
     # Copyright (c) 2014 Isaac Levy
+    # Copyright (c) 2015 Daniel Wennberg
     #
     # Permission is hereby granted, free of charge, to any person obtaining
     # a copy of this software and associated documentation files (the
@@ -42,11 +43,11 @@ def memoize_function(f):
     #
     # THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
     # IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-    # FITNESS #FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-    # THE AUTHORS OR #COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR
-    # OTHER LIABILITY, WHETHER #IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
-    # ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
-    # OTHER DEALINGS IN THE SOFTWARE.
+    # FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+    # THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    # FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    # DEALINGS IN THE SOFTWARE.
     class memodict(dict):
         __slots__ = ()
 
@@ -83,7 +84,7 @@ class memoize_method(object):
     This decorator has been adapted from
     http://code.activestate.com/recipes/577452-a-memoize-decorator-for-instance-methods/
     with mostly minor aesthetic modifications, plus the support for unhashable
-    argument lists (added by Daniel Wennberg, 2015).
+    argument lists and a method for clearing the cahce on an instance.
 
 
     Parameters
@@ -93,6 +94,7 @@ class memoize_method(object):
 
     """
     # Copyright (c) 2012 Daniel Miller
+    # Copyright (c) 2015 Daniel Wennberg
     #
     # Permission is hereby granted, free of charge, to any person obtaining
     # a copy of this software and associated documentation files (the
@@ -107,11 +109,11 @@ class memoize_method(object):
     #
     # THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
     # IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-    # FITNESS #FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-    # THE AUTHORS OR #COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR
-    # OTHER LIABILITY, WHETHER #IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
-    # ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
-    # OTHER DEALINGS IN THE SOFTWARE.
+    # FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+    # THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    # FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    # DEALINGS IN THE SOFTWARE.
 
     def __init__(self, f):
         self.f = f
