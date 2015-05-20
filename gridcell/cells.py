@@ -613,9 +613,9 @@ class BaseCell(AlmostImmutable):
         this distance.
 
         :other: Cell instance to measure distance to.
-        :returns: distance between cells, and the peak roll applied to 'other'
-                  to obtain it. The peak roll 'roll' is defined such that
-                  self.peaks and numpy.roll(other.peaks(), roll, axis=0) give
+        :returns: distance between cells, and the peak roll applied to this cell
+                  to obtain it. The peak roll  is defined such that
+                  numpy.roll(self.peaks, roll, axis=0) and other.peaks() give
                   coordinates to the most closely corresponding peaks in self
                   and other
 
@@ -625,8 +625,8 @@ class BaseCell(AlmostImmutable):
             roll = 0
 
         else:
-            sfeat = self.features(roll=0)
-            dfeat = sfeat - other.features(roll=0)
+            ofeat = other.features(roll=0)
+            dfeat = self.features(roll=0) - ofeat
             distance = numpy.sum(dfeat * dfeat)
             roll = 0
 
@@ -634,7 +634,7 @@ class BaseCell(AlmostImmutable):
             # the metric is computed as the minimum of three different relative
             # peak orderings.
             for r in (-1, 1):
-                dfeat = sfeat - other.features(roll=r)
+                dfeat = self.features(roll=r) - ofeat
                 dist = numpy.sum(dfeat * dfeat)
                 if dist < distance:
                     distance = dist
@@ -1392,8 +1392,8 @@ class CellCollection(AlmostImmutable, Mapping):
 
         Here, the attributes are assumed to be arrays with a value for each of
         the peaks in the inner ring, such that the arrays must be rolled into
-        the configuration giving the smallest distances between peaks before
-        computing the mean (see Cell.distance() for explanation of roll).
+        maximal peak alignment before computing the mean (see Cell.distance()
+        for explanation of roll).
 
         :attr: the Cell attribute to compute the mean over. Assumed to be
                a callable returning the requested values in the form of an array
@@ -1405,9 +1405,10 @@ class CellCollection(AlmostImmutable, Mapping):
         """
         __, cells = self.lookup(keys)
         refcell = cells[0]
+
         attrsum = 0.0
         for cell in cells:
-            __, roll = refcell.distance(cell)
+            __, roll = cell.distance(refcell)
             attrsum += numpy.roll(getattr(cell, attr)(), roll, axis=0)
         ninv = 1.0 / len(cells)
         return ninv * attrsum
@@ -1511,8 +1512,10 @@ class CellCollection(AlmostImmutable, Mapping):
                matrix for. If None, all cells are included.
         :returns: DataFrame containing the distance matrix, DataFrame containing
                   the roll matrix. Both DataFrames are indexed along rows and
-                  columns by the cell keys (keys). See BaseCell.distance() for
-                  an explanation of roll.
+                  columns by the cell keys (keys). The roll matrix is organized
+                  such that rollmatrix[key1][key2] gives the roll to apply to
+                  self[key2] to align it with self[key1] (see
+                  BaseCell.distance() for the full explanation of roll).
 
         """
         keys, cells = self.lookup(keys)
@@ -1523,8 +1526,8 @@ class CellCollection(AlmostImmutable, Mapping):
             distdict[key] = pandas.Series(dist, index=keys)
             rolldict[key] = pandas.Series(roll, index=keys)
 
-        distmatrix = pandas.DataFrame(distdict)
-        rollmatrix = pandas.DataFrame(rolldict)
+        distmatrix = pandas.DataFrame(distdict).transpose()
+        rollmatrix = pandas.DataFrame(rolldict).transpose()
 
         return distmatrix, rollmatrix
 
@@ -1543,14 +1546,15 @@ class CellCollection(AlmostImmutable, Mapping):
                   the features.
 
         """
-        __, rollmatrix = self.distances(keys=keys)
-        keys = rollmatrix.index
+        keys, cells = self.lookup(keys)
+        refcell = cells[0]
 
-        ref = keys[0]
-        rolls = rollmatrix[ref]
+        featdict = {}
+        for (key, cell) in zip(keys, cells):
+            __, roll = cell.distance(refcell)
+            featdict[key] = cell.features(roll=roll)
 
-        features = pandas.DataFrame({key: self[key].features(roll=rolls[key])
-                                     for key in keys}).transpose()
+        features = pandas.DataFrame(featdict).transpose()
 
         return features
 
@@ -1743,10 +1747,11 @@ class CellCollection(AlmostImmutable, Mapping):
             mean_kw = {}
 
         keys, cells = self.lookup(keys)
-        alpha, beta, gamma = [], [], []
         refcell = cells[0]
+
+        alpha, beta, gamma = [], [], []
         for cell in cells:
-            __, roll = refcell.distance(cell)
+            __, roll = cell.distance(refcell)
             angles = numpy.rad2deg(numpy.roll(cell.peaks_polar()[:3, 1], roll))
             alpha.append(angles[0])
             beta.append(angles[1])
