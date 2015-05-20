@@ -1214,7 +1214,7 @@ class Cell(BaseCell):
         :axes: Axes instance to add the spikes to. If None (default), the
                current Axes instance with equal aspect ratio is used if any, or
                a new one created.
-        :path: if True, plot the path threough the spikes using some hopefully
+        :path: if True, plot the path through the spikes using some hopefully
                sensible defaults. For better control, leave this False and use
                self.pos.plot_path() instead.
         :marker: a valid matplotlib marker specification. Defaults to 'o'
