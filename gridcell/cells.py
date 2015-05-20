@@ -1555,7 +1555,7 @@ class CellCollection(AlmostImmutable, Mapping):
 
         return features
 
-    def dbscan(self, eps, min_samples, keys=None, mod_kw=None):
+    def dbscan(self, eps, min_samples, keys=None, mod_kw=None, **kwargs):
         """
         Use the DBSCAN clustering algorithm to find modules in the collection of
         cells
@@ -1566,14 +1566,15 @@ class CellCollection(AlmostImmutable, Mapping):
         :keys: sequence of cell keys to select cells to search for modules
                among. If None (default), all cells are included.
         :mod_kw: dict of keyword arguments to pass to the Module constructor.
+        :kwargs: passed through to cluster.dbscan()
         :returns: list of Module instances, and a BaseCellCollection instance
                   containing any outliers
 
         """
         distmatrix, __ = self.distances(keys=keys)
         cellkeys, dists = distmatrix.columns, distmatrix.values
-        __, labels = cluster.dbscan(dists, eps=eps, min_samples=min_samples,
-                                    metric='precomputed')
+        labels = cluster.dbscan(dists, eps=eps, min_samples=min_samples,
+                                metric='precomputed')[1]
 
         return self.modules_from_labels(cellkeys, labels, mod_kw=mod_kw)
 
@@ -1593,7 +1594,7 @@ class CellCollection(AlmostImmutable, Mapping):
         keys, __ = self.lookup(keys)
         features = numpy.array(self.features(keys=keys))
 
-        __, labels = cluster.mean_shift(features, cluster_all=False, **kwargs)
+        labels = cluster.mean_shift(features, cluster_all=False, **kwargs)[1]
 
         return self.modules_from_labels(keys, labels, mod_kw=mod_kw)
 
