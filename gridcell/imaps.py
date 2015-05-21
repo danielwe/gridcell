@@ -1444,12 +1444,11 @@ def _safe_mmap(normalized, mapfunc, *arrs):
     missing values.
 
     :normalized: if True, the output of the map is normalized at each element to
-                 eliminate the contribution of nans and masked values, and
-                 values beyond the edges of the array. to Where only missing
-                 values would have contributed, the resulting value is nan. If
-                 False, the map is applied without normalization, and the
-                 presence of masked entries or nans in any of the arrays will
-                 raise a ValueError.
+                 eliminate the contribution from nans, masked values and values
+                 beyond the edges of the array. Where only such values would
+                 have contributed, the resulting value is nan. If False, the map
+                 is applied without normalization, and the presence of nans or
+                 masked values in any of the arrays will raise a ValueError.
     :mapfunc: callable defining the multilinear map: mapfunc(*arrs) returns the
               unnormalized mapping
     :arrs: list of arrays to compute the map over
