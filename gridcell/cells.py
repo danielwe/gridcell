@@ -32,7 +32,7 @@ from sklearn import cluster
 from matplotlib import pyplot
 from collections import Mapping
 
-from .utils import AlmostImmutable, gaussian, add_ticks
+from .utils import AlmostImmutable, gaussian, add_ticks, sensibly_divide
 from .shapes import Ellipse
 from .imaps import IntensityMap2D
 from .pointpatterns import PointPattern, PointPatternCollection
@@ -73,11 +73,9 @@ class Position(AlmostImmutable):
                  information available here.
 
         """
-        nanmask = numpy.logical_or(numpy.isnan(x), numpy.isnan(y))
-
         self.t = t
-        self._x = numpy.ma.masked_array(x, mask=nanmask)
-        self._y = numpy.ma.masked_array(y, mask=nanmask)
+        self._x = x
+        self._y = y
 
         self.speed_window = speed_window
         self.min_speed = min_speed
@@ -91,7 +89,9 @@ class Position(AlmostImmutable):
                                                           self._y,
                                                           self.speed_window)
 
-        speedmask = (self.speed < min_speed)
+        speedmask = numpy.logical_or(self.speed < min_speed,
+                                     numpy.isnan(self.speed))
+        nanmask = numpy.logical_or(numpy.isnan(x), numpy.isnan(y))
         mask = numpy.logical_or(nanmask, speedmask)
 
         self.x = numpy.ma.masked_array(x, mask=mask)
@@ -109,10 +109,8 @@ class Position(AlmostImmutable):
 
         :t: array-like, giving the times of position samples. Should be close to
             regularly spaced if speed_window != 0.0.
-        :x: array-like (possibly masked), giving the x coordinates of position
-            samples
-        :y: array-like (possibly masked), giving the y coordinates of position
-            samples
+        :x: array-like, giving the x coordinates of position samples
+        :y: array-like, giving the y coordinates of position samples
         :speed_window: length of the time interval around each sample over which
                        to average the speed at each sample. The length of the
                        time interval is rounded up to the nearest odd number of
@@ -126,25 +124,26 @@ class Position(AlmostImmutable):
         tweights = 0.5 * numpy.hstack((tsteps[0], tsteps[:-1] + tsteps[1:],
                                        tsteps[-1]))
 
-        xsteps = numpy.ma.diff(x)
-        ysteps = numpy.ma.diff(y)
-        dsteps = numpy.ma.sqrt(xsteps*xsteps + ysteps*ysteps)
+        xsteps = numpy.diff(x)
+        ysteps = numpy.diff(y)
+        dsteps = numpy.sqrt(xsteps*xsteps + ysteps*ysteps)
         dweights = 0.5 * numpy.ma.hstack((dsteps[0], dsteps[:-1] + dsteps[1:],
                                           dsteps[-1]))
 
-        dweights_mask = numpy.ma.getmaskarray(dweights)
-        dweights_filled = numpy.ma.filled(dweights, fill_value=0.0)
+        dweights_nanmask = numpy.isnan(dweights)
+        dweights_filled = numpy.copy(dweights)
+        dweights_filled[dweights_nanmask] = 0.0
 
         window_length = 2 * int(0.5 * speed_window / numpy.mean(tsteps)) + 1
         window_sequence = numpy.ones((window_length,)) * (1.0 / window_length)
 
-        tweights_filt = (
-            signal.convolve(tweights, window_sequence, mode='same') /
+        tweights_filt = sensibly_divide(
+            signal.convolve(tweights, window_sequence, mode='same'),
             signal.convolve(numpy.ones_like(tweights), window_sequence,
                             mode='same'))
-        dweights_filt = (
-            signal.convolve(dweights_filled, window_sequence, mode='same') /
-            signal.convolve((~dweights_mask).astype(numpy.float_),
+        dweights_filt = sensibly_divide(
+            signal.convolve(dweights_filled, window_sequence, mode='same'),
+            signal.convolve((~dweights_nanmask).astype(numpy.float_),
                             window_sequence, mode='same'))
 
         speed = dweights_filt / tweights_filt
@@ -172,12 +171,12 @@ class Position(AlmostImmutable):
 
         """
         hist, xedges, yedges = numpy.histogram2d(
-            self.x.compressed(),
-            self.y.compressed(),
+            numpy.ma.compressed(self.x),
+            numpy.ma.compressed(self.y),
             bins=bins,
             range=range_,
             normed=False,
-            weights=self.tweights.compressed())
+            weights=numpy.ma.compressed(self.tweights))
 
         return IntensityMap2D(hist, xedges, yedges)
 
@@ -1150,16 +1149,23 @@ class Cell(BaseCell):
             samples
         :y: array-like, possibly masked, giving the y coordinates of position
             samples
-        :returns: array of spike x coordinates, array of spike y coordinates
+        :returns: array of spike x coordinates, array of spike y coordinates.
+                  The arrays are masked if the input x and y arrays are masked.
 
         """
-        x = numpy.ma.filled(x, fill_value=numpy.nan)
-        y = numpy.ma.filled(y, fill_value=numpy.nan)
+        x_filled = numpy.ma.filled(x, fill_value=numpy.nan)
+        y_filled = numpy.ma.filled(y, fill_value=numpy.nan)
 
-        spike_x = numpy.interp(spike_t, t, x)
-        spike_y = numpy.interp(spike_t, t, y)
-        mask = numpy.logical_or(numpy.isnan(spike_x), numpy.isnan(spike_y))
-        return spike_x[~mask], spike_y[~mask]
+        spike_x_filled = numpy.interp(spike_t, t, x_filled)
+        spike_y_filled = numpy.interp(spike_t, t, y_filled)
+        mask = numpy.logical_or(numpy.isnan(spike_x_filled),
+                                numpy.isnan(spike_y_filled))
+
+        spike_x_tmp = numpy.interp(spike_t, t, x)
+        spike_y_tmp = numpy.interp(spike_t, t, y)
+        spike_x = numpy.ma.masked_array(spike_x_tmp, mask=mask)
+        spike_y = numpy.ma.masked_array(spike_y_tmp, mask=mask)
+        return spike_x, spike_y
 
     @staticmethod
     def compute_firing_rate(spike_x, spike_y, timemap, filter_size,
@@ -1167,8 +1173,8 @@ class Cell(BaseCell):
         """
         Compute the firing rate map from spikes and positional data
 
-        :spike_x: array-like, x coordinates of spikes
-        :spike_y: array_like, y coordinates of spikes
+        :spike_x: array-like, possibly masked, x coordinates of spikes
+        :spike_y: array_like, possibly masked, y coordinates of spikes
         :timemap: IntensityMap2D instance giving the spatial distribution of
                   time spent
         :filter_size: if not None, the firing rate map is smoothed using the
@@ -1187,7 +1193,8 @@ class Cell(BaseCell):
 
         """
         bset = timemap.bset
-        spike_hist, __, __ = numpy.histogram2d(spike_x, spike_y,
+        spike_hist, __, __ = numpy.histogram2d(numpy.ma.compressed(spike_x),
+                                               numpy.ma.compressed(spike_y),
                                                bins=(bset.xedges, bset.yedges),
                                                normed=False)
         spikemap = IntensityMap2D(spike_hist, bset)
