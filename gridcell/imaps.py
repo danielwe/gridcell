@@ -906,6 +906,19 @@ class IntensityMap(AlmostImmutable):
             return self._reflected
 
     @memoize_method
+    def filled(self, fill_value):
+        """
+        Create a copy of the IntensityMap instance with masked values replaced
+        by a fill value
+
+        :fill_value: value to replace masked values with
+        :returns: new, filled IntensityMap instance
+
+        """
+        new_data = numpy.ma.filled(self.data, fill_value=fill_value)
+        return self.__class__(new_data, self.bset)
+
+    @memoize_method
     def fft(self):
         """
         Compute the Discrete Fourier Transform of this IntensityMap instance
