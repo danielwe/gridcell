@@ -616,12 +616,16 @@ class IntensityMap(AlmostImmutable):
         Initialize an IntensityMap instance
 
         :data: array-like map containing a scalar intensity for each bin in
-               bset. A masked array (using the numpy.ma module) may be used to
-               represent missing data etc. Note that before passing to external
-               functions, masked entries will always be replaced by numpy.nan.
-               The ordering of axes in the array should correspond to that in
-               the underlying BinnedSet instance, such that data[i0, i1, ...,
-               ik_1] gives the intensity in the cell defined by
+               bset. Nan-valued and/or masked elements (using the numpy.ma
+               module) may be used to represent missing data. Note that while
+               several methods are explicitly designed to handle missing values
+               (e.g. smoothing, convolve and correlate, when normalized ==
+               True), other methods are not designed with this in mind (e.g.
+               fft). In the latter case, missing values will be represented as
+               nans in an unmasked array and handled by floating-point
+               arithmetic.  The ordering of axes in the array should correspond
+               to that in the underlying BinnedSet instance, such that data[i0,
+               i1, ..., ik_1] gives the intensity in the cell defined by
                (bset.edges[0][i0], bset.edges[0][i0 + 1],
                 bset.edges[1][i1], bset.edges[1][i1 + 1],
                 ...,
@@ -631,11 +635,7 @@ class IntensityMap(AlmostImmutable):
                is made to initialize a new BinnedSet instance with *args.
 
         """
-        if isinstance(data, numpy.ma.masked_array):
-            self.data = data
-            self._data_nomask = numpy.ma.filled(data, fill_value=numpy.nan)
-        else:
-            self._data_nomask = self.data = numpy.array(data)
+        self.data = numpy.ma.filled(data, fill_value=numpy.nan)
 
         potential_bset = args[0]
         if isinstance(potential_bset, BinnedSet):
@@ -665,7 +665,7 @@ class IntensityMap(AlmostImmutable):
 
         """
         equal = ((self.bset == other.bset) and
-                 numpy.ma.allclose(self.data, other.data))
+                 numpy.ma.allclose(self.masked_data, other.masked_data))
         return equal
 
     @memoize_method
@@ -788,7 +788,7 @@ class IntensityMap(AlmostImmutable):
                                  .format(self.__class__.__name__,
                                          self.bset.__class__.__name__))
 
-            new_data = sensibly_divide(self.data, other.data, masked=True)
+            new_data = sensibly_divide(self.data, other.data)
 
         return self.__class__(new_data, sbset)
 
@@ -810,7 +810,7 @@ class IntensityMap(AlmostImmutable):
         :returns: new, divided IntensityMap instance
 
         """
-        new_data = sensibly_divide(other, self.data, masked=True)
+        new_data = sensibly_divide(other, self.data)
         return self.__class__(new_data, self.bset)
 
     def __rdiv__(self, other):
@@ -887,6 +887,16 @@ class IntensityMap(AlmostImmutable):
         """
         return self.bset.range_
 
+    @property
+    @memoize_method
+    def masked_data(self):
+        """
+        A representation of the intensity data with missing values masked
+
+        """
+        data = self.data
+        return numpy.ma.masked_where(numpy.isnan(data), data)
+
     def reflected(self):
         """
         Create a spatially reflected copy of the IntensityMap instance
@@ -899,9 +909,8 @@ class IntensityMap(AlmostImmutable):
         try:
             return self._reflected
         except AttributeError:
-            data = self.data
-            sl = tuple(slice(None, None, -1) for __ in range(data.ndim))
-            new_data = data[sl]
+            sl = tuple(slice(None, None, -1) for __ in range(self.ndim))
+            new_data = self.data[sl]
             self._reflected = self.__class__(new_data, -self.bset)
             self._reflected._reflected = self  # Involution at work
             return self._reflected
@@ -909,17 +918,16 @@ class IntensityMap(AlmostImmutable):
     @memoize_method
     def filled(self, fill_value):
         """
-        Create an IntensityMap instance from this instance, with masked values
+        Create an IntensityMap instance from this instance, with missing values
         replaced by a fill value
 
         :fill_value: value to replace masked values with
         :returns: filled IntensityMap instance. This instance is returned
-                  unchanged if it is not masked.
+                  unchanged if there are no missing values.
 
         """
-        data = self.data
-        new_data = numpy.ma.filled(data, fill_value=fill_value)
-        if new_data is data:
+        new_data = numpy.ma.filled(self.masked_data, fill_value=fill_value)
+        if new_data == self.data:
             return self
         else:
             return self.__class__(new_data, self.bset)
@@ -934,7 +942,7 @@ class IntensityMap(AlmostImmutable):
 
         """
         new_bset = self.bset.fft()
-        new_data = fftpack.fftn(self._data_nomask)
+        new_data = fftpack.fftn(self.data)
 
         return self.__class__(new_data, new_bset)
 
@@ -957,14 +965,12 @@ class IntensityMap(AlmostImmutable):
                  the conversion between physical lengths in the units used by
                  the BinnedSet, and bin/pixel numbers,
                   Default is 'gaussian'.
-        :normalized: if True, any masked values or nans in the intensity array,
-                     as well as values beyond the its edges, are treated as
-                     missing values, and the smoothed array is renormalized for
-                     each cell to eliminate their influence. Where only missing
-                     values would have contributed, the resulting value is
-                     masked. If False, off-boundary values are interpreted as
-                     0.0, and the presence of nans or masked values will raise
-                     a ValueError.
+        :normalized: if True, the smoothed IntensityMap is renormalized for each
+                     bin to eliminate the influence of missing values and values
+                     beyond the edges. Where only missing values would have
+                     contributed, the resulting value is missing. If False,
+                     values beyond the boundary are interpreted as 0.0, and the
+                     presence of missing values will raise a ValueError.
         :returns: new, smoothed IntensityMap instance defined over the same
                   BinnedSet instance as this
 
@@ -988,8 +994,7 @@ class IntensityMap(AlmostImmutable):
         else:
             raise ValueError("unknown filter {}".format(filter_))
 
-        new_data = _safe_mmap(normalized, smoothfunc, self._data_nomask)
-        new_data = numpy.ma.masked_array(new_data, mask=numpy.isnan(new_data))
+        new_data = _safe_mmap(normalized, smoothfunc, self.data)
 
         return self.__class__(new_data, self.bset)
 
@@ -1005,24 +1010,22 @@ class IntensityMap(AlmostImmutable):
         :mode: string indicating the size of the output. See
                scipy.signal.convolve for details. Valid options:
                'full', 'valid', 'same'
-        :normalized: if True, any masked values or nans in the intensity array,
-                     as well as values beyond the its edges, are treated as
-                     missing values, and the smoothed array is renormalized for
-                     each cell to eliminate their influence. Where only missing
-                     values would have contributed, the resulting value is
-                     masked. If False, off-boundary values are interpreted as
-                     0.0, and the presence of nans or masked values will raise
-                     a ValueError.
+        :normalized: if True, the convolved IntensityMap is renormalized for
+                     each bin to eliminate the influence of missing values and
+                     values beyond the edges. Where only missing values would
+                     have contributed, the resulting value is missing. If False,
+                     values beyond the boundary are interpreted as 0.0, and the
+                     presence of missing values will raise a ValueError.
         :returns: new IntensityMap instance representing the convolution of this
                   and the other instance
 
         """
-        sdata = self._data_nomask
+        sdata = self.data
         try:
-            odata = other._data_nomask
+            odata = other.data
         except AttributeError:
             other = self.from_array(self, other)
-            odata = other._data_nomask
+            odata = other.data
 
         new_bset = self.bset.convolve(other.bset, mode=mode)
 
@@ -1030,7 +1033,6 @@ class IntensityMap(AlmostImmutable):
             return signal.convolve(arr1, arr2, mode=mode)
 
         new_data = _safe_mmap(normalized, convfunc, sdata, odata)
-        new_data = numpy.ma.masked_array(new_data, mask=numpy.isnan(new_data))
 
         return self.__class__(new_data, new_bset)
 
@@ -1051,24 +1053,22 @@ class IntensityMap(AlmostImmutable):
                   computation will then be the Pearson product-moment
                   correlation coefficient between displaced intensity arrays,
                   evaluated at each possible displacement.
-        :normalized: if True, any masked values or nans in the intensity array,
-                     as well as values beyond the its edges, are treated as
-                     missing values, and the smoothed array is renormalized for
-                     each cell to eliminate their influence. Where only missing
-                     values would have contributed, the resulting value is
-                     masked. If False, off-boundary values are interpreted as
-                     0.0, and the presence of nans or masked values will raise
-                     a ValueError.
+        :normalized: if True, the correlated IntensityMap is renormalized for
+                     each bin to eliminate the influence of missing values and
+                     values beyond the edges. Where only missing values would
+                     have contributed, the resulting value is missing. If False,
+                     values beyond the boundary are interpreted as 0.0, and the
+                     presence of missing values will raise a ValueError.
         :returns: new IntensityMap instance representing the cross-correlogram
                   of this and the other instance
 
         """
-        sdata = self._data_nomask
+        sdata = self.data
         try:
-            odata = other._data_nomask
+            odata = other.data
         except AttributeError:
             other = self.from_array(self, other)
-            odata = other._data_nomask
+            odata = other.data
 
         new_bset = self.bset.correlate(other.bset, mode=mode)
 
@@ -1081,7 +1081,6 @@ class IntensityMap(AlmostImmutable):
             return signal.correlate(arr1, arr2, mode=mode)
 
         new_data = _safe_mmap(normalized, corrfunc, sdata, odata)
-        new_data = numpy.ma.masked_array(new_data, mask=numpy.isnan(new_data))
 
         return self.__class__(new_data, new_bset)
 
@@ -1110,7 +1109,7 @@ class IntensityMap(AlmostImmutable):
         :returns: array of labels, and the number of labeled regions
 
         """
-        data = self._data_nomask
+        data = self.data
         regions = (data > threshold)
         data_thres = numpy.zeros_like(data)
         data_thres[regions] = data[regions]
@@ -1142,14 +1141,12 @@ class IntensityMap(AlmostImmutable):
             - the number of peaks and labeled regions found
 
         """
-        data = self._data_nomask
-
         labels, n = self.labels(threshold)
         if n == 0:
             raise ValueError("no peaks found, try lowering 'threshold'")
 
         index = range(1, n + 1)
-        peak_list = measurements.center_of_mass(data, labels=labels,
+        peak_list = measurements.center_of_mass(self.data, labels=labels,
                                                 index=index)
 
         labeled_areas = [numpy.sum(self.bset.area * (labels == i))
@@ -1186,7 +1183,7 @@ class IntensityMap(AlmostImmutable):
                   fitted Gaussian at the positions in x. Here, n == self.ndim.
 
         """
-        data = self._data_nomask
+        data = self.data
         nanmask = numpy.isnan(data)
         mask = numpy.logical_or(mask, nanmask)
         fdata = data[~mask]
@@ -1195,9 +1192,9 @@ class IntensityMap(AlmostImmutable):
         return scale, mean, cov
 
     @memoize_method
-    def crop_masked(self):
+    def crop_missing(self):
         """
-        Remove slices containing only masked values from the edges of an
+        Remove slices containing only missing values from the edges of an
         IntensityMap instance
 
         NOTE: This method is not properly tested!
@@ -1206,7 +1203,7 @@ class IntensityMap(AlmostImmutable):
                   all-masked slices along edges are removed.
 
         """
-        new_data = self.data.copy()
+        new_data = numpy.ma.copy(self.masked_data)
         new_edges = list(self.bset.edges)  # Mutable copy
 
         # Remove all-masked edge slices along all dimensions
@@ -1342,7 +1339,7 @@ class IntensityMap2D(IntensityMap):
                                      self.bset.__class__.__name__))
         binwidth = numpy.mean(self.bset.binwidths)
 
-        data = self._data_nomask
+        data = self.data
         #data = exposure.equalize_hist(data)  # Improves detection
 
         if min_sigma is None:
@@ -1422,11 +1419,11 @@ class IntensityMap2D(IntensityMap):
 
         x, y = self.bset.mesh
 
-        data = self.data
+        mdata = self.masked_data
         if threshold is not None:
-            data = numpy.ma.masked_where(data <= threshold, data)
+            mdata = numpy.ma.masked_where(mdata <= threshold, mdata)
 
-        mesh = axes.pcolormesh(x, y, data, vmin=vmin, vmax=vmax, cmap=cmap,
+        mesh = axes.pcolormesh(x, y, mdata, vmin=vmin, vmax=vmax, cmap=cmap,
                                **kwargs)
         cbar = pyplot.colorbar(mesh, cax=cax, **cbar_kw)
         axes.set(xlim=self.bset.xedges[(0, -1), ],
@@ -1441,18 +1438,18 @@ def _safe_mmap(normalized, mapfunc, *arrs):
     any number of arrays, optionally normalizing the result to eliminate the
     effect of missing values
 
-    In this context, safely means that the presence of nans in any of the
-    input arrays will be detected and cause an exception to be raised, unless
-    normalized is True.
+    In this context, safely means that the presence of nans or masked values in
+    any of the input arrays will cause an exception to be raised, unless
+    normalized == True, in which case nans and masked values are treated as
+    missing values.
 
     :normalized: if True, the output of the map is normalized at each element to
-                 eliminate the effect of spuriously setting missing values to
-                 0.0. Masked values, nans and values beyond the edges of the
-                 arrays are considered missing. Where only missing values would
-                 have contributed, the resulting value is masked. If False, the
-                 map is applied without normalization, and the presence of
-                 masked entries or nans in any of the arrays will raise
-                 a ValueError.
+                 eliminate the contribution of nans and masked values, and
+                 values beyond the edges of the array. to Where only missing
+                 values would have contributed, the resulting value is nan. If
+                 False, the map is applied without normalization, and the
+                 presence of masked entries or nans in any of the arrays will
+                 raise a ValueError.
     :mapfunc: callable defining the multilinear map: mapfunc(*arrs) returns the
               unnormalized mapping
     :arrs: list of arrays to compute the map over
@@ -1463,7 +1460,9 @@ def _safe_mmap(normalized, mapfunc, *arrs):
     filled_arrs = []
     indicators = []
     for arr in arrs:
-        filled_arr = numpy.ma.filled(numpy.ma.copy(arr), fill_value=numpy.nan)
+        filled_arr = numpy.ma.filled(arr, fill_value=numpy.nan)
+        if filled_arr is arr:
+            filled_arr = numpy.copy(arr)
         nanmask = numpy.isnan(filled_arr)
         indicators.append((~nanmask).astype(numpy.float_))
         filled_arr[nanmask] = 0.0

@@ -150,8 +150,12 @@ def sensibly_divide(num, denom, masked=False):
     :num: numerator
     :denom: denominator
     :masked: if True, the result is a masked array with masked values rather
-             than nans at the problematic locations.
-    :returns: numerator / denominator
+             than nans at the problematic locations. Note that if either num or
+             denom are masked, the result will always be a masked array, but if
+             masked == False the mask will not be extended by this function, and
+             any problematic locations encountered will be filled with unmasked
+             nans.
+    :returns: num / denom, sensibly
 
     """
     # Fill masked entries so that we are sure they won't compare close to zero
@@ -168,7 +172,11 @@ def sensibly_divide(num, denom, masked=False):
                                            numpy.isnan(num_filled))
         match = numpy.logical_and(denom_zero, num_zero_or_nan)
 
-        denom = numpy.array(denom, dtype=numpy.float_, copy=True)
+        if isinstance(denom, numpy.ma.MaskedArray):
+            denom = numpy.ma.array(denom, dtype=numpy.float_, copy=True)
+        else:
+            denom = numpy.array(denom, dtype=numpy.float_, copy=True)
+
         try:
             denom[match] = numpy.nan
         except IndexError:

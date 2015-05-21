@@ -94,9 +94,9 @@ class Position(AlmostImmutable):
         nanmask = numpy.logical_or(numpy.isnan(x), numpy.isnan(y))
         mask = numpy.logical_or(nanmask, speedmask)
 
-        self.x = numpy.ma.masked_array(x, mask=mask)
-        self.y = numpy.ma.masked_array(y, mask=mask)
-        self.tweights = numpy.ma.masked_array(tweights, mask=mask)
+        self.x = numpy.ma.masked_where(mask, x)
+        self.y = numpy.ma.masked_where(mask, y)
+        self.tweights = numpy.ma.masked_where(mask, tweights)
 
     @staticmethod
     def speed_and_weights(t, x, y, speed_window):
@@ -1163,8 +1163,8 @@ class Cell(BaseCell):
 
         spike_x_tmp = numpy.interp(spike_t, t, x)
         spike_y_tmp = numpy.interp(spike_t, t, y)
-        spike_x = numpy.ma.masked_array(spike_x_tmp, mask=mask)
-        spike_y = numpy.ma.masked_array(spike_y_tmp, mask=mask)
+        spike_x = numpy.ma.masked_where(mask, spike_x_tmp)
+        spike_y = numpy.ma.masked_where(mask, spike_y_tmp)
         return spike_x, spike_y
 
     @staticmethod
