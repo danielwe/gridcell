@@ -909,15 +909,20 @@ class IntensityMap(AlmostImmutable):
     @memoize_method
     def filled(self, fill_value):
         """
-        Create a copy of the IntensityMap instance with masked values replaced
-        by a fill value
+        Create an IntensityMap instance from this instance, with masked values
+        replaced by a fill value
 
         :fill_value: value to replace masked values with
-        :returns: new, filled IntensityMap instance
+        :returns: filled IntensityMap instance. This instance is returned
+                  unchanged if it is not masked.
 
         """
-        new_data = numpy.ma.filled(self.data, fill_value=fill_value)
-        return self.__class__(new_data, self.bset)
+        data = self.data
+        new_data = numpy.ma.filled(data, fill_value=fill_value)
+        if new_data is data:
+            return self
+        else:
+            return self.__class__(new_data, self.bset)
 
     @memoize_method
     def fft(self):
@@ -955,11 +960,11 @@ class IntensityMap(AlmostImmutable):
         :normalized: if True, any masked values or nans in the intensity array,
                      as well as values beyond the its edges, are treated as
                      missing values, and the smoothed array is renormalized for
-                     each cell to eliminate their influence. If False, it is
-                     left to scipy.ndimage.[gaussian,uniform]_filter() to decide
-                     what to do about masked values, while off-boundary values
-                     are interpreted as 0.0, and the presence of nans will raise
-                     a ValueError. Default is False.
+                     each cell to eliminate their influence. Where only missing
+                     values would have contributed, the resulting value is
+                     masked. If False, off-boundary values are interpreted as
+                     0.0, and the presence of nans or masked values will raise
+                     a ValueError.
         :returns: new, smoothed IntensityMap instance defined over the same
                   BinnedSet instance as this
 
@@ -984,6 +989,7 @@ class IntensityMap(AlmostImmutable):
             raise ValueError("unknown filter {}".format(filter_))
 
         new_data = _safe_mmap(normalized, smoothfunc, self._data_nomask)
+        new_data = numpy.ma.masked_array(new_data, mask=numpy.isnan(new_data))
 
         return self.__class__(new_data, self.bset)
 
@@ -999,13 +1005,14 @@ class IntensityMap(AlmostImmutable):
         :mode: string indicating the size of the output. See
                scipy.signal.convolve for details. Valid options:
                'full', 'valid', 'same'
-        :normalized: if True, any masked values or nans in the intensity arrays,
-                     as well as values beyond the their edges, are treated as
-                     missing values, and the convolution is renormalized for
-                     each cell to eliminate their influence. If False, it is
-                     left to scipy.signal.convolve() to decide what to do about
-                     masked values, while off-boundary values are interpreted as
-                     0.0, and the presence of nans will raise a ValueError.
+        :normalized: if True, any masked values or nans in the intensity array,
+                     as well as values beyond the its edges, are treated as
+                     missing values, and the smoothed array is renormalized for
+                     each cell to eliminate their influence. Where only missing
+                     values would have contributed, the resulting value is
+                     masked. If False, off-boundary values are interpreted as
+                     0.0, and the presence of nans or masked values will raise
+                     a ValueError.
         :returns: new IntensityMap instance representing the convolution of this
                   and the other instance
 
@@ -1023,6 +1030,7 @@ class IntensityMap(AlmostImmutable):
             return signal.convolve(arr1, arr2, mode=mode)
 
         new_data = _safe_mmap(normalized, convfunc, sdata, odata)
+        new_data = numpy.ma.masked_array(new_data, mask=numpy.isnan(new_data))
 
         return self.__class__(new_data, new_bset)
 
@@ -1043,14 +1051,14 @@ class IntensityMap(AlmostImmutable):
                   computation will then be the Pearson product-moment
                   correlation coefficient between displaced intensity arrays,
                   evaluated at each possible displacement.
-        :normalized: if True, any masked values or nans in the intensity arrays,
-                     as well as values beyond the their edges, are treated as
-                     missing values, and the correlogram is renormalized for
-                     each cell to eliminate their influence. If False, it is
-                     left to scipy.signal.correlate() to decide what to do about
-                     masked values, while off-boundary values are interpreted as
-                     0.0, and the presence of nans will raise a ValueError.
-                     Default is False.
+        :normalized: if True, any masked values or nans in the intensity array,
+                     as well as values beyond the its edges, are treated as
+                     missing values, and the smoothed array is renormalized for
+                     each cell to eliminate their influence. Where only missing
+                     values would have contributed, the resulting value is
+                     masked. If False, off-boundary values are interpreted as
+                     0.0, and the presence of nans or masked values will raise
+                     a ValueError.
         :returns: new IntensityMap instance representing the cross-correlogram
                   of this and the other instance
 
@@ -1073,6 +1081,7 @@ class IntensityMap(AlmostImmutable):
             return signal.correlate(arr1, arr2, mode=mode)
 
         new_data = _safe_mmap(normalized, corrfunc, sdata, odata)
+        new_data = numpy.ma.masked_array(new_data, mask=numpy.isnan(new_data))
 
         return self.__class__(new_data, new_bset)
 
@@ -1325,8 +1334,6 @@ class IntensityMap2D(IntensityMap):
                   of the blob can be obtained by taking \sqrt{2} s.
 
         """
-        data = self._data_nomask
-        #data = exposure.equalize_hist(data)  # Improves detection
         if not self.bset.square:
             raise ValueError("instances of {} must be defined over instances "
                              "of {} with square bins for Laplacian of "
@@ -1334,6 +1341,10 @@ class IntensityMap2D(IntensityMap):
                              .format(self.__class__.__name__,
                                      self.bset.__class__.__name__))
         binwidth = numpy.mean(self.bset.binwidths)
+
+        data = self._data_nomask
+        #data = exposure.equalize_hist(data)  # Improves detection
+
         if min_sigma is None:
             min_sigma = 1
         else:
@@ -1431,32 +1442,35 @@ def _safe_mmap(normalized, mapfunc, *arrs):
     effect of missing values
 
     In this context, safely means that the presence of nans in any of the
-    input arrays will be detected and cause an exception to be raised.
+    input arrays will be detected and cause an exception to be raised, unless
+    normalized is True.
 
     :normalized: if True, the output of the map is normalized at each element to
                  eliminate the effect of spuriously setting missing values to
                  0.0. Masked values, nans and values beyond the edges of the
-                 arrays are considered missing. If False, the map is applied
-                 without normalization unnormalized, and the presence of masked
-                 entries or nans in any of the arrays will raise an exception.
+                 arrays are considered missing. Where only missing values would
+                 have contributed, the resulting value is masked. If False, the
+                 map is applied without normalization, and the presence of
+                 masked entries or nans in any of the arrays will raise
+                 a ValueError.
     :mapfunc: callable defining the multilinear map: mapfunc(*arrs) returns the
               unnormalized mapping
     :arrs: list of arrays to compute the map over
-    :returns: result of the mapping, optionally normalized
+    :returns: result of the mapping, optionally normalized. If normalized, the
+              result has nans where only missing values would have contributed.
 
     """
     filled_arrs = []
     indicators = []
     for arr in arrs:
-        filled_arr = numpy.ma.filled(arr, fill_value=numpy.nan)
+        filled_arr = numpy.ma.filled(numpy.ma.copy(arr), fill_value=numpy.nan)
         nanmask = numpy.isnan(filled_arr)
+        indicators.append((~nanmask).astype(numpy.float_))
         filled_arr[nanmask] = 0.0
         filled_arrs.append(filled_arr)
-        indicators.append((~nanmask).astype(float))
 
     if normalized:
-        new_arr = sensibly_divide(mapfunc(*filled_arrs), mapfunc(*indicators),
-                                  masked=True)
+        new_arr = sensibly_divide(mapfunc(*filled_arrs), mapfunc(*indicators))
     else:
         if any(numpy.any(ind == 0.0) for ind in indicators):
             raise ValueError("cannot filter IntensityMap instances that are "

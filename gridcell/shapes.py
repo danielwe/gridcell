@@ -27,7 +27,7 @@ from scipy import linalg
 from matplotlib import pyplot, patches
 
 
-EPS = numpy.finfo(numpy.float64).eps
+EPS = numpy.finfo(numpy.float_).eps
 
 
 class Ellipse(object):

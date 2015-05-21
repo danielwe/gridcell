@@ -168,10 +168,10 @@ def sensibly_divide(num, denom, masked=False):
                                            numpy.isnan(num_filled))
         match = numpy.logical_and(denom_zero, num_zero_or_nan)
 
-        denom = numpy.copy(denom)
+        denom = numpy.array(denom, dtype=numpy.float_, copy=True)
         try:
             denom[match] = numpy.nan
-        except TypeError:
+        except IndexError:
             denom *= numpy.ones_like(num)
             denom[match] = numpy.nan
 

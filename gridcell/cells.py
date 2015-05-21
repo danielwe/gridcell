@@ -144,8 +144,8 @@ class Position(AlmostImmutable):
                             mode='same'))
         dweights_filt = (
             signal.convolve(dweights_filled, window_sequence, mode='same') /
-            signal.convolve((~dweights_mask).astype(float), window_sequence,
-                            mode='same'))
+            signal.convolve((~dweights_mask).astype(numpy.float_),
+                            window_sequence, mode='same'))
 
         speed = dweights_filt / tweights_filt
 
@@ -1113,8 +1113,8 @@ class Cell(BaseCell):
         :threshold: peak threshold. Used to separate peaks in the
                     autocorrelogram of the firing rate of the cell.
         :filter_size: characteristic smoothing width to use when computing
-                          firing rates. Carries the same units as the
-                          coordinates in pos. If None, no smoothing is applied.
+                      firing rates. Carries the same units as the coordinates in
+                      pos. If None, no smoothing is applied.
         :kwargs: none supported at the moment. In the future, support may be
                  added for a keyword 'info' containing information about the
                  transformation applied to get physical positions from raw
