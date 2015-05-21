@@ -127,14 +127,12 @@ def gaussian(x, mean=0.0, cov=1.0):
           for which this is the pdf).
 
     """
-    x = numpy.asarray(x)
-    m = x.shape[0]
-    n = 1
-    for d in x.shape[1:]:
-        n *= d
-    mean = numpy.asarray(mean) * numpy.ones(n)
-    cov = numpy.eye(n).dot(numpy.asarray(cov))
-    return stats.multivariate_normal.pdf(x.reshape(m, n), mean=mean, cov=cov)
+    m = len(x)
+    x = numpy.reshape(x, (m, -1))
+    n = x.shape[1]
+    mean, __ = numpy.broadcast_arrays(numpy.asarray(mean), numpy.empty(n))
+    cov, __ = numpy.broadcast_arrays(numpy.asarray(cov), numpy.empty((n, n)))
+    return stats.multivariate_normal.pdf(x, mean=mean, cov=cov)
 
 
 def sensibly_divide(num, denom, masked=False):
@@ -158,30 +156,24 @@ def sensibly_divide(num, denom, masked=False):
     :returns: num / denom, sensibly
 
     """
-    # Fill masked entries so that we are sure they won't compare close to zero
-    # or equal to nan
-    denom_filled = numpy.ma.filled(denom, fill_value=1.0)
-    num_filled = numpy.ma.filled(num, fill_value=1.0)
+    num_bc, denom_bc = (numpy.array(a, dtype=numpy.float_, copy=True)
+                        for a in numpy.broadcast_arrays(num, denom))
 
-    #denom_zero = numpy.isclose(denom_filled, 0.0)
-    denom_zero = (denom_filled == 0.0)
+    #denom_zero = numpy.isclose(denom_bc, 0.0)
+    denom_zero = (denom_bc == 0.0)
     if numpy.any(denom_zero):
-        #num_zero_or_nan = numpy.logical_or(numpy.isclose(num_filled, 0.0),
-        #                                   numpy.isnan(num_filled))
-        num_zero_or_nan = numpy.logical_or(num_filled == 0.0,
-                                           numpy.isnan(num_filled))
+        #num_zero_or_nan = numpy.logical_or(numpy.isclose(num_bc, 0.0),
+        #                                   numpy.isnan(num_bc))
+        num_zero_or_nan = numpy.logical_or(num_bc == 0.0,
+                                           numpy.isnan(num_bc))
         match = numpy.logical_and(denom_zero, num_zero_or_nan)
+        denom_bc[match] = numpy.nan
 
         if isinstance(denom, numpy.ma.MaskedArray):
-            denom = numpy.ma.array(denom, dtype=numpy.float_, copy=True)
+            __, mask_bc = numpy.broadcast_arrays(num, denom.mask)
+            denom = numpy.ma.masked_where(mask_bc, denom_bc)
         else:
-            denom = numpy.array(denom, dtype=numpy.float_, copy=True)
-
-        try:
-            denom[match] = numpy.nan
-        except IndexError:
-            denom *= numpy.ones_like(num)
-            denom[match] = numpy.nan
+            denom = denom_bc
 
         if masked:
             denom = numpy.ma.masked_where(match, denom)

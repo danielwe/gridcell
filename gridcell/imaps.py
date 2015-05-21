@@ -1471,8 +1471,8 @@ def _safe_mmap(normalized, mapfunc, *arrs):
         new_arr = sensibly_divide(mapfunc(*filled_arrs), mapfunc(*indicators))
     else:
         if any(numpy.any(ind == 0.0) for ind in indicators):
-            raise ValueError("cannot filter IntensityMap instances that are "
-                             "masked or contain nans unless normalized == True")
+            raise ValueError("cannot filter IntensityMap instances with masked "
+                             "values or nans unless normalized == True")
         new_arr = mapfunc(*arrs)
 
     return new_arr
