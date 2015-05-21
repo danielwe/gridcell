@@ -69,17 +69,17 @@ class BinnedSet(AlmostImmutable):
 
         # Compute bin widths and check validity
         valid = True
-        widths = []
+        binwidths = []
         for e in self.edges:
             ds = numpy.diff(e)
             valid = valid and numpy.all(ds > 0.0)
-            widths.append(ds)
+            binwidths.append(ds)
 
         if not valid:
             raise ValueError("valid bin edge arrays can only contain unique, "
                              "sorted values")
 
-        self.widths = tuple(widths)
+        self.binwidths = tuple(binwidths)
 
     @classmethod
     def from_center_binwidth_shape(cls, center, binwidth, shape):
@@ -268,7 +268,8 @@ class BinnedSet(AlmostImmutable):
         its area is given by self.area[i0, i1, ..., ik_1).
 
         """
-        return numpy.prod(numpy.meshgrid(*self.widths, indexing='ij'), axis=0)
+        return numpy.prod(
+            numpy.meshgrid(*self.binwidths, indexing='ij'), axis=0)
 
     @property
     @memoize_method
@@ -278,7 +279,7 @@ class BinnedSet(AlmostImmutable):
         size and shape)
 
         """
-        return all(numpy.allclose(w, w[0]) for w in self.widths)
+        return all(numpy.allclose(w, w[0]) for w in self.binwidths)
 
     @property
     @memoize_method
@@ -288,7 +289,7 @@ class BinnedSet(AlmostImmutable):
         general hypercubical
 
         """
-        return self.regular and numpy.allclose(*(w[0] for w in self.widths))
+        return self.regular and numpy.allclose(*(w[0] for w in self.binwidths))
 
     @memoize_method
     def compatible(self, other):
@@ -307,7 +308,7 @@ class BinnedSet(AlmostImmutable):
                       self.regular and
                       other.regular and
                       all(numpy.allclose(sw[0], ow[0])
-                          for (sw, ow) in zip(self.widths, other.widths)))
+                          for (sw, ow) in zip(self.binwidths, other.binwidths)))
         return compatible
 
     @memoize_method
@@ -376,7 +377,7 @@ class BinnedSet(AlmostImmutable):
                              .format(self.__class__.__name__))
 
         center, fbinwidth, shape = [], [], []
-        for (sw, se) in zip(self.widths, self.edges):
+        for (sw, se) in zip(self.binwidths, self.edges):
             nb = se.size - 1
             fbw = 1 / (numpy.mean(sw) * nb)
             center.append(0.5 * fbw * ((nb % 2) - 1))
@@ -420,7 +421,7 @@ class BinnedSet(AlmostImmutable):
             raise ValueError("unknown mode {}".format(mode))
 
         center, binwidth, shape = [], [], []
-        for (sw, se, oe) in zip(self.widths, self.edges, other.edges):
+        for (sw, se, oe) in zip(self.binwidths, self.edges, other.edges):
             nb, sh = shape_shift(se.size - 1, oe.size - 1)
             bw = numpy.mean(sw)
             center.append(0.5 * ((se[-1] + se[0]) + (oe[-1] + oe[0]) + bw * sh))
@@ -547,20 +548,20 @@ class BinnedSet2D(BinnedSet):
         return self.centers[1]
 
     @property
-    def xwidths(self):
+    def xbinwidths(self):
         """
         Numpy array giving the bin widths along the x axis
 
         """
-        return self.widths[0]
+        return self.binwidths[0]
 
     @property
-    def ywidths(self):
+    def ybinwidths(self):
         """
         Numpy array giving the bin widths along the y axis
 
         """
-        return self.widths[1]
+        return self.binwidths[1]
 
     def plot(self, axes=None, frame_lwfactor=2.0, color='0.5', **kwargs):
         """
@@ -854,7 +855,7 @@ class IntensityMap(AlmostImmutable):
                                      self.bset.__class__.__name__))
 
         center = [0.0] * self.ndim
-        binwidth = [numpy.mean(w) for w in self.bset.widths]
+        binwidth = [numpy.mean(w) for w in self.bset.binwidths]
         shape = arr.shape
         new_bset = self.bset.__class__.from_center_binwidth_shape(center,
                                                                   binwidth,
@@ -970,7 +971,7 @@ class IntensityMap(AlmostImmutable):
                              .format(self.__class__.__name__,
                                      self.bset.__class__.__name__))
 
-        size_b = [size / numpy.mean(w) for w in self.bset.widths]
+        size_b = [size / numpy.mean(w) for w in self.bset.binwidths]
 
         options = {'mode': 'constant', 'cval': 0.0}
         if filter_ == 'gaussian':
@@ -1332,11 +1333,11 @@ class IntensityMap2D(IntensityMap):
                              "Gaussian blob detection"
                              .format(self.__class__.__name__,
                                      self.bset.__class__.__name__))
-        width = numpy.mean(self.bset.widths)
+        binwidth = numpy.mean(self.bset.binwidths)
         if min_sigma is None:
             min_sigma = 1
         else:
-            min_sigma /= width
+            min_sigma /= binwidth
         if max_sigma is None:
             # Taking the blob radius as sqrt(2) * sigma, setting max_sigma to
             # min(self.shape) / (sqrt(2) * 2.0 * k)
@@ -1344,7 +1345,7 @@ class IntensityMap2D(IntensityMap):
             # most a fraction 1 / k of the shortest length in the intensity map
             max_sigma = min(self.shape) / (numpy.sqrt(2) * 4.0)
         else:
-            max_sigma /= width
+            max_sigma /= binwidth
         if threshold is None:
             threshold = data.min() + (2 / 3) * data.ptp()
 
@@ -1360,7 +1361,7 @@ class IntensityMap2D(IntensityMap):
 
         blob_coords = self.bset.coordinates(blob_list)
 
-        sigma = blob_indices[:, 2] * width
+        sigma = blob_indices[:, 2] * binwidth
 
         blobs = numpy.hstack((blob_coords, sigma[:, numpy.newaxis]))
 
