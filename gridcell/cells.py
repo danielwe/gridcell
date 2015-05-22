@@ -460,8 +460,7 @@ class BaseCell(AlmostImmutable):
         px, py = peaks[:, 0], peaks[:, 1]
         radii = px * px + py * py
         angles = numpy.mod(numpy.arctan2(py, px), 2 * numpy.pi)
-        peaks_polar = numpy.hstack((radii[:, numpy.newaxis],
-                                    angles[:, numpy.newaxis]))
+        peaks_polar = numpy.column_stack((radii, angles))
         return peaks_polar
 
     @memoize_method

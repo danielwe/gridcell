@@ -1153,8 +1153,7 @@ class IntensityMap(AlmostImmutable):
                          for i in index]
         radii = _n_ball_rad(self.ndim, numpy.asarray(labeled_areas))
 
-        peaks = numpy.hstack((self.bset.coordinates(peak_list),
-                              radii[:, numpy.newaxis]))
+        peaks = numpy.column_stack((self.bset.coordinates(peak_list), radii))
         return peaks, labels, n
 
     def fit_gaussian(self, mask=None):
@@ -1371,7 +1370,7 @@ class IntensityMap2D(IntensityMap):
 
         sigma = blob_indices[:, 2] * binwidth
 
-        blobs = numpy.hstack((blob_coords, sigma[:, numpy.newaxis]))
+        blobs = numpy.column_stack((blob_coords, sigma))
 
         return blobs
 
