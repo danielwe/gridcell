@@ -471,8 +471,8 @@ class BinnedSet(AlmostImmutable):
         The coordinates of the positions are computed by interpolating with the
         given indices in the map from array indices to bin centers.
 
-        :bn_indices: a sequence of (possibly fractional) index tuples. A single
-                     index tuple is also accepted.
+        :bin_indices: a sequence of (possibly fractional) index tuples. A single
+                      index tuple is also accepted.
         :returns: an array where element [i, j] gives the jth coordinate of the
                   ith point
         """
@@ -1151,7 +1151,7 @@ class IntensityMap(AlmostImmutable):
 
         labeled_areas = [numpy.sum(self.bset.area * (labels == i))
                          for i in index]
-        radii = _n_ball_rad(self.ndim, numpy.asarray(labeled_areas))
+        radii = _n_ball_rad(self.ndim, numpy.array(labeled_areas))
 
         peaks = numpy.column_stack((self.bset.coordinates(peak_list), radii))
         return peaks, labels, n

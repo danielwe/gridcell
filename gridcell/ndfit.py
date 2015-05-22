@@ -91,9 +91,9 @@ def fit_ndgaussian(xdata, fdata):
         mean_ = params_[1:n + 1]
 
         # Get eigenvalues
-        evals_sqrt_ = numpy.asarray(params_[n + 1:n2 + 1])
+        evals_sqrt_ = numpy.array(params_[n + 1:n2 + 1])
         evals_ = evals_sqrt_ * evals_sqrt_
-        #evals_ = numpy.asarray(params_[n + 1:n2 + 1])
+        #evals_ = numpy.array(params_[n + 1:n2 + 1])
 
         ## Reconstruct the transformed eigenvector matrix
         #cov_c_ = numpy.zeros((n, n))
