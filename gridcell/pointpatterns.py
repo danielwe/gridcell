@@ -23,6 +23,7 @@ from __future__ import (absolute_import, division, print_function,
 import numpy
 import pandas
 from scipy import integrate, optimize, interpolate
+from scipy.spatial import distance
 from shapely import geometry, affinity, ops, speedups
 from matplotlib import pyplot, patches
 
@@ -60,8 +61,7 @@ class Window(geometry.Polygon):
         is raised.
 
         """
-        vertices = (numpy.array(self.boundary.xy).transpose()[:-1] -
-                    self.centroid)
+        vertices = (numpy.asarray(self.boundary)[:-1] - self.centroid)
         l = vertices.shape[0]
         vrotated = numpy.roll(vertices, l // 2, axis=0)
         if not (l in (4, 6) and numpy.allclose(vertices, -vrotated)):
@@ -177,8 +177,6 @@ class Window(geometry.Polygon):
         for p in sbpoints:
             eroded = eroded.intersection(affinity.translate(other, xoff=-p.x,
                                                             yoff=-p.y))
-        #try:
-        #except NotImplementedError:
         return eroded
 
     def translated_intersection(self, xoff, yoff):
@@ -223,7 +221,9 @@ class Window(geometry.Polygon):
                                                   fill_value=0.0)
 
         def scinterpolator(x, y):
-            return ipl(numpy.vstack((x, y)).transpose())
+            xi = numpy.concatenate((x[..., numpy.newaxis],
+                                    y[..., numpy.newaxis]), axis=-1)
+            return ipl(xi)
 
         return scinterpolator
 
@@ -249,8 +249,8 @@ class Window(geometry.Polygon):
 
         # Identify potentially problematic angles and a safe starting- and
         # ending angle for the quadrature integration
-        xy = self.boundary.xy
-        problem_angles = numpy.sort(numpy.arctan2(xy[1][:-1], xy[0][:-1]))
+        xy = numpy.asarray(self.boundary)[:-1]
+        problem_angles = numpy.sort(numpy.arctan2(xy[:, 1], xy[:, 0]))
         theta0 = 0.5 * (problem_angles[0] + problem_angles[-1] - 2 * numpy.pi)
 
         for (i, rval) in enumerate(rvals):
@@ -275,9 +275,9 @@ class Window(geometry.Polygon):
 
         The property decorator makes the interpolator directly accessible from
         the name of this method: one can call w.pvdenom(r) on a Window instance
-        'w' to get its area p-function denominator valuated at the radius 'r'.
+        'w' to get its area p-function denominator evaluated at the radius 'r'.
         The interpolator instance is cached, so there is no need to store it
-        explicitly.
+        explicitly, just call w.pvdenom(r).
 
         :returns: interp1d instance that can be called with an array-like
                   argument 'r' and returns an array of the interpolated values
@@ -299,7 +299,7 @@ class Window(geometry.Polygon):
 
         :point: a Point instance giving the location at which to evaluate the
                 function
-        :r: array-like with radii around 'point' at which to evaluate the
+        :r: array-like with radii around 'point' at which to ev' 'aluate the
             p-function
         :returns: the value of the area p-function
 
@@ -325,7 +325,7 @@ class Window(geometry.Polygon):
 
         """
         try:
-            num = numpy.array(
+            num = numpy.asarray(
                 [self.intersection(point.buffer(rval).boundary).length
                  for rval in r])
         except TypeError:
@@ -335,13 +335,12 @@ class Window(geometry.Polygon):
 
         return sensibly_divide(num, denom)
 
-    def weight(self, p1, p2, edge_correction):
+    def weights(self, mp1, mp2, edge_correction):
         """
-        Compute the weight of a pair of points in the window in the estimation
-        of second-order summary characteristics
+        Compute the weights that a set of point pairs in the window contribute
+        in the estimation of second-order summary characteristics
 
-        :p1: the first point in the pair
-        :p2: the second point in the pair
+        :mp1, mp2: MultiPoint instances containing points to pair up
         :edge_correction: flag to select the handling of edges. Possible values:
             'finite': Translational edge correction used.
             'periodic': No edge correction used, but 0.0 returned if a shorter
@@ -350,42 +349,74 @@ class Window(geometry.Polygon):
             'plus': No edge correction used.
             'stationary': Translational edge correction used.
             'isotropic': Rotational edge correction used.
+        :returns: numpy array containing the weight of mp1[i] and mp2[j] in
+                  element [i, j]
 
         """
         if edge_correction in ('finite', 'stationary'):
-            xoff, yoff = p2.x - p1.x, p2.y - p1.y
-            return 1.0 / self.set_covariance(xoff, yoff)
+            diff = PointPattern.pairwise_vectors(mp1, mp2)
+            return 1.0 / self.set_covariance(diff[:, :, 0], diff[:, :, 1])
 
         elif edge_correction == 'periodic':
-            if self.contains(affinity.translate(p2, xoff=-p1.x, yoff=-p1.y)):
-                # No further edge correction
-                return 1.0 / self.area
 
-                # Isotropic edge correction (corrects corner effects that are
-                # still present for large r)
-                #r = p1.distance(p2)
-                #ring = geometry.Point((0.0, 0.0)).buffer(r).boundary
-                ##rball = geometry.Point((0.0, 0.0)).buffer(r)
-                ##ring = rball.boundary
-                ##doughnut = self.difference(self.erode_by_this(rball))
-                #return ring.length / (self.intersection(ring).length *
-                #                      #doughnut.area)
-                #                      self.area)
+            m, n = len(mp1), len(mp2)
+            w = numpy.zeros((m, n))
 
+            if n < m:
+                mp1, mp2 = mp2, mp1
+                wview = w.transpose()
             else:
-                return 0.0
+                wview = w
+
+            mp2_arr = numpy.array(mp2)
+
+            z = (0.0, 0.0)
+            zero = numpy.array(z)
+            #origin = geometry.Point(z)
+            #distances = PointPattern.pairwise_distances(mp1, mp2)
+            for (i, p1) in enumerate(mp1):
+                translated_window = affinity.translate(self, xoff=p1.x,
+                                                       yoff=p1.y)
+                valid_mp2 = mp2.intersection(translated_window)
+                vmp2_arr = numpy.asarray(valid_mp2)
+                vindex = numpy.any(numpy.all(
+                    PointPattern.pairwise_vectors(mp2_arr, vmp2_arr) == zero,
+                    axis=-1), axis=-1)
+
+                wview[i, vindex] = 1.0 / self.area
+
+                ## Isotropic edge correction (to cancel corner effects that are
+                ## still present for large r)
+                #for j in numpy.nonzero(vindex)[0]:
+                #    r = distances[i, j]
+                #    ring = origin.buffer(r).boundary
+                #    wview[i, j] *= (2.0 * numpy.pi * r /
+                #                    ring.intersection(self).length)
+
+            return w
 
         elif edge_correction == 'plus':
-            w = 1.0 / self.area
+            m, n = len(mp1), len(mp2)
+            w = numpy.empty((m, n))
+            w.fill(1.0 / self.area)
             return w
 
         elif edge_correction == 'isotropic':
-            r = p1.distance(p2)
-            ring = p1.buffer(r).boundary
-            rball = geometry.Point((0.0, 0.0)).buffer(r)
-            doughnut = self.difference(self.erode_by_this(rball))
-            return ring.length / (self.intersection(ring).length *
-                                  doughnut.area)
+            m, n = len(mp1), len(mp2)
+            w = numpy.zeros((m, n))
+
+            distances = PointPattern.pairwise_distances(mp1, mp2)
+
+            origin = geometry.Point((0.0, 0.0))
+            for (i, p1) in enumerate(mp1):
+                for j in range(n):
+                    r = distances[i, j]
+                    ring = p1.buffer(r).boundary
+                    rball = origin.buffer(r)
+                    doughnut = self.difference(self.erode_by_this(rball))
+                    w[i, j] = 2.0 * numpy.pi * r / (
+                        self.intersection(ring).length * doughnut.area)
+            return w
 
         else:
             raise ValueError("unknown edge correction: {}"
@@ -516,6 +547,52 @@ class PointPattern(geometry.MultiPoint):
         else:
             raise ValueError("unknown mode: {}".format(mode))
 
+    @staticmethod
+    @memoize_function
+    def pairwise_vectors(pp1, pp2=None):
+        """
+        Return a matrix of vectors between points in a point pattern
+
+        :pp1: PointPattern or MultiPoint instance containing the points to find
+              vectors between
+        :pp2: if not None, vectors are calculated from points in pp1 to points
+              in pp2 instead of between points in pp1
+        :returns: numpy array of where slice [i, j, :] contains the vector
+                  pointing from pp1[i] to pp1[j], or if pp2 is not None, from
+                  pp1[i] to pp2[j]
+
+        """
+        ap1 = numpy.asarray(pp1)[:, :2]
+        if pp2 is not None:
+            ap2 = numpy.asarray(pp2)[:, :2]
+        else:
+            ap2 = ap1
+        return ap2 - ap1[:, numpy.newaxis, :]
+
+    @staticmethod
+    @memoize_function
+    def pairwise_distances(pp1, pp2=None):
+        """
+        Return a matrix of distances between points in a point pattern
+
+        :pp1: PointPattern or MultiPoint instance containing the points to find
+              distances between
+        :pp2: if not None, distances are calculated from points in pp1 to points
+              in pp2 instead of between points in pp1
+        :returns: numpy array of where slice [i, j, :] contains the distance
+                  from pp1[i] to pp1[j], or if pp2 is not None, from pp1[i] to
+                  pp2[j]
+
+        """
+        #diff = PointPattern.pairwise_vectors(pp1, pp2=pp2)
+        #return numpy.sqrt(numpy.sum(diff * diff, axis=-1))
+        ap1 = numpy.asarray(pp1)[:, :2]
+        if pp2 is not None:
+            ap2 = numpy.asarray(pp2)[:, :2]
+        else:
+            ap2 = ap1
+        return distance.cdist(ap1, ap2)
+
     def nearest(self, point, mode='standard'):
         """
         Return the point in the pattern closest to the location given by 'point'
@@ -578,13 +655,13 @@ class PointPattern(geometry.MultiPoint):
                 renum = enumerate(r)
             except TypeError:
                 eroded_window = self.window.buffer(-r)
-                valid_points = len(eroded_window.intersection(self))
+                valid_points = len(self.intersection(eroded_window))
                 return valid_points / eroded_window.area
             else:
                 intensity = numpy.zeros_like(r)
                 for (i, rval) in renum:
                     eroded_window = self.window.buffer(-r)
-                    valid_points = len(eroded_window.intersection(self))
+                    valid_points = len(self.intersection(eroded_window))
                     intensity[i] = valid_points / eroded_window.area
                 return intensity
         elif mode == 'neighbor':
@@ -697,29 +774,22 @@ class PointPattern(geometry.MultiPoint):
         rmax = window.rmax(edge_correction)
         allpoints, squared_intensity = self._edge_config(edge_correction)
 
-        rvals = [0.0]
-        weights = [0.0]
+        distances = self.pairwise_distances(self, allpoints)
+        valid = numpy.logical_and(distances < rmax, distances != 0.0)
 
-        l = len(allpoints)
-        if l == 2:
-            for p1 in self:
-                p2 = allpoints.difference(p1)
-                r = p1.distance(p2)
-                if r < rmax:
-                    rvals.append(r)
-                    weights.append(window.weight(p1, p2, edge_correction))
-        elif l > 2:
-            for p1 in self:
-                for p2 in allpoints.difference(p1):
-                    r = p1.distance(p2)
-                    if r < rmax:
-                        rvals.append(r)
-                        weights.append(window.weight(p1, p2, edge_correction))
+        index1, = numpy.nonzero(numpy.any(valid, axis=1))
+        index2, = numpy.nonzero(numpy.any(valid, axis=0))
+        mp1 = geometry.MultiPoint([self[i] for i in index1])
+        mp2 = geometry.MultiPoint([allpoints[i] for i in index2])
+        weight_matrix = window.weights(mp1, mp2, edge_correction)
 
-        rvals, weights = numpy.array(rvals), numpy.array(weights)
+        rvals = distances[valid]
         sort_ind = numpy.argsort(rvals)
-        rvals = numpy.append(rvals[sort_ind], rmax)
-        kvals = numpy.append(weights[sort_ind].cumsum(), numpy.nan)
+        rvals = numpy.hstack((0.0, rvals[sort_ind], rmax))
+
+        weights = weight_matrix[valid[index1, :][:, index2]]
+        weights = numpy.hstack((0.0, weights[sort_ind]))
+        kvals = numpy.append(numpy.cumsum(weights), numpy.nan)
 
         def klookup(r):
             indices = numpy.searchsorted(rvals, r, side='right') - 1
@@ -879,20 +949,23 @@ class PointPattern(geometry.MultiPoint):
             axes.set(xlim=(cent.x - diag, cent.x + diag),
                      ylim=(cent.y - diag, cent.y + diag))
 
-        pp = zip(*(p.xy for p in self))
-        h = axes.plot(*pp, linestyle='None', marker=marker, **kwargs)
+        pp = numpy.asarray(self)
+        h = axes.plot(pp[:, 0], pp[:, 1], linestyle='None', marker=marker,
+                      **kwargs)
 
         if periodic:
             if periodic_kw is None:
                 periodic_kw = {}
-            pp = zip(*(p.xy for p in self.periodic_extension))
-            h += axes.plot(*pp, linestyle='None', marker=marker, **periodic_kw)
+            pp = numpy.asarray(self.periodic_extension)
+            h += axes.plot(pp[:, 0], pp[:, 1], linestyle='None', marker=marker,
+                           **periodic_kw)
 
         if plus:
             if plus_kw is None:
                 plus_kw = {}
-            pp = zip(*(p.xy for p in self.pluspoints))
-            h += axes.plot(*pp, linestyle='None', marker=marker, **plus_kw)
+            pp = numpy.asarray(self.pluspoints)
+            h += axes.plot(pp[:, 0], pp[:, 1], linestyle='None', marker=marker,
+                           **plus_kw)
 
         if window:
             if window_kw is None:
@@ -947,34 +1020,38 @@ class PointPatternCollection(AlmostImmutable):
         if process == 'poisson':
             nlist = numpy.random.poisson(nmean, nsims)
         elif process == 'binomial':
-            nlist = nmean * numpy.ones((nsims,))
+            nlist = numpy.empty((nsims,))
+            nlist.fill(nmean)
         else:
             raise ValueError("unknown point process: {}".format(process))
 
         patterns = []
         for n in nlist:
-            points = []
+            # We know we need to draw at least n points, so do this right away
+            draw = numpy.column_stack(
+                (numpy.random.uniform(low=xmin, high=xmax, size=(n,)),
+                 numpy.random.uniform(low=ymin, high=ymax, size=(n,))))
+            points = geometry.MultiPoint(draw).intersection(window)
+
+            # Iterate until we have enough
             while len(points) < n:
                 newpoint = geometry.Point(
                     (numpy.random.uniform(low=xmin, high=xmax),
                      numpy.random.uniform(low=ymin, high=ymax)))
                 if window.contains(newpoint):
-                    points.append(newpoint)
-            if points:
-                pp = PointPattern(points, window, periodic=True)
-            else:
-                pp = PointPattern(None, window, periodic=True)
+                    points = points.union(newpoint)
+
+            pp = PointPattern(points, window)
             patterns.append(pp)
 
         return cls(patterns)
 
-    @property
-    def npatterns(self):
+    def __len__(self):
         """
         The number of patterns in the collection
 
         """
-        return len(self.patterns)
+        return self.patterns.__len__()
 
     @memoize_method
     def kcritical(self, alpha, edge_correction='stationary'):

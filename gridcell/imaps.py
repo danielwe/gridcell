@@ -60,9 +60,9 @@ class BinnedSet(AlmostImmutable):
         d = dims[0]
         equal = (dim == d for dim in dims)
         if d == 0 and all(equal):
-                self.edges = (numpy.array(edgearrs),)
+            self.edges = (numpy.array(edgearrs),)
         elif d == 1 and all(equal):
-                self.edges = tuple(edgearrs)
+            self.edges = tuple(edgearrs)
         else:
             raise ValueError("'edges' must be sequence of one-dimensional "
                              "array-like containers")
@@ -1186,7 +1186,7 @@ class IntensityMap(AlmostImmutable):
         nanmask = numpy.isnan(data)
         mask = numpy.logical_or(mask, nanmask)
         fdata = data[~mask]
-        xdata = numpy.array([cm[~mask] for cm in self.bset.cmesh]).transpose()
+        xdata = numpy.asarray([cm[~mask] for cm in self.bset.cmesh]).transpose()
         scale, mean, cov = fit_ndgaussian(xdata, fdata)
         return scale, mean, cov
 

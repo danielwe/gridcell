@@ -140,7 +140,8 @@ class Position(AlmostImmutable):
         dweights_filled[dweights_nanmask] = 0.0
 
         window_length = 2 * int(0.5 * speed_window / numpy.mean(tsteps)) + 1
-        window_sequence = numpy.ones((window_length,)) * (1.0 / window_length)
+        window_sequence = numpy.empty((window_length,))
+        window_sequence.fill(1.0 / window_length)
 
         tweights_filt = sensibly_divide(
             signal.convolve(tweights, window_sequence, mode='same'),
@@ -1550,12 +1551,12 @@ class CellCollection(AlmostImmutable, Mapping):
         return sum(cell.firing_rate for cell in cells)
 
     @memoize_method
-    def distances(self, keys=None):
+    def distances(self, keys1=None, keys2=None):
         """
         Compute a distance matrix between cells
 
-        :keys: sequence of cell keys to select cells to compute the distance
-               matrix for. If None, all cells are included.
+        :keys1, keys2: sequences of cell keys to select cells to compute the
+                       distance matrix between. If None, all cells are included.
         :returns: DataFrame containing the distance matrix, DataFrame containing
                   the roll matrix. Both DataFrames are indexed along rows and
                   columns by the cell keys (keys). The roll matrix is organized
@@ -1564,13 +1565,14 @@ class CellCollection(AlmostImmutable, Mapping):
                   BaseCell.distance() for the full explanation of roll).
 
         """
-        keys, cells = self.lookup(keys)
+        keys1, cells1 = self.lookup(keys1)
+        keys2, cells2 = self.lookup(keys2)
 
         distdict, rolldict = {}, {}
-        for (key, cell1) in zip(keys, cells):
-            dist, roll = zip(*[cell1.distance(cell2) for cell2 in cells])
-            distdict[key] = pandas.Series(dist, index=keys)
-            rolldict[key] = pandas.Series(roll, index=keys)
+        for (key1, cell1) in zip(keys1, cells1):
+            dist, roll = zip(*[cell1.distance(cell2) for cell2 in cells2])
+            distdict[key1] = pandas.Series(dist, index=keys2)
+            rolldict[key1] = pandas.Series(roll, index=keys2)
 
         distmatrix = pandas.DataFrame(distdict).transpose()
         rollmatrix = pandas.DataFrame(rolldict).transpose()
@@ -1582,8 +1584,8 @@ class CellCollection(AlmostImmutable, Mapping):
         """
         Compute a feature array of the cells
 
-        The feature series comprising the array is computed with the roll
-        required for consitency.
+        The feature series comprising the array are computed with the roll
+        required for consistency.
 
         :keys: sequence of cell keys to select cells to compute the feature
                array for. If None, all cells are included.
@@ -1620,10 +1622,10 @@ class CellCollection(AlmostImmutable, Mapping):
                   containing any outliers
 
         """
-        distmatrix, __ = self.distances(keys=keys)
-        keys, dists = distmatrix.index, distmatrix.values
-        labels = cluster.dbscan(dists, eps=eps, min_samples=min_samples,
-                                metric='precomputed')[1]
+        features = self.features(keys=keys)
+        keys, feature_arr = features.index, features.values
+        labels = cluster.dbscan(feature_arr, eps=eps,
+                                min_samples=min_samples)[1]
 
         return self.modules_from_labels(keys, labels, mod_kw=mod_kw)
 
@@ -1745,7 +1747,8 @@ class CellCollection(AlmostImmutable, Mapping):
                           **kwargs)
 
         if mean:
-            mscale = self.mean_scale(keys=keys) * numpy.ones_like(xlocs)
+            mscale = numpy.empty_like(xlocs)
+            mscale.fill(self.mean_scale(keys=keys))
             lines += axes.plot(xlocs, mscale, linewidth=0.5, color='0.50',
                                **mean_kw)
 
@@ -1825,10 +1828,13 @@ class CellCollection(AlmostImmutable, Mapping):
         if mean:
             malpha, mbeta, mgamma = numpy.rad2deg(
                 self.mean_peaks_polar(keys=keys)[:3, 1])
-            ones = numpy.ones_like(xlocs)
-            mabg = numpy.hstack((malpha * ones, numpy.nan,
-                                 mbeta * ones, numpy.nan,
-                                 mgamma * ones, numpy.nan))
+            ma = numpy.empty_like(xlocs)
+            mb = numpy.empty_like(xlocs)
+            mg = numpy.empty_like(xlocs)
+            ma.fill(malpha)
+            mb.fill(mbeta)
+            mg.fill(mgamma)
+            mabg = numpy.hstack((ma, numpy.nan, mb, numpy.nan, mg, numpy.nan))
             lines += axes.plot(xlocs3, mabg, linewidth=0.5, color='0.50',
                                **mean_kw)
 
@@ -1964,12 +1970,13 @@ class Module(CellCollection):
 
         # Compute a large BinnedSet2D for the ideal cell
         bset = self.values()[0].firing_rate.bset
-        for __ in range(2):
-            bset = bset.autocorrelate(mode='full')
+        new_bset = bset
+        for __ in range(3):
+            new_bset = new_bset.correlate(bset, mode='full')
 
         # Construct the ideal cell and save it to the instance
         self.idealcell = IdealGridCell(self.mean_peaks(),
-                                       self.mean_firing_field(), bset,
+                                       self.mean_firing_field(), new_bset,
                                        threshold=threshold)
 
     @memoize_method

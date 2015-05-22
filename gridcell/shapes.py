@@ -193,14 +193,14 @@ class Ellipse(object):
             + f0 ** 2 * F = 0
 
         """
-        px, py = numpy.array(zip(*fitpoints))
+        px, py = numpy.asarray(zip(*fitpoints))
         px2, py2 = px * px, py * py
         pxy = px * py
 
         zer = numpy.zeros_like(px)
-        one = numpy.ones_like(px)
 
-        f02 = f0 * f0 * one
+        f02 = numpy.empty_like(px)
+        f02.fill(f0 * f0)
         fpx, fpy = f0 * px, f0 * py
 
         n = px.size
@@ -241,7 +241,7 @@ class Ellipse(object):
         sxie = sxie + sxie.swapaxes(1, 2)
 
         agparams_old = numpy.zeros((6,))
-        w = one
+        w = numpy.ones_like(px)
         for _ in xrange(100):
             mmat = numpy.average(w * xixi.transpose(), axis=-1)
             #print(mmat == mmat.transpose())
@@ -258,8 +258,8 @@ class Ellipse(object):
             for (x, xx, cov) in zip(xi, xixi, covmats):
                 t1.append(x.dot(mmat_pinv.dot(x)) * cov)
                 st2.append(cov.dot(mmat_pinv.dot(xx)))
-            term1 = numpy.array(t1)
-            sterm2 = numpy.array(st2)
+            term1 = numpy.asarray(t1)
+            sterm2 = numpy.asarray(st2)
             sterm2 = sterm2 + sterm2.swapaxes(1, 2)
 
             nmat = (numpy.average(w * (covmats + sxie), axis=0) -
