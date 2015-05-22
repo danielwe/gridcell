@@ -19,6 +19,8 @@ def memoize_function(f):
     discussion at
     http://code.activestate.com/recipes/578231-probably-the-fastest-memoization-decorator-in-the-/
 
+    This version also supports keyword arguments.
+
     Parameters
     ----------
     f : callable
@@ -51,11 +53,13 @@ def memoize_function(f):
     class memodict(dict):
         __slots__ = ()
 
-        def __getitem__(self, *key):
+        def __getitem__(self, *args, **kwargs):
+            key = (args, frozenset(kwargs.items()))
             return dict.__getitem__(self, key)
 
         def __missing__(self, key):
-            self[key] = ret = f(*key)
+            args, kwargs = key[0], dict(key[1])
+            self[key] = ret = f(*args, **kwargs)
             return ret
 
     return memodict().__getitem__
