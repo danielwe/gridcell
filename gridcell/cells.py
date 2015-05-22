@@ -109,8 +109,10 @@ class Position(AlmostImmutable):
 
         :t: array-like, giving the times of position samples. Should be close to
             regularly spaced if speed_window != 0.0.
-        :x: array-like, giving the x coordinates of position samples
-        :y: array-like, giving the y coordinates of position samples
+        :x, y: array-like, giving the x and y coordinates of position samples.
+               Nans or masked entries are treated as missing values, and
+               affected entries in the returned speed and distance weight arrays
+               will be nans.
         :speed_window: length of the time interval around each sample over which
                        to average the speed at each sample. The length of the
                        time interval is rounded up to the nearest odd number of
@@ -124,11 +126,14 @@ class Position(AlmostImmutable):
         tweights = 0.5 * numpy.hstack((tsteps[0], tsteps[:-1] + tsteps[1:],
                                        tsteps[-1]))
 
+        x = numpy.ma.filled(x, fill_value=numpy.nan)
+        y = numpy.ma.filled(y, fill_value=numpy.nan)
+
         xsteps = numpy.diff(x)
         ysteps = numpy.diff(y)
         dsteps = numpy.sqrt(xsteps*xsteps + ysteps*ysteps)
-        dweights = 0.5 * numpy.ma.hstack((dsteps[0], dsteps[:-1] + dsteps[1:],
-                                          dsteps[-1]))
+        dweights = 0.5 * numpy.hstack((dsteps[0], dsteps[:-1] + dsteps[1:],
+                                       dsteps[-1]))
 
         dweights_nanmask = numpy.isnan(dweights)
         dweights_filled = numpy.copy(dweights)
