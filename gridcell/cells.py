@@ -2003,7 +2003,7 @@ class Module(CellCollection):
         angles = numpy.arctan2(window[:, 1], window[:, 0])
         sort_ind = numpy.argsort(angles)
         window = window[sort_ind]
-        return PointPattern(phases, window, periodic=True)
+        return PointPattern(phases, window)
 
     @memoize_method
     def simulate_phase_patterns(self, process='binomial', nsims=1000,
@@ -2050,7 +2050,8 @@ class Module(CellCollection):
 
         """
         phase_pattern = self.phase_pattern(keys=keys)
-        return phase_pattern.plot_pattern(axes=axes, plus=periodic, **kwargs)
+        return phase_pattern.plot_pattern(axes=axes, periodic=periodic,
+                                          **kwargs)
 
     def plot_phase_k(self, axes=None, keys=None, edge_correction='periodic',
                      **kwargs):

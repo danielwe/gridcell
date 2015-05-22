@@ -437,15 +437,14 @@ class Window(geometry.Polygon):
         return wpatch
 
 
-class PointPattern(AlmostImmutable):
+class PointPattern(geometry.MultiPoint):
     """
     Represent a planar point pattern and its associated window, and provide
     methods for analyzing its statistical properties
 
     """
 
-    def __init__(self, points, window, periodic=False, pluspoints=None,
-                 **kwargs):
+    def __init__(self, points, window=None, pluspoints=None, **kwargs):
         """
         Initialize the PointPattern instance
 
@@ -455,107 +454,101 @@ class PointPattern(AlmostImmutable):
         :window: a Polygon instance, or a valid argument to the Polygon
                  constructor (e.g. a list of coordinate tuples), giving the
                  set within which the point pattern is defined
-        :periodic: if True, the pattern is assumed to be periodic.  A ValueError
-                   is raised if window is not a simple plane-filling polygon
-                   (parallellogram, or hexagon with reflection symmetry through
-                   its center).
         :pluspoints: an optional MultiPoint instance or valid argument to the
-                     MultiPoint constructor, representing a set of points
-                     outside the window to use for plus sampling
+                     MultiPoint constructor, representing a set of extra points
+                     (usually outside the window) to use for plus sampling
+        :kwargs: additional keyword arguments to the MultiPoint constructor
 
         """
-        self.points = geometry.MultiPoint(points)
-
         # Avoid copying the window unless needed
         if isinstance(window, Window):
             self.window = window
         else:
             self.window = Window(window)
 
-        if periodic:
-            self.pluspoints = self.periodic_extension
-        else:
-            self.pluspoints = geometry.MultiPoint(pluspoints)
-
-    @property
-    def npoints(self):
-        """
-        The number of points in the point pattern
-
-        """
-        return len(self.points)
+        self.pluspoints = geometry.MultiPoint(pluspoints)
+        geometry.MultiPoint.__init__(self, points, **kwargs)
 
     @property
     @memoize_method
     def periodic_extension(self):
         """
-        Compute the periodic extension of this PointPattern instance
+        Compute the periodic extension of this point pattern assuming the
+        periodic boundary conditions implied by self.window
 
-        The inner ring two levels of periodic copies of the pattern is computed,
+        The first two levels of periodic copies of the pattern is computed,
         provided the Window instance associated with the pattern is a simple
         plane-filling polygon.
 
-        :returns: MultiPoint instance containing all the points in the periodic
-                  extension
+        :returns: MultiPoint instance containing the points in the periodic
+                  extension. The points from the pattern itself are not included
 
         """
         lattice = self.window.lattice
         lattice_r1 = numpy.roll(lattice, 1, axis=0)
         dvecs = numpy.vstack((lattice, lattice + lattice_r1))
         periodic_points = ops.cascaded_union(
-            [affinity.translate(self.points, xoff=dvec[0], yoff=dvec[1])
+            [affinity.translate(self.points(), xoff=dvec[0], yoff=dvec[1])
              for dvec in dvecs])
         return periodic_points
 
-    @property
     @memoize_method
-    def allpoints(self):
+    def points(self, mode='standard'):
         """
-        The union of the set of typical points and the set of plus sampling
-        points in the pattern
+        Return all the relevant points related to the pattern, under some
+        definition of "relevant".
+
+        :mode: string to select the relevant points. Possible values:
+            'standard': the points in the pattern are returned
+            'periodic': the union of the pattern and its periodic extension as
+                        defined by self.periodic_extension is returned
+            'plus': the union of the pattern and the plus sampling points is
+                    returned
+        :returns: multipoint instance containing all the points
 
         """
-        return self.points.union(self.pluspoints)
+        if mode == 'standard':
+            return geometry.MultiPoint(self)
+        elif mode == 'periodic':
+            return self.periodic_extension.union(self)
+        elif mode == 'plus':
+            return self.pluspoints.union(self)
+        else:
+            raise ValueError("unknown mode: {}".format(mode))
 
-    def nearest(self, point, plus=False):
+    def nearest(self, point, mode='standard'):
         """
         Return the point in the pattern closest to the location given by 'point'
 
         :point: Point instance giving the location to find the nearest point to
-        :plus: if True, the nearest point in self.allpoints is returned
+        :mode: string to select the points among which to look for the nearest
+               point. See the documentation for PointPattern.points() for
+               details.
         :returns: Point instance representing the point in the pattern nearest
                   'point'
 
         """
-        if plus:
-            return min(self.allpoints.difference(point),
-                       key=lambda p: point.distance(p))
-        else:
-            return min(self.points.difference(point),
-                       key=lambda p: point.distance(p))
+        return min(self.points(mode=mode).difference(point),
+                   key=lambda p: point.distance(p))
 
-    def nearest_list(self, point, plus=False):
+    def nearest_list(self, point, mode='standard'):
         """
         Return the list of points in the pattern, sorted by distance to the
         location given by 'point'
 
-        The list does not include point, even if point is in self.points or
-        self.allpoints.
+        The list does not include 'point' itself, even if it is part of the
+        pattern.
 
         :point: Point instance giving the location to sort the points by
                 distance to.
-        :plus: if True, the points in self.allpoints are used instead of only
-               those in self.points.
+        :mode: string to select the points to sort. See the documentation for
+               PointPattern.points() for details.
         :returns: list of Point instances containing the points in the pattern,
                   sorted by distance to 'point'.
 
         """
-        if plus:
-            return sorted(self.allpoints.difference(point),
-                          key=lambda p: point.distance(p))
-        else:
-            return sorted(self.points.difference(point),
-                          key=lambda p: point.distance(p))
+        return sorted(self.points(mode=mode).difference(point),
+                      key=lambda p: point.distance(p))
 
     def intensity(self, mode='standard', r=None):
         """
@@ -575,36 +568,36 @@ class PointPattern(AlmostImmutable):
 
         """
         if mode == 'standard':
-            return self.npoints / self.window.area
+            return len(self) / self.window.area
         elif mode == 'area':
-            return sum(self.window.p_V(p, r) for p in self.points)
+            return sum(self.window.p_V(p, r) for p in self)
         elif mode == 'perimeter':
-            return sum(self.window.p_S(p, r) for p in self.points)
+            return sum(self.window.p_S(p, r) for p in self)
         elif mode == 'minus':
             try:
                 renum = enumerate(r)
             except TypeError:
                 eroded_window = self.window.buffer(-r)
-                valid_points = len(self.points.intersection(eroded_window))
+                valid_points = len(eroded_window.intersection(self))
                 return valid_points / eroded_window.area
             else:
                 intensity = numpy.zeros_like(r)
                 for (i, rval) in renum:
                     eroded_window = self.window.buffer(-r)
-                    valid_points = len(self.points.intersection(eroded_window))
+                    valid_points = len(eroded_window.intersection(self))
                     intensity[i] = valid_points / eroded_window.area
                 return intensity
         elif mode == 'neighbor':
             intensity = 0.0
-            for p in self.points:
-                nn_distance = self.points.difference(p).distance(p)
+            for p in self:
+                nn_distance = self.difference(p).distance(p)
                 if nn_distance <= p.distance(self.window.boundary):
                     intensity += 1 / self.window.buffer(-nn_distance).area
             return intensity
         else:
             raise ValueError("unknown mode: {}".format(mode))
 
-    def intensity_squared(self, mode='standard', r=None):
+    def squared_intensity(self, mode='standard', r=None):
         """
         Compute an estimate of the squared intensity, assuming a stationary
         point pattern
@@ -626,46 +619,54 @@ class PointPattern(AlmostImmutable):
         :returns: array-like with estimated squared intensities
 
         """
-
-        #if mode == 'corrected':
-        #    if self.npoints == 0:
-        #        return 0.0
-        #    else:
-        #        lambda_ = self.intensity(mode='standard', r=r)
-        #        return lambda_ * lambda_ * (self.npoints - 1) / self.npoints
-        #else:
-        if self.npoints == 0:
+        l = len(self)
+        if l == 0:
             return 0.0
-        else:
-            lambda_ = self.intensity(mode=mode, r=r)
-            return lambda_ * lambda_ * (self.npoints - 1) / self.npoints
+        #if mode == 'corrected':
+        #    lambda_ = self.intensity(mode='standard', r=r)
+        #    return lambda_ * lambda_ * (l - 1) / l
+        #else:
+        #    lambda_ = self.intensity(mode=mode, r=r)
+        #    return lambda_ * lambda_
+        lambda_ = self.intensity(mode=mode, r=r)
+        return lambda_ * lambda_ * (l - 1) / l
 
-    def edge_config(self, edge_correction):
+    def _edge_config(self, edge_correction):
         """
-        Select the set of points to include and the intensity mode to use in
-        computations involving a particular edge correction
+        Select the set of points to include and the squared intensity estimator
+        to use in computations involving a particular edge correction
 
         :edge_correction: flag to select the handling of edges.
-        :returns: the set of points to include, and a string giving the relevant
-                  intensity mode
+        :returns: MultiPoint instance with the set of points to include in the
+                  computation, and a callable for the relevant squared intensity
+                  estimator, taking the radius 'r' as argument
 
         """
         if edge_correction == 'finite':
-            apoints = self.points
+            pmode = 'standard'
             #imode = 'corrected'
             imode = 'standard'
-        elif edge_correction in ('periodic', 'plus'):
-            apoints = self.allpoints
+        elif edge_correction == 'periodic':
+            pmode = 'periodic'
+            #imode = 'corrected'
+            imode = 'standard'
+        elif edge_correction == 'plus':
+            pmode = 'plus'
             #imode = 'corrected'
             imode = 'standard'
         elif edge_correction in ('stationary', 'isotropic'):
-            apoints = self.points
+            pmode = 'standard'
             imode = 'area'
         else:
             raise ValueError("unknown edge correction: {}"
                              .format(edge_correction))
 
-        return apoints, imode
+        points = self.points(mode=pmode)
+
+        def squared_intensity(r):
+            return self.squared_intensity(mode=imode, r=r)
+
+        return points, squared_intensity
 
     @memoize_method
     def kfunction(self, edge_correction='stationary'):
@@ -694,22 +695,22 @@ class PointPattern(AlmostImmutable):
         """
         window = self.window
         rmax = window.rmax(edge_correction)
-        apoints, imode = self.edge_config(edge_correction)
+        allpoints, squared_intensity = self._edge_config(edge_correction)
 
         rvals = [0.0]
         weights = [0.0]
 
-        l = len(apoints)
+        l = len(allpoints)
         if l == 2:
-            for p1 in self.points:
-                p2 = apoints.difference(p1)
+            for p1 in self:
+                p2 = allpoints.difference(p1)
                 r = p1.distance(p2)
                 if r < rmax:
                     rvals.append(r)
                     weights.append(window.weight(p1, p2, edge_correction))
         elif l > 2:
-            for p1 in self.points:
-                for p2 in apoints.difference(p1):
+            for p1 in self:
+                for p2 in allpoints.difference(p1):
                     r = p1.distance(p2)
                     if r < rmax:
                         rvals.append(r)
@@ -722,7 +723,7 @@ class PointPattern(AlmostImmutable):
 
         def klookup(r):
             indices = numpy.searchsorted(rvals, r, side='right') - 1
-            lambda2 = self.intensity_squared(mode=imode, r=r)
+            lambda2 = squared_intensity(r)
             return sensibly_divide(kvals[indices], lambda2)
 
         return klookup
@@ -837,8 +838,9 @@ class PointPattern(AlmostImmutable):
 
         return lines
 
-    def plot_pattern(self, axes=None, marker='o', plus=False, window=False,
-                     plus_kw=None, window_kw=None, **kwargs):
+    def plot_pattern(self, axes=None, marker='o', periodic=False, plus=False,
+                     window=False, periodic_kw=None, plus_kw=None,
+                     window_kw=None, **kwargs):
         """
         Plot point pattern
 
@@ -849,8 +851,13 @@ class PointPattern(AlmostImmutable):
                current Axes instance with equal aspect ratio is used if any, or
                a new one created.
         :marker: a valid matplotlib marker specification. Defaults to 'o'
-        :plus: if True, plus sampling points will also be plotted.
+        :periodic: if True, add the periodic extension of the pattern to the
+                   plot.
+        :plus: if True, add plus sampling points to the plot.
         :window: if True, the window boundaries are added to the plot.
+        :periodic_kw: dict of keyword arguments to pass to the axes.plot()
+                      method used to plot the periodic extension. Default: None
+                      (empty dict)
         :plus_kw: dict of keyword arguments to pass to the axes.plot()
                   method used to plot the plus sampling points. Default: None
                   (empty dict)
@@ -872,8 +879,14 @@ class PointPattern(AlmostImmutable):
             axes.set(xlim=(cent.x - diag, cent.x + diag),
                      ylim=(cent.y - diag, cent.y + diag))
 
-        pp = zip(*(p.xy for p in self.points))
+        pp = zip(*(p.xy for p in self))
         h = axes.plot(*pp, linestyle='None', marker=marker, **kwargs)
+
+        if periodic:
+            if periodic_kw is None:
+                periodic_kw = {}
+            pp = zip(*(p.xy for p in self.periodic_extension))
+            h += axes.plot(*pp, linestyle='None', marker=marker, **periodic_kw)
 
         if plus:
             if plus_kw is None:
