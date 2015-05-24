@@ -1535,20 +1535,41 @@ class CellCollection(AlmostImmutable, Mapping):
         return mean_tilt, mean_ecc
 
     @memoize_method
-    def stacked_firing_rate(self, keys=None):
+    def stacked_firing_rate(self, keys=None, normalize=None):
         """
         Compute the stacked firing rate map of cells in the collection
 
-        The stacked firing rate map is defined as the sum of the firing rates of
-        all the cells.
+        The stacked firing rate map is defined as the average of the firing
+        rates of all the cells.
 
         :keys: sequence of cell keys to select cells to compute the stacked
                firing rate from. If None, all cells are included.
+        :normalize: string to select how to normalize the rate maps before
+                    stacking. Possible values:
+            None: no normalization is performed
+            'max': the maximum value of each rate map will be normalized to 1.0
+            'mean': the mean of the rate maps will be normalized to 1.0
+            'std': the standard deviation of the rate maps will be normalized to
+                   1.0
         :returns: IntensityMap2D instance containing the stacked firing rate.
 
         """
         __, cells = self.lookup(keys)
-        return sum(cell.firing_rate for cell in cells)
+
+        if normalize is None:
+            def norm_func(imap):
+                return imap
+        elif normalize == 'max':
+            def norm_func(imap):
+                return imap / numpy.nanmax(imap.data)
+        elif normalize == 'mean':
+            def norm_func(imap):
+                return imap / numpy.nanmean(imap.data)
+        elif normalize == 'std':
+            def norm_func(imap):
+                return imap / numpy.nanstd(imap.data)
+
+        return sum(norm_func(cell.firing_rate) for cell in cells) / len(cells)
 
     @memoize_method
     def distances(self, keys1=None, keys2=None):
@@ -1909,8 +1930,8 @@ class CellCollection(AlmostImmutable, Mapping):
 
         return lines
 
-    def plot_stacked_firing_rate(self, axes=None, keys=None, cax=None,
-                                 cmap=None, cbar_kw=None, **kwargs):
+    def plot_stacked_firing_rate(self, axes=None, keys=None, normalize=None,
+                                 cax=None, cmap=None, cbar_kw=None, **kwargs):
         """
         Plot the stacked firing rate map for cells in the collection
 
@@ -1925,6 +1946,8 @@ class CellCollection(AlmostImmutable, Mapping):
                enforced on the newly created Axes instance.
         :keys: sequence of cell keys to select cells to plot the stacked firing
                rate of. If None (default), all cells are included.
+        :normalize: string to select how to normalize the rate maps before
+                    stacking. See self.stacked_firing_rate for details.
         :cax: Axes instance to plot the colorbar into. If None (default),
               matplotlib automatically makes space for a colorbar on the
               right-hand side of the plot.
@@ -1940,11 +1963,9 @@ class CellCollection(AlmostImmutable, Mapping):
                   instance
 
         """
-        axes, cbar = self.stacked_firing_rate(keys=keys).plot(axes=axes,
-                                                              cax=cax,
-                                                              cmap=cmap,
-                                                              cbar_kw=cbar_kw,
-                                                              **kwargs)
+        sfiring_rate = self.stacked_firing_rate(keys=keys, normalize=normalize)
+        axes, cbar = sfiring_rate.plot(axes=axes, cax=cax, cmap=cmap,
+                                       cbar_kw=cbar_kw, **kwargs)
         return axes, cbar
 
 
