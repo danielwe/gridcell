@@ -137,9 +137,9 @@ class memoize_method(object):
     def __call__(self, *args, **kwargs):
         obj = args[0]
         try:
-            cache = obj._cache
+            cache = obj._memoize_method_cache
         except AttributeError:
-            cache = obj._cache = {}
+            cache = obj._memoize_method_cache = {}
         try:
             key = (self.f, args[1:], frozenset(kwargs.items()))
             res = cache[key]
@@ -174,7 +174,7 @@ class memoize_method(object):
 
         """
         try:
-            cache = obj._cache
+            cache = obj._memoize_method_cache
         except AttributeError:
             pass
         else:
