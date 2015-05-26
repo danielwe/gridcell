@@ -9,7 +9,7 @@ http://code.activestate.com/recipes/578231-probably-the-fastest-memoization-deco
 
 """
 
-from functools import partial
+from functools import partial, update_wrapper
 
 
 def memoize_function(f):
@@ -142,7 +142,9 @@ class memoize_method(object):
         try:
             obj_f = methods[f]
         except KeyError:
-            methods[f] = obj_f = partial(self, obj)
+            obj_f = partial(self, obj)
+            update_wrapper(obj_f, f)
+            methods[f] = obj_f
         return obj_f
 
     def __call__(self, *args, **kwargs):
