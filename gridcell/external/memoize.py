@@ -127,10 +127,10 @@ class memoize_method(object):
     # DEALINGS IN THE SOFTWARE.
 
     def __init__(self, f):
-        self.f = f
+        self._f = f
 
     def __get__(self, obj, otype=None):
-        f = self.f
+        f = self._f
         if obj is None:
             return f
 
@@ -148,18 +148,21 @@ class memoize_method(object):
         return obj_f
 
     def __call__(self, *args, **kwargs):
+        f = self._f
         obj = args[0]
+
         try:
             cache = obj._memoize_method_cache
         except AttributeError:
             cache = obj._memoize_method_cache = {}
+
         try:
-            key = (self.f, args[1:], frozenset(kwargs.items()))
+            key = (f, args[1:], frozenset(kwargs.items()))
             res = cache[key]
         except KeyError:
-            cache[key] = res = self.f(*args, **kwargs)
+            cache[key] = res = f(*args, **kwargs)
         except TypeError:
-            res = self.f(*args, **kwargs)
+            res = f(*args, **kwargs)
         return res
 
     @staticmethod
