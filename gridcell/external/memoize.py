@@ -78,23 +78,30 @@ class memoize_method(object):
 
     If a memoized method is invoked directly on its class the result will not
     be cached.
-    class Obj(object):
-        @memoize_function
-        def add(self, arg):
-            return self + arg
-    Obj.add(1)  # not enough arguments
-    Obj.add(1, 2)  # returns 3, result is not cached
 
     This decorator has been adapted from
     http://code.activestate.com/recipes/577452-a-memoize-decorator-for-instance-methods/
     with mostly minor aesthetic modifications, plus the support for unhashable
     argument lists and a method for clearing the cahce on an instance.
 
-
     Parameters
     ----------
     f : method
-        Method to decorate.
+        Method to memoize.
+
+    Examples
+    --------
+    >>> class AddToThree(object):
+    >>>     base = 3
+    >>>     @memoize_method
+    >>>     def add(self, addend):
+    >>>         return self.base + addend
+    >>>
+    >>> adder = AddToThree()
+    >>> adder.add(4)  # result will be cached
+    7
+    >>> AddToThree.add(adder, 4)  # result will not be cached
+    7
 
     """
     # Copyright (c) 2012 Daniel Miller
@@ -144,4 +151,26 @@ class memoize_method(object):
 
     @staticmethod
     def clear_cache(obj):
+        """
+        Clear the memoizer's cache on an object
+
+        Parameters
+        ----------
+        obj : object
+              The cache for all memoized methods on 'obj' will be cleared.
+
+        Examples
+        --------
+        >>> class AddToThree(object):
+        >>>     base = 3
+        >>>     @memoize_method
+        >>>     def add(self, addend):
+        >>>         return self.base + addend
+        >>>
+        >>> adder = AddToThree()
+        >>> adder.add(4)  # result will be cached
+        7
+        >>> memoize_method.clear_cache(adder)  # cache on 'adder' cleared
+
+        """
         obj._cache.clear()
