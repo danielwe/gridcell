@@ -5,31 +5,46 @@ Module providing memoize decorators for regular functions and instance methods
 
 Adapted from
 http://code.activestate.com/recipes/577452-a-memoize-decorator-for-instance-methods/
-http://code.activestate.com/recipes/578231-probably-the-fastest-memoization-decorator-in-the-/
 
 """
 
 from functools import partial, update_wrapper
 
 
-def memoize_function(f):
-    """Memoization decorator for a function taking one or more arguments.
+class memoize_function(object):
+    """Cache the return value of a function
 
-    This decorator has been adapted from the suggested approaches in the
-    discussion at
-    http://code.activestate.com/recipes/578231-probably-the-fastest-memoization-decorator-in-the-/
+    This class is meant to be used as a decorator of functions. The return value
+    from a given function invocation will be cached on the decorated function.
+    All arguments passed to a method decorated with memoize must be hashable.
 
-    This version also supports keyword arguments.
+    If the argument list is not hashable, the result is returned as usual, but
+    the result is not cached.
+
+    This decorator has been adapted from
+    http://code.activestate.com/recipes/577452-a-memoize-decorator-for-instance-methods/
+    and adapted to work on functions instead of methods.
 
     Parameters
     ----------
     f : callable
         Function to memoize.
 
+    Examples
+    --------
+    >>> @memoize_function
+    >>> def types(*args, **kwargs):
+    >>>     argtypes = [type(arg) for arg in args]
+    >>>     kwargtypes = {key: type(val) for (key, val) in kwargs.items()}
+    >>>     return argtypes, kwargtypes
+    >>>
+    >>> types((1,), key='value')  # result will be cached
+    ([tuple], {'key': str})
+    >>> types([1], key=set('value'))  # result will not be cached
+    ([list], {'key': set})
+
     """
-    # Copyright (c) 2012 Martin Miller
-    # Copyright (c) 2012 Oren Tirosh
-    # Copyright (c) 2014 Isaac Levy
+    # Copyright (c) 2012 Daniel Miller
     # Copyright (c) 2015 Daniel Wennberg
     #
     # Permission is hereby granted, free of charge, to any person obtaining
@@ -50,19 +65,43 @@ def memoize_function(f):
     # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
     # FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
     # DEALINGS IN THE SOFTWARE.
-    class memodict(dict):
-        __slots__ = ()
 
-        def __getitem__(self, *args, **kwargs):
+    def __init__(self, f):
+        self._f = f
+        self._memoize_function_cache = {}
+        update_wrapper(self, f)
+
+    def __call__(self, *args, **kwargs):
+        f = self._f
+        cache = self._memoize_function_cache
+
+        try:
             key = (args, frozenset(kwargs.items()))
-            return dict.__getitem__(self, key)
+            res = cache[key]
+        except KeyError:
+            cache[key] = res = f(*args, **kwargs)
+        except TypeError:
+            res = f(*args, **kwargs)
+        return res
 
-        def __missing__(self, key):
-            args, kwargs = key[0], dict(key[1])
-            self[key] = ret = f(*args, **kwargs)
-            return ret
+    def clear_cache(self):
+        """
+        Clear the memoize function's cache
 
-    return memodict().__getitem__
+        Examples
+        --------
+        >>> @memoize_function
+        >>> def types(*args, **kwargs):
+        >>>     argtypes = [type(arg) for arg in args]
+        >>>     kwargtypes = {key: type(val) for (key, val) in kwargs.items()}
+        >>>     return argtypes, kwargtypes
+        >>>
+        >>> types((1,), key='value')  # result will be cached
+        ([tuple], {'key': str})
+        >>> types.clear_cache()  # cache on 'types' cleared
+
+        """
+        self._memoize_function_cache.clear()
 
 
 class memoize_method(object):
