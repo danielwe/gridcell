@@ -130,9 +130,20 @@ class memoize_method(object):
         self.f = f
 
     def __get__(self, obj, otype=None):
+        f = self.f
         if obj is None:
-            return self.f
-        return partial(self, obj)
+            return f
+
+        try:
+            methods = obj._memoize_method_instance_methods
+        except AttributeError:
+            methods = obj._memoize_method_instance_methods = {}
+
+        try:
+            obj_f = methods[f]
+        except KeyError:
+            methods[f] = obj_f = partial(self, obj)
+        return obj_f
 
     def __call__(self, *args, **kwargs):
         obj = args[0]
