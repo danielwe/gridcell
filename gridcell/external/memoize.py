@@ -173,4 +173,9 @@ class memoize_method(object):
         >>> memoize_method.clear_cache(adder)  # cache on 'adder' cleared
 
         """
-        obj._cache.clear()
+        try:
+            cache = obj._cache
+        except AttributeError:
+            pass
+        else:
+            cache.clear()
