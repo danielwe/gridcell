@@ -28,8 +28,8 @@ from matplotlib import pyplot
 class AlmostImmutable(object):
     """
     A base class for "almost immutable" objects: instance attributes that have
-    already been assigned cannot (easily) be reassigned or deleted, but creating
-    new attributes is allowed.
+    already been assigned cannot (easily) be reassigned or deleted, but
+    creating new attributes is allowed.
 
     """
 
@@ -65,9 +65,9 @@ class StepFunction(AlmostImmutable):
         Initialize the StepFunction instance
 
         :xsteps: the x values of step locations
-        :ysteps: the function values corresponding to the steps. The function is
-                 assumed to have the value y[i] for x values between x[i] and
-                 x[i + 1].
+        :ysteps: the function values corresponding to the steps. The function
+                 is assumed to have the value y[i] for x values between x[i]
+                 and x[i + 1].
 
         """
         # Here, we use numpy
@@ -95,11 +95,12 @@ class StepFunction(AlmostImmutable):
         The step function can be added to an existing plot via the optional
         'axes' argument.
 
-        :axes: Axes instance to add the step function to. If None (default), the
-               current Axes instance is used if any, or a new one created.
+        :axes: Axes instance to add the step function to. If None (default),
+               the current Axes instance is used if any, or a new one created.
         :kwargs: additional keyword arguments passed on to the axes.step()
                  method used to plot the function. Note in particular
-                 keywords such as 'linestyle', 'linewidth', 'color' and 'label'.
+                 keywords such as 'linestyle', 'linewidth', 'color' and
+                 'label'.
         :returns: list containing the Line2D instance for the plotted step
                   function
 
@@ -113,15 +114,15 @@ def gaussian(x, mean=0.0, cov=1.0):
     """
     Compute a multivariate Gaussian (normal distribution pdf)
 
-    Seriously, you never know when you're gonna need a Gaussian. Best to keep it
-    here in the utils module.
+    Seriously, you never know when you're gonna need a Gaussian. Best to keep
+    it here in the utils module.
 
-    :x: array-like of shape (m, n1, n2, ...), giving m n-dimensional x-values at
-        which to evaluate the gaussian, where n = n1 * n2 * .... In the 1d case,
-        the array can be of shape (m,).
+    :x: array-like of shape (m, n1, n2, ...), giving m n-dimensional x-values
+        at which to evaluate the gaussian, where n = n1 * n2 * .... In the 1d
+        case, the array can be of shape (m,).
     :mean: array-like, broadcastable to shape (n,), giving the n-dimensional
-           location of the Gaussian peak (the mean of the distribution for which
-           this is the pdf).
+           location of the Gaussian peak (the mean of the distribution for
+           which this is the pdf).
     :cov: array-like, broadcastable to shape (n, n), giving the shape of the
           Gaussian around the peak (the covariance matrix of the distribution
           for which this is the pdf).
@@ -150,9 +151,9 @@ def sensibly_divide(num, denom, masked=False):
     :masked: if True, the result is a masked array with masked values rather
              than nans at the problematic locations. Note that if either num or
              denom are masked, the result will always be a masked array, but if
-             masked == False the mask will not be extended by this function, and
-             any problematic locations encountered will be filled with unmasked
-             nans.
+             masked == False the mask will not be extended by this function,
+             and any problematic locations encountered will be filled with
+             unmasked nans.
     :returns: num / denom, sensibly
 
     """
@@ -205,9 +206,9 @@ def edge_regions(arr):
     array
 
     :arr: array
-    :returns: a boolean array of the same shape as arr, valued True for elements
-              corresponding to elements in the connected edge regions in arr,
-              and False everywhere else.
+    :returns: a boolean array of the same shape as arr, valued True for
+              elements corresponding to elements in the connected edge regions
+              in arr, and False everywhere else.
 
     """
     labels, _ = measurements.label(arr)

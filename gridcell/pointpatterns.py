@@ -76,8 +76,8 @@ class Window(geometry.Polygon):
     @memoize_method
     def inscribed_circle(self):
         """
-        The center and radius of the largest circle that can be inscribed in the
-        polygon
+        The center and radius of the largest circle that can be inscribed in
+        the polygon
 
         """
         def d(p):
@@ -116,12 +116,13 @@ class Window(geometry.Polygon):
         Compute the maximum relevant interpoint distance for a particular edge
         correction
 
-        :edge_correction: flag to select the handling of edges. Possible values:
+        :edge_correction: flag to select the handling of edges. Possible
+                          values:
             'finite': Translational edge correction used.
-            'periodic': No edge correction used. Care is taken to avoid counting
-                        the same pair multiple times, under the assumption that
-                        points are repeated periodically in the pattern
-                        according to self.lattice.
+            'periodic': No edge correction used. Care is taken to avoid
+                        counting the same pair multiple times, under the
+                        assumption that points are repeated periodically in the
+                        pattern according to self.lattice.
             'plus': No edge correction used.
             'stationary': Translational edge correction used.
             'isotropic': Rotational edge correction used.
@@ -188,7 +189,8 @@ class Window(geometry.Polygon):
         :returns: a Window instance corresponding to the intersection
 
         """
-        return self.intersection(affinity.translate(self, xoff=xoff, yoff=yoff))
+        return self.intersection(affinity.translate(self, xoff=xoff,
+                                                    yoff=yoff))
 
     @property
     @memoize_method
@@ -197,15 +199,16 @@ class Window(geometry.Polygon):
         Compute a set covariance interpolator
 
         The property decorator makes the interpolator directly accessible from
-        the name of this method: one can call w.set_covariance(x, y) on a Window
-        instance 'w' to get its set covariance evaluated at the displacement
-        (x, y). The interpolator instance is cached, so there is no need to
-        store it explicitly.
+        the name of this method: one can call w.set_covariance(x, y) on
+        a Window instance 'w' to get its set covariance evaluated at the
+        displacement (x, y). The interpolator instance is cached, so there is
+        no need to store it explicitly.
 
-        :returns: a function that takes two array-like arguments 'x' and 'y' and
-                  returns the interpolated value evaluated at the displacement
-                  vectors (x[i], y[i]), i = 0, ..., N - 1.  Internally, the
-                  function wraps a RectangularGridInterpolator instance.
+        :returns: a function that takes two array-like arguments 'x' and 'y'
+                  and returns the interpolated value evaluated at the
+                  displacement vectors (x[i], y[i]), i = 0, ..., N - 1.
+                  Internally, the function wraps a RectangularGridInterpolator
+                  instance.
 
         """
         xoffs = numpy.linspace(-self.longest_diagonal, self.longest_diagonal,
@@ -236,8 +239,8 @@ class Window(geometry.Polygon):
         The property decorator makes the interpolator directly accessible from
         the name of this method: one can call w.isotropic_set_covariance(r) on
         a Window instance 'w' to get its isotropic set covariance evaluated at
-        the radius 'r'. The interpolator instance is cached, so there is no need
-        to store it explicitly.
+        the radius 'r'. The interpolator instance is cached, so there is no
+        need to store it explicitly.
 
         :returns: interp1d instance that can be called with an array-like
                   argument 'r' and returns an array of the interpolated values
@@ -297,7 +300,8 @@ class Window(geometry.Polygon):
 
     def p_V(self, point, r):
         """
-        Compute the p-function for the adapted intensity estimator based on area
+        Compute the p-function for the adapted intensity estimator based on
+        area
 
         :point: a Point instance giving the location at which to evaluate the
                 function
@@ -343,7 +347,8 @@ class Window(geometry.Polygon):
         in the estimation of second-order summary characteristics
 
         :mp1, mp2: MultiPoint instances containing points to pair up
-        :edge_correction: flag to select the handling of edges. Possible values:
+        :edge_correction: flag to select the handling of edges. Possible
+                          values:
             'finite': Translational edge correction used.
             'periodic': No edge correction used, but 0.0 returned if a shorter
                         distance between the points exists under, periodic
@@ -434,7 +439,8 @@ class Window(geometry.Polygon):
         """
         return patches.Polygon(self.boundary, **kwargs)
 
-    def plot(self, axes=None, linewidth=2.0, color='0.5', fill=False, **kwargs):
+    def plot(self, axes=None, linewidth=2.0, color='0.5', fill=False,
+             **kwargs):
         """
         Plot the window
 
@@ -450,9 +456,9 @@ class Window(geometry.Polygon):
                 Defaults to '0.5', a moderately heavy gray.
         :fill: if True, plot a filled window. If False (default), only plot the
                boundary.
-        :kwargs: additional keyword arguments passed on to the patches.Polygon()
-                 constructor. Note in particular the keywords 'edgecolor',
-                 'facecolor' and 'label'.
+        :kwargs: additional keyword arguments passed on to the
+                 patches.Polygon() constructor. Note in particular the keywords
+                 'edgecolor', 'facecolor' and 'label'.
         :returns: the plotted matplotlib.patches.Polygon instance
 
         """
@@ -514,7 +520,8 @@ class PointPattern(geometry.MultiPoint):
         plane-filling polygon.
 
         :returns: MultiPoint instance containing the points in the periodic
-                  extension. The points from the pattern itself are not included
+                  extension. The points from the pattern itself are not
+                  included
 
         """
         lattice = self.window.lattice
@@ -577,8 +584,8 @@ class PointPattern(geometry.MultiPoint):
 
         :pp1: PointPattern or MultiPoint instance containing the points to find
               distances between
-        :pp2: if not None, distances are calculated from points in pp1 to points
-              in pp2 instead of between points in pp1
+        :pp2: if not None, distances are calculated from points in pp1 to
+              points in pp2 instead of between points in pp1
         :returns: numpy array of where slice [i, j, :] contains the distance
                   from pp1[i] to pp1[j], or if pp2 is not None, from pp1[i] to
                   pp2[j]
@@ -595,7 +602,8 @@ class PointPattern(geometry.MultiPoint):
 
     def nearest(self, point, mode='standard'):
         """
-        Return the point in the pattern closest to the location given by 'point'
+        Return the point in the pattern closest to the location given by
+        'point'
 
         :point: Point instance giving the location to find the nearest point to
         :mode: string to select the points among which to look for the nearest
@@ -631,7 +639,8 @@ class PointPattern(geometry.MultiPoint):
         """
         Compute an intensity estimate, assuming a stationary point pattern
 
-        :mode: flag to select the kind of estimator to compute. Possible values:
+        :mode: flag to select the kind of estimator to compute. Possible
+               values:
             'standard': The standard estimator: the number of points in the
                         pattern divided by the area of the window.
             'area': The adapted estimator based on area.
@@ -642,8 +651,8 @@ class PointPattern(geometry.MultiPoint):
         :returns: function taking an array-like with radii at which to evaluate
                   the estimator, and returning the estimated intensity at each
                   radius. Note that only the area, perimeter and minus
-                  estimators actually depend on the radius. For the other modes,
-                  the returned function may be called without arguments.
+                  estimators actually depend on the radius. For the other
+                  modes, the returned function may be called without arguments.
 
         """
         window = self.window
@@ -703,8 +712,8 @@ class PointPattern(geometry.MultiPoint):
             #   In addition, the
             #   following mode is supported:
             #'corrected': The square of the 'standard' intensity estimate,
-            #             multiplied by (n - 1) / n to give an unbiased estimate
-            #             of the squared intensity.
+            #             multiplied by (n - 1) / n to give an unbiased
+            #             estimate of the squared intensity.
         :returns: function taking an array-like with radii at which to evaluate
                   the estimator, and returning the estimated squared intensity
                   at each radius.
@@ -750,8 +759,8 @@ class PointPattern(geometry.MultiPoint):
 
         :edge_correction: flag to select the handling of edges.
         :returns: MultiPoint instance with the set of points to include in the
-                  computation, and a callable for the relevant squared intensity
-                  estimator, taking the radius 'r' as argument
+                  computation, and a callable for the relevant squared
+                  intensity estimator, taking the radius 'r' as argument
 
         """
         if edge_correction == 'finite':
@@ -780,21 +789,23 @@ class PointPattern(geometry.MultiPoint):
         """
         Compute the empirical K-function of the point pattern
 
-        :edge_correction: flag to select the handling of edges. Possible values:
-            'finite': Translational edge correction used. Intensity estimated by
-                      the standard intensity estimator.
-            'periodic': No edge correction used. Care is taken to avoid counting
-                        the same pair multiple times, under the assumption that
-                        self.pluspoints is a periodic extension of self.points
-                        as defined by self.window.lattice. Intensity
-                        estimated by the standard intensity estimator.
+        :edge_correction: flag to select the handling of edges. Possible
+                          values:
+            'finite': Translational edge correction used. Intensity estimated
+                      by the standard intensity estimator.
+            'periodic': No edge correction used. Care is taken to avoid
+                        counting the same pair multiple times, under the
+                        assumption that self.pluspoints is a periodic extension
+                        of self.points as defined by self.window.lattice.
+                        Intensity estimated by the standard intensity
+                        estimator.
             'plus': No edge correction used. Intensity estimated by the
                     standard intensity estimator.
             'stationary': Translational edge correction used. Intensity
                           estimated by the adapted intensity estimator based on
                           area.
-            'isotropic': Rotational edge correction used. Intensity estimated by
-                         the adapted intensity estimator based on area.
+            'isotropic': Rotational edge correction used. Intensity estimated
+                         by the adapted intensity estimator based on area.
         :returns: a function that takes an array-like argument 'r' and returns
                   values of the empirical K-function corresponding to the radii
                   in 'r'.
@@ -858,10 +869,10 @@ class PointPattern(geometry.MultiPoint):
                           PointPattern.kfunction() for details.
         :linewidth: number giving the width of the K-function line. Defaults to
                     2.0
-        :csr: if True, overlay the curve K(r) = pi r^2, which is the theoretical
-              K-function for complete spatial randomness. Defaults to a dashed
-              line, but this and all other style parameters may be changed using
-              csr_kw.
+        :csr: if True, overlay the curve K(r) = pi r^2, which is the
+              theoretical K-function for complete spatial randomness. Defaults
+              to a dashed line, but this and all other style parameters may be
+              changed using csr_kw.
         :csr_kw: dict of keyword arguments to pass to the axes.plot() method
                  used to plot the CSR curve. Default: None (empty dict)
         :kwargs: additional keyword arguments passed on to the axes.plot()
@@ -907,8 +918,8 @@ class PointPattern(geometry.MultiPoint):
                     2.0
         :csr: if True, overlay the curve L(r) = r, which is the theoretical
               L-function for complete spatial randomness. Defaults to a dashed
-              line, but this and all other style parameters may be changed using
-              csr_kw.
+              line, but this and all other style parameters may be changed
+              using csr_kw.
         :csr_kw: dict of keyword arguments to pass to the axes.plot() method
                  used to plot the CSR curve. Default: None (empty dict)
         :kwargs: additional keyword arguments passed on to the axes.plot()
@@ -945,9 +956,9 @@ class PointPattern(geometry.MultiPoint):
         The point pattern can be added to an existing plot via the optional
         'axes' argument.
 
-        :axes: Axes instance to add the point pattern to. If None (default), the
-               current Axes instance with equal aspect ratio is used if any, or
-               a new one created.
+        :axes: Axes instance to add the point pattern to. If None (default),
+               the current Axes instance with equal aspect ratio is used if
+               any, or a new one created.
         :marker: a valid matplotlib marker specification. Defaults to 'o'
         :periodic: if True, add the periodic extension of the pattern to the
                    plot.
@@ -966,8 +977,8 @@ class PointPattern(geometry.MultiPoint):
                  'color', 's' (marker size) and 'label'.
         :returns: list of the plotted objects: a Line2D instance with the point
                   pattern, and optionally another Line2D instance for the plus
-                  sampling points, and a matplotlib.patches.Polygon instance for
-                  the window.
+                  sampling points, and a matplotlib.patches.Polygon instance
+                  for the window.
 
         """
         if axes is None:
@@ -1021,10 +1032,11 @@ class PointPatternCollection(AlmostImmutable):
         self.patterns = list(patterns)
 
     @classmethod
-    def from_simulation(cls, window, intensity, process='binomial', nsims=1000):
+    def from_simulation(cls, window, intensity, process='binomial',
+                        nsims=1000):
         """
-        Create a PointPatternCollection instance by simulating a number of point
-        patterns in the same window
+        Create a PointPatternCollection instance by simulating a number of
+        point patterns in the same window
 
         :window: a Window instance to simulate the process within
         :intensity: the intensity (density per unit area) of the process
@@ -1130,11 +1142,11 @@ class PointPatternCollection(AlmostImmutable):
         Compute the aggregate of the intensity estimates of all patterns in the
         collection
 
-        :mode: flag to select the kind of estimator to compute. For details, see
-               PointPattern.intensity().
+        :mode: flag to select the kind of estimator to compute. For details,
+               see PointPattern.intensity().
         :returns: function taking an array-like with radii at which to evaluate
-                  the estimator, and returning the estimated aggregate intensity
-                  at each radius.
+                  the estimator, and returning the estimated aggregate
+                  intensity at each radius.
 
         """
         implemented_modes = ('standard',)
@@ -1153,8 +1165,8 @@ class PointPatternCollection(AlmostImmutable):
     @memoize_method
     def aggregate_squared_intensity(self, mode='standard'):
         """
-        Compute the aggregate of the squared intensity estimates of all patterns
-        in the collection
+        Compute the aggregate of the squared intensity estimates of all
+        patterns in the collection
 
         The estimate is found by squaring an estimate of the intensity, and
         multiplying with (n - 1) / n, where n is the number of points in the
@@ -1325,8 +1337,8 @@ class PointPatternCollection(AlmostImmutable):
 
         return lm
 
-    def plot_kenvelope(self, axes=None, edge_correction='stationary', low=0.025,
-                       high=0.975, alpha=0.25, **kwargs):
+    def plot_kenvelope(self, axes=None, edge_correction='stationary',
+                       low=0.025, high=0.975, alpha=0.25, **kwargs):
         """
         Plot an envelope of empirical K-function values
 
@@ -1386,8 +1398,8 @@ class PointPatternCollection(AlmostImmutable):
         h = axes.plot(rvals, kmean, **kwargs)
         return h
 
-    def plot_lenvelope(self, axes=None, edge_correction='stationary', low=0.025,
-                       high=0.975, alpha=0.25, **kwargs):
+    def plot_lenvelope(self, axes=None, edge_correction='stationary',
+                       low=0.025, high=0.975, alpha=0.25, **kwargs):
         """
         Plot an envelope of empirical L-function values
 
@@ -1464,10 +1476,10 @@ class PointPatternCollection(AlmostImmutable):
                           PointPattern.kfunction() for details.
         :linewidth: number giving the width of the K-function line. Defaults to
                     2.0
-        :csr: if True, overlay the curve K(r) = pi r^2, which is the theoretical
-              K-function for complete spatial randomness. Defaults to a dashed
-              line, but this and all other style parameters may be changed using
-              csr_kw.
+        :csr: if True, overlay the curve K(r) = pi r^2, which is the
+              theoretical K-function for complete spatial randomness. Defaults
+              to a dashed line, but this and all other style parameters may be
+              changed using csr_kw.
         :csr_kw: dict of keyword arguments to pass to the axes.plot() method
                  used to plot the CSR curve. Default: None (empty dict)
         :kwargs: additional keyword arguments passed on to the axes.plot()
@@ -1483,7 +1495,8 @@ class PointPatternCollection(AlmostImmutable):
 
         rmax = self.window.rmax(edge_correction)
         rvals = numpy.linspace(0.0, rmax, 3 * RSAMPLES)
-        kvals = self.aggregate_kfunction(edge_correction=edge_correction)(rvals)
+        kvals = self.aggregate_kfunction(
+            edge_correction=edge_correction)(rvals)
 
         lines = axes.plot(rvals, kvals, linewidth=linewidth, **kwargs)
 
@@ -1515,8 +1528,8 @@ class PointPatternCollection(AlmostImmutable):
                     2.0
         :csr: if True, overlay the curve L(r) = r, which is the theoretical
               L-function for complete spatial randomness. Defaults to a dashed
-              line, but this and all other style parameters may be changed using
-              csr_kw.
+              line, but this and all other style parameters may be changed
+              using csr_kw.
         :csr_kw: dict of keyword arguments to pass to the axes.plot() method
                  used to plot the CSR curve. Default: None (empty dict)
         :kwargs: additional keyword arguments passed on to the axes.plot()
@@ -1532,7 +1545,8 @@ class PointPatternCollection(AlmostImmutable):
 
         rmax = self.window.rmax(edge_correction)
         rvals = numpy.linspace(0.0, rmax, 3 * RSAMPLES)
-        lvals = self.aggregate_lfunction(edge_correction=edge_correction)(rvals)
+        lvals = self.aggregate_lfunction(
+            edge_correction=edge_correction)(rvals)
 
         lines = axes.plot(rvals, lvals, linewidth=linewidth, **kwargs)
 

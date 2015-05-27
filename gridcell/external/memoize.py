@@ -4,7 +4,7 @@
 Module providing memoize decorators for regular functions and instance methods
 
 Adapted from
-http://code.activestate.com/recipes/577452-a-memoize-decorator-for-instance-methods/
+http://code.activestate.com/recipes/577452-a-memoize-decorator-for-instance-methods/  # noqa
 
 """
 
@@ -14,15 +14,16 @@ from functools import partial, update_wrapper
 class memoize_function(object):
     """Cache the return value of a function
 
-    This class is meant to be used as a decorator of functions. The return value
-    from a given function invocation will be cached on the decorated function.
-    All arguments passed to a method decorated with memoize must be hashable.
+    This class is meant to be used as a decorator of functions. The return
+    value from a given function invocation will be cached on the decorated
+    function. All arguments passed to a method decorated with memoize must be
+    hashable.
 
     If the argument list is not hashable, the result is returned as usual, but
     the result is not cached.
 
     This decorator has been adapted from
-    http://code.activestate.com/recipes/577452-a-memoize-decorator-for-instance-methods/
+    http://code.activestate.com/recipes/577452-a-memoize-decorator-for-instance-methods/  # noqa
     and adapted to work on functions instead of methods.
 
     Parameters
@@ -55,16 +56,16 @@ class memoize_function(object):
     # persons to whom the Software is furnished to do so, subject to the
     # following conditions:
     #
-    # The above copyright notice and this permission notice shall be included in
-    # all copies or substantial portions of the Software.
+    # The above copyright notice and this permission notice shall be included
+    # in all copies or substantial portions of the Software.
     #
-    # THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-    # IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-    # FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-    # THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-    # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-    # FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-    # DEALINGS IN THE SOFTWARE.
+    # THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+    # OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+    # MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
+    # NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+    # DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+    # OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+    # USE OR OTHER DEALINGS IN THE SOFTWARE.
 
     def __init__(self, f):
         self._f = f
@@ -119,7 +120,7 @@ class memoize_method(object):
     be cached.
 
     This decorator has been adapted from
-    http://code.activestate.com/recipes/577452-a-memoize-decorator-for-instance-methods/
+    http://code.activestate.com/recipes/577452-a-memoize-decorator-for-instance-methods/  # noqa
     with mostly minor aesthetic modifications, plus the support for unhashable
     argument lists and a method for clearing the cahce on an instance.
 
@@ -154,16 +155,16 @@ class memoize_method(object):
     # persons to whom the Software is furnished to do so, subject to the
     # following conditions:
     #
-    # The above copyright notice and this permission notice shall be included in
-    # all copies or substantial portions of the Software.
+    # The above copyright notice and this permission notice shall be included
+    # in all copies or substantial portions of the Software.
     #
-    # THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-    # IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-    # FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-    # THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-    # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-    # FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-    # DEALINGS IN THE SOFTWARE.
+    # THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+    # OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+    # MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
+    # NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+    # DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+    # OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+    # USE OR OTHER DEALINGS IN THE SOFTWARE.
 
     def __init__(self, f):
         self._f = f

@@ -2,8 +2,8 @@
 
 """File: imaps.py
 Module defining classes to represent intensity maps, with methods for
-convolving, correlating, smoothing, computing Fourier transforms, plotting, peak
-detection etc.
+convolving, correlating, smoothing, computing Fourier transforms, plotting,
+peak detection etc.
 
 """
 # Copyright 2015 Daniel Wennberg
@@ -90,8 +90,8 @@ class BinnedSet(AlmostImmutable):
         :center: sequence of centers. Each number gives the center of the
                  BinnedSet along each axis. A single number may be provided in
                  the one-dimensional case.
-        :binwidth: sequence of bin widths. Each number gives the bin width along
-                   each direction. A single number may be provided in the
+        :binwidth: sequence of bin widths. Each number gives the bin width
+                   along each direction. A single number may be provided in the
                    one-dimensional case.
         :shape: sequence of bin numbers. Each number gives the number of bins
                 along one axis. A single number may be provided in the
@@ -171,10 +171,11 @@ class BinnedSet(AlmostImmutable):
 
     def __add__(self, vector):
         """
-        Define addition of a BinnedSet with a sequence of numbers as translation
+        Define addition of a BinnedSet with a sequence of numbers as
+        translation
 
-        :vector: sequence of numbers to add to the existing bin edge values, one
-                 for each dimension. In the one-dimensional case, a single
+        :vector: sequence of numbers to add to the existing bin edge values,
+                 one for each dimension. In the one-dimensional case, a single
                  number is accepted.
         :returns: new, translated BinnedSet instance
 
@@ -233,8 +234,8 @@ class BinnedSet(AlmostImmutable):
 
         The matrix ('ij') indexing convention is followed, such that if the
         length of the bin edge arrays is n0, n1, ..., and nk_1 (in the order
-        they appear in self.edges), the shape of each of the mesh arrays is (n0,
-        n2, ..., nk_1).
+        they appear in self.edges), the shape of each of the mesh arrays is
+        (n0, n2, ..., nk_1).
 
         """
         return numpy.meshgrid(*self.edges, indexing='ij')
@@ -297,8 +298,8 @@ class BinnedSet(AlmostImmutable):
         Check if this instance is compatible with another instance (both
         instances have bins of equal size and shape)
 
-        Compatibility requires that both instances are regular and have the same
-        dimensionality.
+        Compatibility requires that both instances are regular and have the
+        same dimensionality.
 
         :other: another BinnedSet instance
         :returns: True if compatible, otherwise False
@@ -307,8 +308,8 @@ class BinnedSet(AlmostImmutable):
         compatible = ((self.ndim == other.ndim) and
                       self.regular and
                       other.regular and
-                      all(numpy.allclose(sw[0], ow[0])
-                          for (sw, ow) in zip(self.binwidths, other.binwidths)))
+                      all(numpy.allclose(sw[0], ow[0]) for (sw, ow) in
+                          zip(self.binwidths, other.binwidths)))
         return compatible
 
     @memoize_method
@@ -316,8 +317,8 @@ class BinnedSet(AlmostImmutable):
         """
         Return a translated copy of the BinnedSet instance
 
-        :vector: sequence of numbers to add to the existing bin edge values, one
-                 for each dimension. In the one-dimensional case, a single
+        :vector: sequence of numbers to add to the existing bin edge values,
+                 one for each dimension. In the one-dimensional case, a single
                  number is accepted.
         :returns: new, translated BinnedSet instance
 
@@ -424,7 +425,8 @@ class BinnedSet(AlmostImmutable):
         for (sw, se, oe) in zip(self.binwidths, self.edges, other.edges):
             nb, sh = shape_shift(se.size - 1, oe.size - 1)
             bw = numpy.mean(sw)
-            center.append(0.5 * ((se[-1] + se[0]) + (oe[-1] + oe[0]) + bw * sh))
+            center.append(0.5 * ((se[-1] + se[0]) + (oe[-1] + oe[0]) +
+                          bw * sh))
             binwidth.append(bw)
             shape.append(nb)
 
@@ -471,8 +473,8 @@ class BinnedSet(AlmostImmutable):
         The coordinates of the positions are computed by interpolating with the
         given indices in the map from array indices to bin centers.
 
-        :bin_indices: a sequence of (possibly fractional) index tuples. A single
-                      index tuple is also accepted.
+        :bin_indices: a sequence of (possibly fractional) index tuples.
+                      A single index tuple is also accepted.
         :returns: an array where element [i, j] gives the jth coordinate of the
                   ith point
         """
@@ -496,9 +498,9 @@ class BinnedSet2D(BinnedSet):
 
         :edges: list or tuple of numpy bin edge arrays such as those returned
                 from numpy.histogram2d, in the format (xedges, yedges). If the
-                optional argument yedges is provided, this is instead assumed to
-                be the numpy bin edge array for the first (x) axis. Thus, both
-                the call signatures BinnedSet((xedges, yedges)) and
+                optional argument yedges is provided, this is instead assumed
+                to be the numpy bin edge array for the first (x) axis. Thus,
+                both the call signatures BinnedSet((xedges, yedges)) and
                 BinnedSet(xedges, yedges) are valid and give identical results.
                 This provides a flatter call signature for direct use, while
                 maintaining compatibility with the BinnedSet call signature.
@@ -573,10 +575,10 @@ class BinnedSet2D(BinnedSet):
         :axes: Axes instance to add the bin edges to. If None (default), the
                current Axes instance with equal aspect ratio is used if any, or
                a new one created.
-        :frame_lwfactor: a number used to scale the thickness of the outer edges
-                         as a multiple of the thickness of the interior edges
-                         (which is given by the current rcParams or **kwargs).
-                         Default value: 2.0.
+        :frame_lwfactor: a number used to scale the thickness of the outer
+                         edges as a multiple of the thickness of the interior
+                         edges (which is given by the current rcParams or
+                         **kwargs).  Default value: 2.0.
         :color: a valid matplotlib color specification giving the color to plot
                 the bin edges with. Defaults to '0.5', a moderately light gray.
         :kwargs: additional keyword arguments passed on to axes.plot() for
@@ -605,8 +607,8 @@ class BinnedSet2D(BinnedSet):
 
 class IntensityMap(AlmostImmutable):
     """
-    Represent an intensity map defined over a BinnedSet, and provide methods for
-    convolving, correlating, smoothing, computing Fourier transforms, peak
+    Represent an intensity map defined over a BinnedSet, and provide methods
+    for convolving, correlating, smoothing, computing Fourier transforms, peak
     detection etc.
 
     """
@@ -847,10 +849,10 @@ class IntensityMap(AlmostImmutable):
 
         """
         if not self.bset.regular:
-            raise ValueError("an {} instance must be defined over a regular {} "
-                             "instance (having bins of equal size and shape) "
-                             "to be able to construct a compatible instance "
-                             "from an array"
+            raise ValueError("an {} instance must be defined over a regular "
+                             "{} instance (having bins of equal size and "
+                             "shape) to be able to construct a compatible "
+                             "instance from an array"
                              .format(self.__class__.__name__,
                                      self.bset.__class__.__name__))
 
@@ -965,20 +967,21 @@ class IntensityMap(AlmostImmutable):
                  the conversion between physical lengths in the units used by
                  the BinnedSet, and bin/pixel numbers,
                   Default is 'gaussian'.
-        :normalized: if True, the smoothed IntensityMap is renormalized for each
-                     bin to eliminate the influence of missing values and values
-                     beyond the edges. Where only missing values would have
-                     contributed, the resulting value is missing. If False,
-                     values beyond the boundary are interpreted as 0.0, and the
-                     presence of missing values will raise a ValueError.
+        :normalized: if True, the smoothed IntensityMap is renormalized for
+                     each bin to eliminate the influence of missing values and
+                     values beyond the edges. Where only missing values would
+                     have contributed, the resulting value is missing. If
+                     False, values beyond the boundary are interpreted as 0.0,
+                     and the presence of missing values will raise
+                     a ValueError.
         :returns: new, smoothed IntensityMap instance defined over the same
                   BinnedSet instance as this
 
         """
         if not self.bset.regular:
-            raise ValueError("a {} instance must be defined over a {} instance "
-                             "which is regular (has bins of equal size and "
-                             "shape) for kernel filter smoothing"
+            raise ValueError("a {} instance must be defined over a {} "
+                             "instance which is regular (has bins of equal "
+                             "size and shape) for kernel filter smoothing"
                              .format(self.__class__.__name__,
                                      self.bset.__class__.__name__))
 
@@ -1013,11 +1016,12 @@ class IntensityMap(AlmostImmutable):
         :normalized: if True, the convolved IntensityMap is renormalized for
                      each bin to eliminate the influence of missing values and
                      values beyond the edges. Where only missing values would
-                     have contributed, the resulting value is missing. If False,
-                     values beyond the boundary are interpreted as 0.0, and the
-                     presence of missing values will raise a ValueError.
-        :returns: new IntensityMap instance representing the convolution of this
-                  and the other instance
+                     have contributed, the resulting value is missing. If
+                     False, values beyond the boundary are interpreted as 0.0,
+                     and the presence of missing values will raise
+                     a ValueError.
+        :returns: new IntensityMap instance representing the convolution of
+                  this and the other instance
 
         """
         sdata = self.data
@@ -1048,17 +1052,18 @@ class IntensityMap(AlmostImmutable):
         :mode: string indicating the size of the output. See
                scipy.signal.correlate for details. Valid options:
                'full', 'valid', 'same'. Default is 'full'.
-        :pearson: if True, the IntensityMap instances are normalized to mean 0.0
-                  and variance 1.0 before correlating. The result of the
-                  computation will then be the Pearson product-moment
-                  correlation coefficient between displaced intensity arrays,
-                  evaluated at each possible displacement.
+        :pearson: if True, the IntensityMap instances are normalized to mean
+                  0.0 and variance 1.0 before correlating. The result of the
+                    computation will then be the Pearson product-moment
+                    correlation coefficient between displaced intensity arrays,
+                    evaluated at each possible displacement.
         :normalized: if True, the correlated IntensityMap is renormalized for
                      each bin to eliminate the influence of missing values and
                      values beyond the edges. Where only missing values would
-                     have contributed, the resulting value is missing. If False,
-                     values beyond the boundary are interpreted as 0.0, and the
-                     presence of missing values will raise a ValueError.
+                     have contributed, the resulting value is missing. If
+                     False, values beyond the boundary are interpreted as 0.0,
+                     and the presence of missing values will raise
+                     a ValueError.
         :returns: new IntensityMap instance representing the cross-correlogram
                   of this and the other instance
 
@@ -1124,8 +1129,8 @@ class IntensityMap(AlmostImmutable):
         The algorithm calculates the center of mass in each connected region
         of intensities larger than the given threshold, and estimates the size
         of the support region of each peak by finding the area (volume) of the
-        region and computing the radius of the circle (hyperball) with this area
-        (volume).
+        region and computing the radius of the circle (hyperball) with this
+        area (volume).
 
         :threshold: lower intensity bound defining the regions in which peaks
                     are found. This value must be high enough that the supports
@@ -1135,9 +1140,9 @@ class IntensityMap(AlmostImmutable):
             - an array with a row [x, y, r] for each detected peak, where x and
               y are the coordinates of the peak and r is an estimate of the
               radius of the elevated region around the peak
-            - array of labels giving the connected region around the peaks, such
-              that labels == i is an index to the region surrounding the ith
-              peak detected (at index i - 1 in the returned array of peaks)
+            - array of labels giving the connected region around the peaks,
+              such that labels == i is an index to the region surrounding the
+              ith peak detected (at index i - 1 in the returned array of peaks)
             - the number of peaks and labeled regions found
 
         """
@@ -1158,11 +1163,12 @@ class IntensityMap(AlmostImmutable):
 
     def fit_gaussian(self, mask=None):
         """
-        Fit a multidimensional Gaussian to a region in the IntensityMap instance
+        Fit a multidimensional Gaussian to a region in the IntensityMap
+        instance
 
         A mask may be provided, such that only values in self.data[~mask]
-        contribute to the fit. If self.data is already masked, the intrinsic and
-        provided masks are combined. Any nan entries in self.data are also
+        contribute to the fit. If self.data is already masked, the intrinsic
+        and provided masks are combined. Any nan entries in self.data are also
         removed.
 
         In case anyone is wondering: the reason this method is not memoized is
@@ -1170,12 +1176,12 @@ class IntensityMap(AlmostImmutable):
         hashable. However, the underlying fit_ndgaussian function is memoized.
 
         :mask: boolean array of the same shape as self.data, used to mask bins
-               from contributing to the fit. Only the values in self.data[~mask]
-               are used. This can for example be used to fit the Gaussian to one
-               of the labeled regions returned from IntensityMap.labels() or
-               IntensityMaps.peaks() by using ~(self.labels(threshold)[0] ==
-               label) as the mask. If None (default), the whole IntensityMap
-               contributes.
+               from contributing to the fit. Only the values in
+               self.data[~mask] are used. This can for example be used to fit
+               the Gaussian to one of the labeled regions returned from
+               IntensityMap.labels() or IntensityMaps.peaks() by using
+               ~(self.labels(threshold)[0] == label) as the mask. If None
+               (default), the whole IntensityMap contributes.
         :returns: fitted parameters scale (scalar), mean (numpy array of shape
                   (n,)) and cov (numpy array of shape (n, n)) such that scale
                   * gaussian(x, mean=mean, cov=cov) returns the values of the
@@ -1186,7 +1192,8 @@ class IntensityMap(AlmostImmutable):
         nanmask = numpy.isnan(data)
         mask = numpy.logical_or(mask, nanmask)
         fdata = data[~mask]
-        xdata = numpy.asarray([cm[~mask] for cm in self.bset.cmesh]).transpose()
+        xdata = numpy.asarray([cm[~mask]
+                              for cm in self.bset.cmesh]).transpose()
         scale, mean, cov = fit_ndgaussian(xdata, fdata)
         return scale, mean, cov
 
@@ -1237,8 +1244,9 @@ class IntensityMap(AlmostImmutable):
 
 class IntensityMap2D(IntensityMap):
     """
-    A specialization of the IntensityMap to two-dimensional rectangles. Features
-    a simplified call signature, 2D-specific properties, and a plotting method.
+    A specialization of the IntensityMap to two-dimensional rectangles.
+    Features a simplified call signature, 2D-specific properties, and
+    a plotting method.
 
     """
     def __init__(self, data, *args):
@@ -1248,8 +1256,9 @@ class IntensityMap2D(IntensityMap):
         :data: array-like map containing a scalar intensity for each bin in
                bset. The array may be masked (using the numpy.ma module) to
                represent missing data etc. The ordering of axes in the array
-               should correspond to that in the underlying BinnedSet2D instance,
-               such that data[i, j] gives the intensity in the cell defined by
+               should correspond to that in the underlying BinnedSet2D
+               instance, such that data[i, j] gives the intensity in the cell
+               defined by
                (bset.edges[0][i], bset.edges[0][i + 1],
                 bset.edges[1][j], bset.edges[1][j + 1])
         :args: if the first element is a BinnedSet2D instance, it will be used
@@ -1258,8 +1267,8 @@ class IntensityMap2D(IntensityMap):
                *args.
 
         """
-        # Need to explicitly make sure that we get a BinnedSet2D instance before
-        # invoking the parent constructor
+        # Need to explicitly make sure that we get a BinnedSet2D instance
+        # before invoking the parent constructor
         potential_bset = args[0]
         if isinstance(potential_bset, BinnedSet2D):
             bset = potential_bset
@@ -1280,9 +1289,10 @@ class IntensityMap2D(IntensityMap):
         This method is essentially a wrapper around the Laplacian of Gaussian
         blob detection function from scikit-image, which identifies centers and
         scales of blobs in arrays. Some (hopefully sensible) default parameters
-        are provided. Note that this implementation of the Laplacian of Gaussian
-        algorithm is only appropriate if the underlying BinnedSet instance is
-        square, and the method will raise an error if this is not the case.
+        are provided. Note that this implementation of the Laplacian of
+        Gaussian algorithm is only appropriate if the underlying BinnedSet
+        instance is square, and the method will raise an error if this is not
+        the case.
 
         :min_sigma: minimum standard deviation of the Gaussian kernel used in
                     the Gaussian-Laplace filter, given in units given by the
@@ -1300,10 +1310,10 @@ class IntensityMap2D(IntensityMap):
                     * max_sigma. If None (default), a default value
                     corresponding to a blob radius of about one fourth of the
                     shortest width of the intensity map will be used.
-        :num_sigma: the number of intermediate filter scales to consider between
-                    min_sigma and max_sigma. Increase for improved precision,
-                    decrease to reduce computational cost. Note that for
-                    coarse-binned intensity maps, precision will often be
+        :num_sigma: the number of intermediate filter scales to consider
+                    between min_sigma and max_sigma. Increase for improved
+                    precision, decrease to reduce computational cost. Note that
+                    for coarse-binned intensity maps, precision will often be
                     limited by resolution rather than this parameter. Default
                     value: 25.
         :threshold: lower bound for scale-space maxima (that is, the minimum
@@ -1389,9 +1399,9 @@ class IntensityMap2D(IntensityMap):
         :cax: Axes instance to plot the colorbar into. If None (default),
               matplotlib automatically makes space for a colorbar on the
               right-hand side of the plot.
-        :threshold: if not None, values below this threshold are masked from the
-                    plot. This may be useful to visualize regions surrounding
-                    peaks.
+        :threshold: if not None, values below this threshold are masked from
+                    the plot. This may be useful to visualize regions
+                    surrounding peaks.
         :vmin, vmax: scaling parameters for mapping the intensity map onto the
                      colormap. An intensity smaller than or equal to vmin will
                      be mapped to the lowest value in the colormap, while an
@@ -1442,12 +1452,13 @@ def _safe_mmap(normalized, mapfunc, *arrs):
     normalized == True, in which case nans and masked values are treated as
     missing values.
 
-    :normalized: if True, the output of the map is normalized at each element to
-                 eliminate the contribution from nans, masked values and values
-                 beyond the edges of the array. Where only such values would
-                 have contributed, the resulting value is nan. If False, the map
-                 is applied without normalization, and the presence of nans or
-                 masked values in any of the arrays will raise a ValueError.
+    :normalized: if True, the output of the map is normalized at each element
+                 to eliminate the contribution from nans, masked values and
+                 values beyond the edges of the array. Where only such values
+                 would have contributed, the resulting value is nan. If False,
+                 the map is applied without normalization, and the presence of
+                 nans or masked values in any of the arrays will raise
+                 a ValueError.
     :mapfunc: callable defining the multilinear map: mapfunc(*arrs) returns the
               unnormalized mapping
     :arrs: list of arrays to compute the map over
@@ -1470,8 +1481,8 @@ def _safe_mmap(normalized, mapfunc, *arrs):
         new_arr = sensibly_divide(mapfunc(*filled_arrs), mapfunc(*indicators))
     else:
         if any(numpy.any(ind == 0.0) for ind in indicators):
-            raise ValueError("cannot filter IntensityMap instances with masked "
-                             "values or nans unless normalized == True")
+            raise ValueError("cannot filter IntensityMap instances with "
+                             "masked values or nans unless normalized == True")
         new_arr = mapfunc(*arrs)
 
     return new_arr

@@ -36,12 +36,12 @@ def fit_ndgaussian(xdata, fdata):
 
     :xdata: an array of shape (m, n), where n is the dimension of the domain of
             the gaussian to fit, and m is the number of data points
-    :fdata: an array of shape (m,), with empirical function values corresponding
-            to each x value
-    :returns: fitted parameters scale (scalar), mean (numpy array of shape (n,))
-              and cov (numpy array of shape (n, n)) such that scale
-              * gaussian(x, mean=mean, cov=cov) returns the values of the fitted
-              Gaussian at the positions in x
+    :fdata: an array of shape (m,), with empirical function values
+            corresponding to each x value
+    :returns: fitted parameters scale (scalar), mean (numpy array of shape
+              (n,)) and cov (numpy array of shape (n, n)) such that scale
+              * gaussian(x, mean=mean, cov=cov) returns the values of the
+              fitted Gaussian at the positions in x
 
     """
     m, n = xdata.shape
@@ -74,13 +74,14 @@ def fit_ndgaussian(xdata, fdata):
     # Make a list with the minimal number of parameters to specify a Gaussian
     #params = numpy.hstack((scale, mean, numpy.sqrt(evals), evecs_c[upper]))
     params = numpy.hstack((scale, mean, numpy.sqrt(evals), angles))
-    #params = numpy.hstack((numpy.sqrt(scale), mean, numpy.sqrt(evals), angles))
+    #params = numpy.hstack((numpy.sqrt(scale), mean, numpy.sqrt(evals),
+    #                       angles))
     #params = numpy.hstack((scale, mean, evals, angles))
 
     def params_to_scale_mean_cov(params_):
         """
-        Extract the scale, mean and covariance matrix from the minimal parameter
-        array
+        Extract the scale, mean and covariance matrix from the minimal
+        parameter array
 
         """
         # Extract scale and mean

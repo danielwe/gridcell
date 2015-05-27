@@ -49,23 +49,23 @@ class Position(AlmostImmutable):
         """
         Initialize the Position instance
 
-        :t: array-like, giving the times of position samples. Should be close to
-            regularly spaced if speed_window != 0.0.
+        :t: array-like, giving the times of position samples. Should be close
+            to regularly spaced if speed_window != 0.0.
         :x: array-like, giving the x coordinates of position samples
         :y: array-like, giving the y coordinates of position samples
         :speed_window: length of the time interval over which to compute the
-                       average speed at each sample. The length of the averaging
-                       interval is rounded up to the nearest odd number of
-                       samples to get a symmetric window. Must be a non-negative
-                       number, given in the same unit as 't'.  Default is 0.0
-                       (average speed computed over the shortest possible
-                       interval -- a central difference around the current
-                       sample).
-        :min_speed: lower speed limit for valid data. Sampled positions are only
-                    considered valid if the computed average speed at the sample
-                    is larger than this. Must be a non-negative number, given in
-                    the same unit as 'x' and 'y'. Default is 0.0 (all data
-                    valid).
+                       average speed at each sample. The length of the
+                       averaging interval is rounded up to the nearest odd
+                       number of samples to get a symmetric window. Must be
+                       a non-negative number, given in the same unit as 't'.
+                       Default is 0.0 (average speed computed over the shortest
+                       possible interval -- a central difference around the
+                       current sample).
+        :min_speed: lower speed limit for valid data. Sampled positions are
+                    only considered valid if the computed average speed at the
+                    sample is larger than this. Must be a non-negative number,
+                    given in the same unit as 'x' and 'y'. Default is 0.0 (all
+                    data valid).
         :kwargs: none supported at the moment. In the future, support may be
                  added for a keyword 'info' containing information about the
                  transformation applied to get physical positions from raw
@@ -107,17 +107,17 @@ class Position(AlmostImmutable):
         sample. The time- and distance weights are arrays that assign a time
         interval and a distance interval to each sample.
 
-        :t: array-like, giving the times of position samples. Should be close to
-            regularly spaced if speed_window != 0.0.
+        :t: array-like, giving the times of position samples. Should be close
+            to regularly spaced if speed_window != 0.0.
         :x, y: array-like, giving the x and y coordinates of position samples.
                Nans or masked entries are treated as missing values, and
-               affected entries in the returned speed and distance weight arrays
-               will be nans.
-        :speed_window: length of the time interval around each sample over which
-                       to average the speed at each sample. The length of the
-                       time interval is rounded up to the nearest odd number of
-                       samples to get a symmetric window. Must be a non-negative
-                       number, given in the same unit as 't'.
+               affected entries in the returned speed and distance weight
+               arrays will be nans.
+        :speed_window: length of the time interval around each sample over
+                       which to average the speed at each sample. The length of
+                       the time interval is rounded up to the nearest odd
+                       number of samples to get a symmetric window. Must be
+                       a non-negative number, given in the same unit as 't'.
         :returns: array with speed at each position sample, and time- and
                   distance weight arrays
 
@@ -165,7 +165,7 @@ class Position(AlmostImmutable):
         'self.min_speed') are included in the histogram. The histogram is
         returned as an IntensityMap2D instance.
 
-        :bins: bin specification defining the bins to use in the histogram.  The
+        :bins: bin specification defining the bins to use in the histogram. The
                simplest formats are a scalar 'nbins' or a tuple '(nbins_x,
                nbins_y)', giving the number of bins of equal widths in each
                direction. For information about other valid formats, see the
@@ -196,7 +196,7 @@ class Position(AlmostImmutable):
         :axes: Axes instance to add the path to. If None (default), the current
                Axes instance with equal aspect ratio is used if any, or a new
                one created.
-        :linewidth: number giving the width of the plotted path. Defaults to 0.5
+        :linewidth: number giving the width of the plotted path. Defaults: 0.5
         :color: a valid matplotlib color specification giving the color to plot
                 the path with. Defaults to '0.5', a moderate gray.
         :kwargs: additional keyword arguments passed on to axes.plot() for
@@ -258,13 +258,14 @@ class Position(AlmostImmutable):
         :axes: Axes instance to add the speed curve to. If None (default), the
                current Axes instance is used if any, or a new one created.
         :time_int: sequence giving the start and end of the time interval to
-                   plot the speed over. If None (default), the whole duration of
-                   the measurement is used.
-        :min_speed: if True, a horizontal line at self.min_speed (used to filter
-                    valid positions) is added to the plot. By default, a solid,
-                    red line with linewidth == 0.5 will be plotted, but this
-                     can be overridden using the parameter min_speed_kw. If
-                    false, no lines are plotted. Default is true.
+                   plot the speed over. If None (default), the whole duration
+                   of the measurement is used.
+        :min_speed: if True, a horizontal line at self.min_speed (used to
+                    filter valid positions) is added to the plot. By default,
+                    a solid, red line with linewidth == 0.5 will be plotted,
+                    but this can be overridden using the parameter
+                    min_speed_kw. If false, no lines are plotted. Default is
+                    true.
         :min_speed_kw: dict of keyword arguments to pass to the axes.plot()
                         method used to plot the min_speed line. default: None
                        (empty dict)
@@ -333,15 +334,16 @@ class BaseCell(AlmostImmutable):
         :mode: string indicating the size of the output. See
                IntensityMap2D.autocorrelate() for details. Valid options:
                'full', 'valid', 'same'. Default is 'full'.
-        :pearson: if True, the IntensityMap instances are normalized to mean 0.0
-                  and variance 1.0 before correlating. The result of the
+        :pearson: if True, the IntensityMap instances are normalized to mean
+                  0.0 and variance 1.0 before correlating. The result of the
                   computation will then be the Pearson product-moment
                   correlation coefficient between displaced intensity arrays,
                   evaluated at each possible displacement. Default is True.
-        :normalized: if True, any masked values or nans in the intensity arrays,
-                     as well as values beyond the their edges, are treated as
-                     missing values, and the correlogram is renormalized for
-                     each cell to eliminate their influence. Default is True.
+        :normalized: if True, any masked values or nans in the intensity
+                     arrays, as well as values beyond the their edges, are
+                     treated as missing values, and the correlogram is
+                     renormalized for each cell to eliminate their influence.
+                     Default is True.
         :returns: IntensityMap2D instance representing the autocorrelogram of
                   the firing rate
 
@@ -355,11 +357,11 @@ class BaseCell(AlmostImmutable):
         """
         Identify the most central peaks in an IntensityMap
 
-        This is essentially a wrapper around imap.peaks(threshold), but performs
-        selection and sorting of the peaks. The selected peaks are the peak
-        closest to the center, and the six peaks closest to it. The center peak
-        is returned first, and the other six are sorted by the angle from the
-        x axis to the line from the center peak to each of them.
+        This is essentially a wrapper around imap.peaks(threshold), but
+        performs selection and sorting of the peaks. The selected peaks are the
+        peak closest to the center, and the six peaks closest to it. The center
+        peak is returned first, and the other six are sorted by the angle from
+        the x axis to the line from the center peak to each of them.
 
         A label array identifying the regions surrounding each peak is also
         returned.
@@ -369,10 +371,11 @@ class BaseCell(AlmostImmutable):
                     are found.
         :returns:
             - numpy array 'peaks' of shape (7, 2), where (peaks[0][0],
-              peaks[0][1]) are the x and y coordinates of the central peak, etc.
-            - array of labels identifying the region surrounding each peak, such
-              that labels == i is an index to the region surrounding the ith
-              peak (found at index i - 1 in the returned array of peaks)
+              peaks[0][1]) are the x and y coordinates of the central peak,
+              etc.
+            - array of labels identifying the region surrounding each peak,
+              such that labels == i is an index to the region surrounding the
+              ith peak (found at index i - 1 in the returned array of peaks)
 
         """
         all_peaks, labels, __ = imap.peaks(threshold)
@@ -382,7 +385,7 @@ class BaseCell(AlmostImmutable):
         apr = apx * apx + apy * apy
         cindex = numpy.argmin(apr)
 
-        # Find the seven peaks closest to the center peak (including the center)
+        # Find the seven peaks closest to the center (incl. the center peak)
         cpeak = all_peaks[cindex]
         cpx = apx - cpeak[0]
         cpy = apy - cpeak[1]
@@ -412,10 +415,10 @@ class BaseCell(AlmostImmutable):
         Identify the coordinates of the six inner peaks in the autocorrelogram
         of the firing rate, sorted by angle with the positive x axis.
 
-        :project: if True, the peaks from the autocorrelogram are projected into
-                  the space of valid lattice vectors, such that each peak is
-                  equal to the sum of its two neighbors. If False, the peaks are
-                  returned without projection. Default is True.
+        :project: if True, the peaks from the autocorrelogram are projected
+                  into the space of valid lattice vectors, such that each peak
+                  is equal to the sum of its two neighbors. If False, the peaks
+                  are returned without projection. Default is True.
         :threshold: lower intensity bound defining the regions in which peaks
                     are found. If None (default), the attribute self.threshold
                     is used.
@@ -445,16 +448,16 @@ class BaseCell(AlmostImmutable):
         autocorrelogram of the firing rate, sorted by angle with the positive
         x axis.
 
-        :project: if True, the peaks from the autocorrelogram are projected into
-                  the space of valid lattice vectors, such that each peak is
-                  equal to the sum of its two neighbors. If False, the peaks are
-                  returned without projection. Default is True.
+        :project: if True, the peaks from the autocorrelogram are projected
+                  into the space of valid lattice vectors, such that each peak
+                  is equal to the sum of its two neighbors. If False, the peaks
+                  are returned without projection. Default is True.
         :threshold: lower intensity bound defining the regions in which peaks
                     are found. If None (default), the attribute self.threshold
                     is used.
         :returns: numpy array 'peaks' of shape (6, 2), where (peaks[0][0],
-                  peaks[0][1]) is the r and theta coordinates of the first peak,
-                  etc.
+                  peaks[0][1]) is the r and theta coordinates of the first
+                  peak, etc.
 
         """
         peaks = self.peaks(project=project, threshold=threshold)
@@ -489,13 +492,14 @@ class BaseCell(AlmostImmutable):
         """
         Calculate the grid scale of the cell
 
-        :mode: flag to select which grid scale definition to use. Valid options:
+        :mode: flag to select which grid scale definition to use. Valid
+               options:
             'geometric': the scale is defined as the geometric mean of the
-                         semi-minor and semi-major axes of the ellipse fitted to
-                         the inner ring of six peaks.
+                         semi-minor and semi-major axes of the ellipse fitted
+                         to the inner ring of six peaks.
             'arithmetic': the scale is defined as the arithmetic mean of the
-                          distances from the center to the each of the six inner
-                          peaks.
+                          distances from the center to the each of the six
+                          inner peaks.
                Default is 'geometric'.
         :project: if True, the scale is based on the lattice-projected peaks
                   (see BaseCell.peaks()). If False, it is based on the
@@ -580,15 +584,16 @@ class BaseCell(AlmostImmutable):
         :mode: string indicating the size of the output. See
                IntensityMap2D.autocorrelate() for details. Valid options:
                'full', 'valid', 'same'. Default is 'full'.
-        :pearson: if True, the IntensityMap instances are normalized to mean 0.0
-                  and variance 1.0 before correlating. The result of the
+        :pearson: if True, the IntensityMap instances are normalized to mean
+                  0.0 and variance 1.0 before correlating. The result of the
                   computation will then be the Pearson product-moment
                   correlation coefficient between displaced intensity arrays,
                   evaluated at each possible displacement. Default is True.
-        :normalized: if True, any masked values or nans in the intensity arrays,
-                     as well as values beyond the their edges, are treated as
-                     missing values, and the correlogram is renormalized for
-                     each cell to eliminate their influence. Default is True.
+        :normalized: if True, any masked values or nans in the intensity
+                     arrays, as well as values beyond the their edges, are
+                     treated as missing values, and the correlogram is
+                     renormalized for each cell to eliminate their influence.
+                     Default is True.
         :returns: IntensityMap2D instance representing the cross-correlogram of
                   the firing rates
 
@@ -611,10 +616,10 @@ class BaseCell(AlmostImmutable):
         / r, where r = self.scale().
 
         :roll: quantities related to individual peaks are listed in
-               counterclockwise order in the feature array. The parameter 'roll'
-               decides which peak to start at: self.peaks()[roll] is used first,
-               and self.peaks()[roll - 1] last (this can be thought of as
-               replacing self.peaks() with numpy.roll(self.peaks(), roll,
+               counterclockwise order in the feature array. The parameter
+               'roll' decides which peak to start at: self.peaks()[roll] is
+               used first, and self.peaks()[roll - 1] last (this can be thought
+               of as replacing self.peaks() with numpy.roll(self.peaks(), roll,
                axis=0)).
         :returns: one-dimensional array of features
 
@@ -630,12 +635,12 @@ class BaseCell(AlmostImmutable):
 
         This method defines a metric on the space of grid patterns from grid
         cells. The distance is defined as the Euclidean distance between the
-        feature arrays of the cells, using the relative peak roll that minimizes
-        this distance.
+        feature arrays of the cells, using the relative peak roll that
+        minimizes this distance.
 
         :other: Cell instance to measure distance to.
-        :returns: distance between cells, and the peak roll applied to this cell
-                  to obtain it. The peak roll  is defined such that
+        :returns: distance between cells, and the peak roll applied to this
+                  cell to obtain it. The peak roll  is defined such that
                   numpy.roll(self.peaks, roll, axis=0) and other.peaks() give
                   coordinates to the most closely corresponding peaks in self
                   and other
@@ -683,8 +688,8 @@ class BaseCell(AlmostImmutable):
         """
         Plot the spatial firing rate map of this cell
 
-        The firing rate can be added to an existing plot via the optional 'axes'
-        argument.
+        The firing rate can be added to an existing plot via the optional
+        'axes' argument.
 
         This method is just a wrapper around self.firing_rate.plot().
 
@@ -717,8 +722,8 @@ class BaseCell(AlmostImmutable):
         """
         Plot the autocorrelogram of the firing rate of this cell
 
-        The correlogram can be added to an existing plot via the optional 'axes'
-        argument.
+        The correlogram can be added to an existing plot via the optional
+        'axes' argument.
 
         This method is little but a wrapper around self.autocorrelate().plot().
 
@@ -733,13 +738,13 @@ class BaseCell(AlmostImmutable):
                     plot. Default is False.
         :peaks: if True, add the most central peak and the six peaks closest to
                 it to the plot, using some (hopefully) sensible plotting
-                defaults. If more control is required, leave this false and call
-                self.plot_peaks() on the returned axes instance.
+                defaults. If more control is required, leave this false and
+                call self.plot_peaks() on the returned axes instance.
         :ellipse: if True, add an ellipse fitted through the six peaks closest
                   to the center peak to the plot, using some (hopefully)
-                  sensible plotting defaults. If more control is required, leave
-                  this false and call self.plot_ellipse() on the returned axes
-                  instance.
+                  sensible plotting defaults. If more control is required,
+                  leave this false and call self.plot_ellipse() on the returned
+                  axes instance.
         :cmap: colormap to use for the plot. All valid matplotlib colormap
                arguments can be used. If None (default), the default colormap
                from rcParams is used (BEWARE: the default map might be 'jet',
@@ -760,8 +765,8 @@ class BaseCell(AlmostImmutable):
             thres_val = None
 
         axes, cbar = acorr.plot(axes=axes, cax=cax, threshold=thres_val,
-                                vmin=-1.0, vmax=1.0, cmap=cmap, cbar_kw=cbar_kw,
-                                **kwargs)
+                                vmin=-1.0, vmax=1.0, cmap=cmap,
+                                cbar_kw=cbar_kw, **kwargs)
         if peaks:
             self.plot_peaks(axes=axes)
         if ellipse:
@@ -808,8 +813,8 @@ class BaseCell(AlmostImmutable):
             axes = pyplot.gca(aspect='equal')
 
         peaks = self.peaks(project=project, threshold=threshold)
-        h = axes.plot(peaks[:, 0], peaks[:, 1], linestyle='None', marker=marker,
-                      color=color, **kwargs)
+        h = axes.plot(peaks[:, 0], peaks[:, 1], linestyle='None',
+                      marker=marker, color=color, **kwargs)
 
         if gridlines:
             if gridlines_kw is None:
@@ -839,8 +844,8 @@ class BaseCell(AlmostImmutable):
         :axes: Axes instance to add the ellipse to. Passed through to the
                self.ellipse().plot() method.
         :project: if True, an ellipse fitted to the lattice-projected peaks is
-                  plotted (see BaseCell.peaks()). If False, an ellipse fitted to
-                  the unprojected peaks is plotted. Default is True.
+                  plotted (see BaseCell.peaks()). If False, an ellipse fitted
+                  to the unprojected peaks is plotted. Default is True.
         :threshold: lower intensity bound defining the regions in which peaks
                     are found. If None (default), the attribute self.threshold
                     is used.
@@ -862,8 +867,8 @@ class BaseCell(AlmostImmutable):
         Plot the cross-correlogram of the firing rate of another cell and this
         cell
 
-        The correlogram can be added to an existing plot via the optional 'axes'
-        argument.
+        The correlogram can be added to an existing plot via the optional
+        'axes' argument.
 
         :other:another BaseCell instance
         :axes: Axes instance to add the intensity map to. If None (default),
@@ -884,8 +889,8 @@ class BaseCell(AlmostImmutable):
                   to the center peak to the plot, using some (hopefully)
                   sensible plotting defaults. If more control is required, call
                   self.detect_central_peaks() on self.correlogram(other) to get
-                  the peaks, instantiate an Ellipse instance fitted to them, and
-                  add use Ellipse.plot() to add it to the plot.
+                  the peaks, instantiate an Ellipse instance fitted to them,
+                  and add use Ellipse.plot() to add it to the plot.
         :cmap: colormap to use for the plot. All valid matplotlib colormap
                arguments can be used. If None (default), the default colormap
                from rcParams is used (BEWARE: the default map might be 'jet',
@@ -919,8 +924,8 @@ class BaseCell(AlmostImmutable):
 
         return axes, cbar
 
-    def plot_firing_field(self, axes=None, cax=None, threshold=False, cmap=None,
-                          cbar_kw=None, **kwargs):
+    def plot_firing_field(self, axes=None, cax=None, threshold=False,
+                          cmap=None, cbar_kw=None, **kwargs):
         """
         Plot the shape of the firing field
 
@@ -966,8 +971,8 @@ class BaseCell(AlmostImmutable):
 class IdealGridCell(BaseCell):
     """
     Represent an idealized grid cell defined only using the lattice vectors and
-    the firing field covariance matrix. Can for example be used to represent the
-    average cell from a module.
+    the firing field covariance matrix. Can for example be used to represent
+    the average cell from a module.
 
     """
 
@@ -1059,10 +1064,10 @@ class IdealGridCell(BaseCell):
         """
         Return the coordinates of the six inner peaks
 
-        :project: if True, the peaks from the autocorrelogram are projected into
-                  the space of valid lattice vectors, such that each peak is
-                  equal to the sum of its two neighbors. If False, the peaks are
-                  returned without projection. Default is True.
+        :project: if True, the peaks from the autocorrelogram are projected
+                  into the space of valid lattice vectors, such that each peak
+                  is equal to the sum of its two neighbors. If False, the peaks
+                  are returned without projection. Default is True.
         :kwargs: None supported at the moment. Included to absorb 'threshold',
                  which is typically passed by calling functions.
         :returns: numpy array 'peaks' of shape (6, 2), where (peaks[0][0],
@@ -1109,16 +1114,16 @@ class Cell(BaseCell):
         :bins: bin specification defining the bins to use in the firing rate
                map. The simplest formats are a scalar 'nbins' or a tuple
                '(nbins_x, nbins_y)', giving the number of bins of equal widths
-               in each direction. For information about other valid formats, see
-               the documentation for numpy.histogram2d().
+               in each direction. For information about other valid formats,
+               see the documentation for numpy.histogram2d().
         :range_: range specification giving the x and y values of the outermost
                  bin edges. The format is a tuple '((xmin, xmax), (ymin,
                  ymax))'. Samples outside this region will be discarded.
         :threshold: peak threshold. Used to separate peaks in the
                     autocorrelogram of the firing rate of the cell.
         :filter_size: characteristic smoothing width to use when computing
-                      firing rates. Carries the same units as the coordinates in
-                      pos. If None, no smoothing is applied.
+                      firing rates. Carries the same units as the coordinates
+                      in pos. If None, no smoothing is applied.
         :kwargs: none supported at the moment. In the future, support may be
                  added for a keyword 'info' containing information about the
                  transformation applied to get physical positions from raw
@@ -1185,8 +1190,8 @@ class Cell(BaseCell):
         :filter_size: if not None, the firing rate map is smoothed using the
                       IntensityMap2D.smoothed() method, with this parameter as
                       filter size.
-        :smoothing_mode: flag to select between two available smoothing methods.
-                         Possible values:
+        :smoothing_mode: flag to select between two available smoothing
+                         methods. Possible values:
             'pre': the histogram of spikes and the timemap are smoothed
                    individually before they are divided by each other to create
                    the firing rate map.
@@ -1303,16 +1308,16 @@ class CellCollection(AlmostImmutable, Mapping):
         :bins: bin specification defining the bins to use in the firing rate
                maps. The simplest formats are a scalar 'nbins' or a tuple
                '(nbins_x, nbins_y)', giving the number of bins of equal widths
-               in each direction. For information about other valid formats, see
-               the documentation for numpy.histogram2d().
+               in each direction. For information about other valid formats,
+               see the documentation for numpy.histogram2d().
         :range_: range specification giving the x and y values of the outermost
                  bin edges. The format is a tuple '((xmin, xmax), (ymin,
                  ymax))'. Samples outside this region will be discarded.
-        :thresholds: mapping of cell labels to peak thresholds. Used to separate
-                     peaks in the autocorrelogram of the firing rate of the
-                     cell. A good idea may be to use a defaultdict to supply
-                     a default value, and only set explicit thresholds other
-                     than the default when necessary.
+        :thresholds: mapping of cell labels to peak thresholds. Used to
+                     separate peaks in the autocorrelogram of the firing rate
+                     of the cell. A good idea may be to use a defaultdict to
+                     supply a default value, and only set explicit thresholds
+                     other than the default when necessary.
         :kwargs: Passed through to the Position and Cell constructors. Note:
                  'speed_window', 'min_speed' (Position), 'filter_size' (Cell).
 
@@ -1332,8 +1337,8 @@ class CellCollection(AlmostImmutable, Mapping):
         """
         Construct a CellCollection from multiple experimental sessions
 
-        :sessions: mapping of session labels to session mappings, or sequence of
-                   session mappings. Each session mapping should contain at
+        :sessions: mapping of session labels to session mappings, or sequence
+                   of session mappings. Each session mapping should contain at
                    least the following fields:
             't': array-like, giving the times of position samples. Should be
                  close to regularly spaced if the kwarg speed_window is
@@ -1345,17 +1350,17 @@ class CellCollection(AlmostImmutable, Mapping):
         :bins: bin specification defining the bins to use in the firing rate
                maps. The simplest formats are a scalar 'nbins' or a tuple
                '(nbins_x, nbins_y)', giving the number of bins of equal widths
-               in each direction. For information about other valid formats, see
-               the documentation for numpy.histogram2d().
+               in each direction. For information about other valid formats,
+               see the documentation for numpy.histogram2d().
         :range_: range specification giving the x and y values of the outermost
                  bin edges. The format is a tuple '((xmin, xmax), (ymin,
                  ymax))'. Samples outside this region will be discarded.
-        :thresholds: nested mapping that maps session labels to mappings of cell
-                     labels to peak thresholds. If 'sessions' is a sequence,
-                     this should also be a sequence. A good idea may be to use
-                     a defaultdict for each session to supply a default value,
-                     and only set explicit thresholds other than the default
-                     when necessary.
+        :thresholds: nested mapping that maps session labels to mappings of
+                     cell labels to peak thresholds. If 'sessions' is
+                     a sequence, this should also be a sequence. A good idea
+                     may be to use a defaultdict for each session to supply
+                     a default value, and only set explicit thresholds other
+                     than the default when necessary.
         :kwargs: Passed through to the Position and Cell constructors. Note:
                  'speed_window', 'min_speed' (Position), 'filter_size',
                  'threshold' (Cell).
@@ -1427,8 +1432,8 @@ class CellCollection(AlmostImmutable, Mapping):
         for explanation of roll).
 
         :attr: the Cell attribute to compute the mean over. Assumed to be
-               a callable returning the requested values in the form of an array
-               with entries for each peak.
+               a callable returning the requested values in the form of an
+               array with entries for each peak.
         :keys: sequence of cell keys to select cells to compute the mean peak
                locations from. If None, all cells are included.
         :returns: attribute mean
@@ -1496,16 +1501,16 @@ class CellCollection(AlmostImmutable, Mapping):
         inner six peaks of cells in the collection
 
         :mode: string to select how to compute the means. Possible values:
-            'direct': the returned tilt is the mean of the tilts from each cell,
-                      and the returned eccentricity is the mean of the
+            'direct': the returned tilt is the mean of the tilts from each
+                      cell, and the returned eccentricity is the mean of the
                       eccentricities from each cell
             'euclidean': the parameters are mapped into the plane using (ecc,
-                         2 * tilt) as polar coordinates (r, theta), and the mean
-                         of the corresponding cartesian coordinates is computed,
-                         before converting back to the mean eccentricity and
-                         tilt
-        :keys: sequence of cell keys to select cells to compute the mean ellipse
-               parameters from. If None, all cells are included.
+                         2 * tilt) as polar coordinates (r, theta), and the
+                         mean of the corresponding cartesian coordinates is
+                         computed, before converting back to the mean
+                         eccentricity and tilt
+        :keys: sequence of cell keys to select cells to compute the mean
+               ellipse parameters from. If None, all cells are included.
         :returns: mean tilt, mean eccentricity
 
         """
@@ -1549,8 +1554,8 @@ class CellCollection(AlmostImmutable, Mapping):
             None: no normalization is performed
             'max': the maximum value of each rate map will be normalized to 1.0
             'mean': the mean of the rate maps will be normalized to 1.0
-            'std': the standard deviation of the rate maps will be normalized to
-                   1.0
+            'std': the standard deviation of the rate maps will be normalized
+                   to 1.0
         :returns: IntensityMap2D instance containing the stacked firing rate.
 
         """
@@ -1577,12 +1582,13 @@ class CellCollection(AlmostImmutable, Mapping):
         Compute a distance matrix between cells
 
         :keys1, keys2: sequences of cell keys to select cells to compute the
-                       distance matrix between. If None, all cells are included.
-        :returns: DataFrame containing the distance matrix, DataFrame containing
-                  the roll matrix. Both DataFrames are indexed along rows and
-                  columns by the cell keys (keys). The roll matrix is organized
-                  such that rollmatrix[key1][key2] gives the roll to apply to
-                  self[key2] to align it with self[key1] (see
+                       distance matrix between. If None, all cells are
+                       included.
+        :returns: DataFrame containing the distance matrix, DataFrame
+                  containing the roll matrix. Both DataFrames are indexed along
+                  rows and columns by the cell keys (keys). The roll matrix is
+                  organized such that rollmatrix[key1][key2] gives the roll to
+                  apply to self[key2] to align it with self[key1] (see
                   BaseCell.distance() for the full explanation of roll).
 
         """
@@ -1611,8 +1617,8 @@ class CellCollection(AlmostImmutable, Mapping):
         :keys: sequence of cell keys to select cells to compute the feature
                array for. If None, all cells are included.
         :returns: DataFrame containing the feature array. The DataFrame row
-                  indices are the cell keys, while the DataFrame columns contain
-                  the features.
+                  indices are the cell keys, while the DataFrame columns
+                  contain the features.
 
         """
         keys, cells = self.lookup(keys)
@@ -1629,8 +1635,8 @@ class CellCollection(AlmostImmutable, Mapping):
 
     def dbscan(self, eps, min_samples, keys=None, mod_kw=None, **kwargs):
         """
-        Use the DBSCAN clustering algorithm to find modules in the collection of
-        cells
+        Use the DBSCAN clustering algorithm to find modules in the collection
+        of cells
 
         'eps': maximum distance for points to be counted as neighbors
         'min_samples': minimum number of neighbors for a point to be considered
@@ -1666,7 +1672,8 @@ class CellCollection(AlmostImmutable, Mapping):
         features = self.features(keys=keys)
         keys, feature_arr = features.index, features.values
 
-        labels = cluster.mean_shift(feature_arr, cluster_all=False, **kwargs)[1]
+        labels = cluster.mean_shift(feature_arr, cluster_all=False,
+                                    **kwargs)[1]
 
         return self.modules_from_labels(keys, labels, mod_kw=mod_kw)
 
@@ -1698,8 +1705,8 @@ class CellCollection(AlmostImmutable, Mapping):
 
         :keys: sequence of cell keys that have been grouped into modules
         :labels: sequence of labels corresponding to the cells given by 'keys';
-                 cells with the same label are grouped into the same module. The
-                 label -1 denotes outliers.
+                 cells with the same label are grouped into the same module.
+                 The label -1 denotes outliers.
         :mod_kw: dict of keyword arguments to pass to the Module constructor.
         :returns: sequence of module instances, sorted by mean grid scale;
                   Cellcollection instance containing any outliers.
@@ -1736,8 +1743,8 @@ class CellCollection(AlmostImmutable, Mapping):
 
         :axes: Axes instance to add the scales to. If None (default), the
                current Axes instance is used if any, or a new one created.
-        :keys: sequence of cell keys to select cells to plot scales for. If None
-               (default), all cells are included.
+        :keys: sequence of cell keys to select cells to plot scales for. If
+               None (default), all cells are included.
         :marker: a valid matplotlib marker specification. Defaults to 'o'
         :mean: if True, add a line showing the mean of the plotted scales. By
                default, a gray (color == 0.5) thin (linewidth == 0.5) line is
@@ -1796,8 +1803,8 @@ class CellCollection(AlmostImmutable, Mapping):
 
         :axes: Axes instance to add the angles to. If None (default), the
                current Axes instance is used if any, or a new one created.
-        :keys: sequence of cell keys to select cells to plot angles for. If None
-               (default), all cells are included.
+        :keys: sequence of cell keys to select cells to plot angles for. If
+               None (default), all cells are included.
         :marker: a valid matplotlib marker specification. Defaults to 'o'
         :mean: if True, add lines showing the means of the plotted angles. By
                default, a gray (color == 0.5) thin (linewidth == 0.5) line is
@@ -1880,24 +1887,24 @@ class CellCollection(AlmostImmutable, Mapping):
         radius and twice the ellipse tilt as the angle. The tilt is doubled
         because ellipse tilts are degenerate modulo pi radians.
 
-        The ellipse parameters can be added to an existing plot via the optional
-        'axes' argument.
+        The ellipse parameters can be added to an existing plot via the
+        optional 'axes' argument.
 
         :axes: Axes instance to add the ellipse parameters to. If None
-               (default), the current Axes instance is used if any, or a new one
-               created.
+               (default), the current Axes instance is used if any, or a new
+               one created.
         :keys: sequence of cell keys to select cells to plot ellipse parameters
                for. If None (default), all cells are included.
         :marker: a valid matplotlib marker specification. Defaults to 'o'.
-        :mean: select the kind of mean of ellipse parameters to add to the plot.
-               Possible values:
+        :mean: select the kind of mean of ellipse parameters to add to the
+               plot. Possible values:
             :direct: the arithmetic means of the eccentricity and tilt is used
                      for the mean point
             :euclidean: the mean cartesian coordinates of the ellipse parameter
                         points in the plane is used for the mean point
             :None: no mean point is plotted
-               By default, a gray (color == 0.5) marker of type 'o' is used, but
-               this can be overridden using the parameter mean_kw.
+               By default, a gray (color == 0.5) marker of type 'o' is used,
+               but this can be overridden using the parameter mean_kw.
         :mean_kw: dict of keyword arguments to pass to the axes.plot() method
                   used to plot the mean ellipse. Default: None (empty dict)
         :kwargs: additional keyword arguments passed on to the axes.plot()
@@ -1980,10 +1987,10 @@ class Module(CellCollection):
         """
         Initialize the Module instance
 
-        :cells: a mapping of cell labels to Cell instances belonging to a single
-                module.
-        :threshold: peak threshold for the IdealGridCell instance constructed by
-                    the module.
+        :cells: a mapping of cell labels to Cell instances belonging to
+                a single module.
+        :threshold: peak threshold for the IdealGridCell instance constructed
+                    by the module.
         :kwargs: passed through to the CellCollection constructor
 
         """
@@ -2041,15 +2048,15 @@ class Module(CellCollection):
     def simulate_phase_patterns(self, process='binomial', nsims=1000,
                                 keys=None):
         """
-        Simulate a number of point processes in the same window, and of the same
-        intensity, as the phase pattern for this module
+        Simulate a number of point processes in the same window, and of the
+        same intensity, as the phase pattern for this module
 
         :process: string specifying the process to simulate. Possible values:
                   'binomial', 'poisson'
         :nsims: the number of patterns to generate from the process
         :keys: sequence of cell keys to select cells whose phases make up the
-               PointPattern instance that underlies the simulation. If None, all
-               cells are included.
+               PointPattern instance that underlies the simulation. If None,
+               all cells are included.
         :returns: a PointPatternCollection instance containing the simulated
                   processes
 
@@ -2157,8 +2164,8 @@ class Module(CellCollection):
                   'binomial', 'poisson'
         :nsims: the number of patterns to generate from the process
         :keys: sequence of cell keys to select cells whose phases make up the
-               PointPattern instance that underlies the simulation. If None, all
-               cells are included.
+               PointPattern instance that underlies the simulation. If None,
+               all cells are included.
         :edge_correction: flag to select the handling of edges. See the
                           documentation for PointPattern.kfunction() for
                           details.
@@ -2193,8 +2200,8 @@ class Module(CellCollection):
                   'binomial', 'poisson'
         :nsims: the number of patterns to generate from the process
         :keys: sequence of cell keys to select cells whose phases make up the
-               PointPattern instance that underlies the simulation. If None, all
-               cells are included.
+               PointPattern instance that underlies the simulation. If None,
+               all cells are included.
         :edge_correction: flag to select the handling of edges. See the
                           documentation for PointPattern.kfunction() for
                           details.
@@ -2227,8 +2234,8 @@ class Module(CellCollection):
                   'binomial', 'poisson'
         :nsims: the number of patterns to generate from the process
         :keys: sequence of cell keys to select cells whose phases make up the
-               PointPattern instance that underlies the simulation. If None, all
-               cells are included.
+               PointPattern instance that underlies the simulation. If None,
+               all cells are included.
         :edge_correction: flag to select the handling of edges. See the
                           documentation for PointPattern.kfunction() for
                           details.
@@ -2263,8 +2270,8 @@ class Module(CellCollection):
                   'binomial', 'poisson'
         :nsims: the number of patterns to generate from the process
         :keys: sequence of cell keys to select cells whose phases make up the
-               PointPattern instance that underlies the simulation. If None, all
-               cells are included.
+               PointPattern instance that underlies the simulation. If None,
+               all cells are included.
         :edge_correction: flag to select the handling of edges. See the
                           documentation for PointPattern.kfunction() for
                           details.

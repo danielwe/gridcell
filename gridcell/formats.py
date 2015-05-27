@@ -31,8 +31,8 @@ from scipy import io, optimize
 def pos_and_tetrode(posfile, cellfiles, led=0, range_=None, translate=False,
                     rotate=False):
     """
-    Read a collection of .mat-files comprising one file with positional data and
-    one file per identified cell cluster with spike times.
+    Read a collection of .mat-files comprising one file with positional data
+    and one file per identified cell cluster with spike times.
 
     Example: BEN_*.mat
 
@@ -49,11 +49,12 @@ def pos_and_tetrode(posfile, cellfiles, led=0, range_=None, translate=False,
              center position stays put. If None, no scaling is performed.
     :translate: if True, the position coordinates are translated to the center
                 of the environment defined by range_ before scaling, such that
-                the amount of scaling needed to fit the data inside the range is
-                minimized. If range_ is None, this has no effect.
+                the amount of scaling needed to fit the data inside the range
+                is minimized. If range_ is None, this has no effect.
     :rotate: if True, the position coordinates are rotated such that the
              apparent edges of the environment line up with the axes of the
-             coordinate system. This is done before any scaling and translation.
+             coordinate system. This is done before any scaling and
+             translation.
     :returns: dict with the following fields:
         't': array of position sample times
         'x': array of position sample x-values
@@ -62,10 +63,11 @@ def pos_and_tetrode(posfile, cellfiles, led=0, range_=None, translate=False,
             label: spike time array
                    for each recorded cell. The label key is extracted from the
                    cell file name.
-        'info': dict containing information from the computation, in particular:
+        'info': dict containing information from the computation, in
+                particular:
             'tilt': the angle the positions were rotated (if rotate == True)
-            'disp': tuple with the x and y translation distance (if translate ==
-                    True). This value is computed after scaling.
+            'disp': tuple with the x and y translation distance (if translate
+                    == True). This value is computed after scaling.
             'scale_factor': scale_factor
 
     """
@@ -115,12 +117,12 @@ def single_session(recfile, range_=None, translate=False, rotate=False):
              center position stays put. If None, no scaling is performed.
     :translate: if True, the position coordinates are translated to the center
                 of the environment defined by range_ before scaling, such that
-                the amount of scaling needed to fit the data inside the range is
-                minimized. If range_ is None, this has no effect.
+                the amount of scaling needed to fit the data inside the range
+                is minimized. If range_ is None, this has no effect.
     :rotate: if True, the position coordinates are rotated such that the
              apparent edges of the environment line up with the axes of the
-             coordinate system. This is done before any scaling and translation.
-    :returns: dict with the following fields:
+             coordinate system. This is done before any scaling and
+             translation.  :returns: dict with the following fields:
         't': array of position sample times
         'x': array of position sample x-values
         'y': array of position sample y-values
@@ -128,10 +130,11 @@ def single_session(recfile, range_=None, translate=False, rotate=False):
             label: spike time array
                    for each recorded cell. The label key is extracted from the
                    cell file name.
-        'info': dict containing information from the computation, in particular:
+        'info': dict containing information from the computation, in
+                particular:
             'tilt': the angle the positions were rotated (if rotate == True)
-            'disp': tuple with the x and y translation distance (if translate ==
-                    True). This value is computed after scaling.
+            'disp': tuple with the x and y translation distance (if translate
+                    == True). This value is computed after scaling.
             'scale_factor': scale_factor
 
     """
@@ -149,8 +152,8 @@ def single_session(recfile, range_=None, translate=False, rotate=False):
         try:
             spike_ts[_cell_label(key)] = value
         except ValueError:
-            # Not all keys in data represent are associated with spike times. In
-            # this case, _cell_label(key) will raise a ValueError, which is
+            # Not all keys in data represent are associated with spike times.
+            # In this case, _cell_label(key) will raise a ValueError, which is
             # silently ignored since these entries are of no interest anyway
             pass
 
@@ -172,11 +175,12 @@ def multiple_sessions(recfile, range_=None, translate=False, rotate=False):
              center position stays put. If None, no scaling is performed.
     :translate: if True, the position coordinates are translated to the center
                 of the environment defined by range_ before scaling, such that
-                the amount of scaling needed to fit the data inside the range is
-                minimized. If range_ is None, this has no effect.
+                the amount of scaling needed to fit the data inside the range
+                is minimized. If range_ is None, this has no effect.
     :rotate: if True, the position coordinates are rotated such that the
              apparent edges of the environment line up with the axes of the
-             coordinate system. This is done before any scaling and translation.
+             coordinate system. This is done before any scaling and
+             translation.
     :returns: list containing a dict per recording session, with the following
               fields:
         't': array of position sample times
@@ -186,10 +190,11 @@ def multiple_sessions(recfile, range_=None, translate=False, rotate=False):
             label: spike time array
                    for each recorded cell. The index of the cell in the .mat
                    file arrays is used as the label key.
-        'info': dict containing information from the computation, in particular:
+        'info': dict containing information from the computation, in
+                particular:
             'tilt': the angle the positions were rotated (if rotate == True)
-            'disp': tuple with the x and y translation distance (if translate ==
-                    True). This value is computed after scaling.
+            'disp': tuple with the x and y translation distance (if translate
+                    == True). This value is computed after scaling.
             'scale_factor': scale_factor
     """
     data = io.loadmat(recfile, squeeze_me=True,
@@ -232,11 +237,12 @@ def processed(recfile, range_=None, translate=False, rotate=False):
              center position stays put. If None, no scaling is performed.
     :translate: if True, the position coordinates are translated to the center
                 of the environment defined by range_ before scaling, such that
-                the amount of scaling needed to fit the data inside the range is
-                minimized. If range_ is None, this has no effect.
+                the amount of scaling needed to fit the data inside the range
+                is minimized. If range_ is None, this has no effect.
     :rotate: if True, the position coordinates are rotated such that the
              apparent edges of the environment line up with the axes of the
-             coordinate system. This is done before any scaling and translation.
+             coordinate system. This is done before any scaling and
+             translation.
     :returns: list containing a dict per recording session, with the following
               fields:
         't': array of position sample times
@@ -246,10 +252,11 @@ def processed(recfile, range_=None, translate=False, rotate=False):
             label: spike time array
                    for each recorded cell. The 'CellID' parameter from the .mat
                    file is used as the label key.
-        'info': dict containing information from the computation, in particular:
+        'info': dict containing information from the computation, in
+                particular:
             'tilt': the angle the positions were rotated (if rotate == True)
-            'disp': tuple with the x and y translation distance (if translate ==
-                    True). This value is computed after scaling.
+            'disp': tuple with the x and y translation distance (if translate
+                    == True). This value is computed after scaling.
             'scale_factor': scale_factor
 
     """
@@ -288,11 +295,12 @@ def find_sessions(positions, stimes, labels=None, range_=None, translate=False,
              center position stays put. If None, no scaling is performed.
     :translate: if True, the position coordinates are translated to the center
                 of the environment defined by range_ before scaling, such that
-                the amount of scaling needed to fit the data inside the range is
-                minimized. If range_ is None, this has no effect.
+                the amount of scaling needed to fit the data inside the range
+                is minimized. If range_ is None, this has no effect.
     :rotate: if True, the position coordinates are rotated such that the
              apparent edges of the environment line up with the axes of the
-             coordinate system. This is done before any scaling and translation.
+             coordinate system. This is done before any scaling and
+             translation.
     :returns: list containing a dict per recording session, with the following
               fields:
         't': array of position sample times
@@ -300,12 +308,13 @@ def find_sessions(positions, stimes, labels=None, range_=None, translate=False,
         'y': array of position sample y-values
         'spike_ts': dict containing a field
             label: spike time array
-                   for each recorded cell. The element in 'labels' corresponding
-                   to the cell used as the label key.
-        'info': dict containing information from the computation, in particular:
+                   for each recorded cell. The element in 'labels'
+                   corresponding to the cell used as the label key.
+        'info': dict containing information from the computation, in
+                particular:
             'tilt': the angle the positions were rotated (if rotate == True)
-            'disp': tuple with the x and y translation distance (if translate ==
-                    True). This value is computed after scaling.
+            'disp': tuple with the x and y translation distance (if translate
+                    == True). This value is computed after scaling.
             'scale_factor': scale_factor
 
     """
@@ -345,11 +354,12 @@ def global_transform(dataset, range_=None, translate=False, rotate=False):
              center position stays put. If None, no scaling is performed.
     :translate: if True, the position coordinates are translated to the center
                 of the environment defined by range_ before scaling, such that
-                the amount of scaling needed to fit the data inside the range is
-                minimized. If range_ is None, this has no effect.
+                the amount of scaling needed to fit the data inside the range
+                is minimized. If range_ is None, this has no effect.
     :rotate: if True, the position coordinates are rotated such that the
              apparent edges of the environment line up with the axes of the
-             coordinate system. This is done before any scaling and translation.
+             coordinate system. This is done before any scaling and
+             translation.
     :returns: transformed dataset
 
     """
@@ -381,8 +391,8 @@ def _find_equal_indices(li):
     Find the indices of equal elements in a list
 
     :li: list
-    :returns: a list where each element is a list of indices that refer to equal
-              elements in 'li'
+    :returns: a list where each element is a list of indices that refer to
+              equal elements in 'li'
 
     """
     # Make a disposable local copy of the list
@@ -422,17 +432,18 @@ def _transform(x, y, range_=None, translate=False, rotate=False):
              center position stays put. If None, no scaling is performed.
     :translate: if True, the position coordinates are translated to the center
                 of the environment defined by range_ before scaling, such that
-                the amount of scaling needed to fit the data inside the range is
-                minimized. If range_ is None, this has no effect.
+                the amount of scaling needed to fit the data inside the range
+                is minimized. If range_ is None, this has no effect.
     :rotate: if True, the position coordinates are rotated such that the
              apparent edges of the environment line up with the axes of the
-             coordinate system. This is done before any scaling and translation.
-    :returns: transformed x and y arrays, and a dict info containing information
-              from the computation, in particular:
+             coordinate system. This is done before any scaling and
+             translation.
+    :returns: transformed x and y arrays, and a dict info containing
+              information from the computation, in particular:
         'tilt': the angle the positions were rotated (if rotate == True)
         'disp': tuple with the x and y translation distance (if range_ is not
-                None). This value is computed after scaling, such that it refers
-                to the same units as range_.
+                None). This value is computed after scaling, such that it
+                refers to the same units as range_.
         'scale_factor': scaling factor (if range_ is not None)
 
     """
@@ -472,8 +483,8 @@ def _transform(x, y, range_=None, translate=False, rotate=False):
 
 def _square_tilt(x, y):
     """
-    Determine the most likely tilt of the square environment with respect to the
-    position recording axes
+    Determine the most likely tilt of the square environment with respect to
+    the position recording axes
 
     The tilt is the rotation angle that minimizes the area of the bounding box
     around the data.
@@ -513,8 +524,8 @@ def _rotate_pos(x, y, tilt):
 
 def _center(x):
     """
-    Determine the value of the midpoint between the minimum and maximum value in
-    an array
+    Determine the value of the midpoint between the minimum and maximum value
+    in an array
 
     :x: array-like
     :returns: average of minimum and maximum value of x
@@ -539,8 +550,8 @@ def _filename(file_):
 
 def _cell_label(string):
     """
-    Extract numbers from a string identifying a tetrode and cluster, and compose
-    a standardized label from these numbers.
+    Extract numbers from a string identifying a tetrode and cluster, and
+    compose a standardized label from these numbers.
 
     The format of the label is e.g. T12C3, where 12 is the tetrode number and
     3 is the cluster number. The numbers are extracted from 'string', assuming

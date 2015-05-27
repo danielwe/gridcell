@@ -2,8 +2,8 @@
 
 """File: shapes.py
 Module defining objects for geometric shapes, with attributes to retrieve
-parameters characterizing the shapes, and plotting methods to include the shapes
-matplotlib figure.
+parameters characterizing the shapes, and plotting methods to include the
+shapes matplotlib figure.
 
 """
 # Copyright 2015 Daniel Wennberg
@@ -36,14 +36,15 @@ class Ellipse(object):
 
     """
 
-    def __init__(self, agparams=None, canonparams=None, fitpoints=None, f0=1.0):
+    def __init__(self, agparams=None, canonparams=None, fitpoints=None,
+                 f0=1.0):
         """
         Initialize the Ellipse instance
 
         The instance can be initialized using either a set of canonical
-        parameters (center (xc, yc), semi-major axis a, semi-minor axis b, angle
-        tilt), a set of analytic geometry parameters (A, B, C, D, E, F), or
-        a set of points to fit the ellipse to.
+        parameters (center (xc, yc), semi-major axis a, semi-minor axis b,
+        angle tilt), a set of analytic geometry parameters (A, B, C, D, E, F),
+        or a set of points to fit the ellipse to.
 
         :agparams: sequence of analytic geometry parameters:
             A, B, C, D, E, F such that the ellipse is described by
@@ -54,8 +55,8 @@ class Ellipse(object):
         :fitpoints: sequence of coordinates of points to fit the ellipse to:
             (x0, y0), (x1, y1), ...
         :f0: order-of-magnitude estimate of the characteristic length scale of
-             the ellipse. Used to normalize the analytic geometry parameters for
-             increased numerical stability.
+             the ellipse. Used to normalize the analytic geometry parameters
+             for increased numerical stability.
 
         """
         self.f0 = f0
@@ -81,8 +82,8 @@ class Ellipse(object):
             self.A, self.B, self.C, self.D, self.E, self.F = agparams_
 
             # Compute canonical attributes
-            self.center, self.a, self.b, self.tilt = self.ag_to_canon(agparams_,
-                                                                      f0)
+            self.center, self.a, self.b, self.tilt = (
+                self.ag_to_canon(agparams_, f0))
         else:
             raise ValueError("no data provided to initialize Ellipse")
 
@@ -99,8 +100,8 @@ class Ellipse(object):
              A * x ** 2 + 2 * B * x * y + C * y ** 2 + 2 * f0 * (D * x + E * y)
              + f0 ** 2 * F = 0
         :f0: order-of-magnitude estimate of the characteristic length scale of
-             the ellipse. Used to normalize the analytic geometry parameters for
-             increased numerical stability.
+             the ellipse. Used to normalize the analytic geometry parameters
+             for increased numerical stability.
         :returns: canonical ellipse parameters:
             (xc, yc), a, b, tilt
 
@@ -139,8 +140,8 @@ class Ellipse(object):
         :canonparams: sequence of canonical ellipse parameters:
             (xc, yc), a, b, tilt
         :f0: order-of-magnitude estimate of the characteristic length scale of
-             the ellipse. Used to normalize the analytic geometry parameters for
-             increased numerical stability.
+             the ellipse. Used to normalize the analytic geometry parameters
+             for increased numerical stability.
         :returns: analytic geometry parameters:
             [A, B, C, D, E, F] such that the ellipse is described by
              A * x ** 2 + 2 * B * x * y + C * y ** 2 + 2 * f0 * (D * x + E * y)
@@ -171,11 +172,11 @@ class Ellipse(object):
         References:
 
         Kanatani, K., Al-Sharadqah, A., Chernov, N., & Sugaya, Y. (2012).
-        Computer Vision -- ECCV 2012. (A. Fitzgibbon, S. Lazebnik, P. Perona, Y.
-        Sato, & C.  Schmid, Eds.)Lecture Notes in Computer Science (including
-        subseries Lecture Notes in Artificial Intelligence and Lecture Notes in
-        Bioinformatics) (Vol.  7574, pp. 384--397). Berlin, Heidelberg: Springer
-        Berlin Heidelberg.  doi:10.1007/978-3-642-33712-3
+        Computer Vision -- ECCV 2012. (A. Fitzgibbon, S. Lazebnik, P. Perona,
+        Y.  Sato, & C.  Schmid, Eds.)Lecture Notes in Computer Science
+        (including subseries Lecture Notes in Artificial Intelligence and
+        Lecture Notes in Bioinformatics) (Vol.  7574, pp. 384--397). Berlin,
+        Heidelberg: Springer Berlin Heidelberg.  doi:10.1007/978-3-642-33712-3
 
         Masuzaki, T., Sugaya, Y., & Kanatani, K. (2014). High accuracy
         ellipse-specific fitting. In Lecture Notes in Computer Science
@@ -185,8 +186,8 @@ class Ellipse(object):
 
         :fitpoints: list of coordinates to the points to fit the ellipse to.
         :f0: order-of-magnitude estimate of the characteristic length scale of
-             the ellipse. Used to normalize the analytic geometry parameters for
-             increased numerical stability.
+             the ellipse. Used to normalize the analytic geometry parameters
+             for increased numerical stability.
         :returns: analytic geometry parameters:
             array([A, B, C, D, E, F]) such that the ellipse is described by
             A * x ** 2 + 2 * B * x * y + C * y ** 2 + 2 * f0 * (D * x + E * y)
@@ -316,31 +317,33 @@ class Ellipse(object):
                             to the plot. Default is False.
         :linestyle: a valid matplotlib linestyle specification to use for the
                     ellipse edge and [major,minor] axis. Defaults to None, such
-                    that the rcParams decide. This keyword is provided to easily
-                    set the edge and [major,minor] line styles equal, but can be
-                    overridden for each of the cases individually using
-                    'axis_kw' and 'kwargs'.
+                    that the rcParams decide. This keyword is provided to
+                    easily set the edge and [major,minor] line styles equal,
+                    but can be overridden for each of the cases individually
+                    using 'axis_kw' and 'kwargs'.
         :linewidth: the linewidth to use for the ellipse edge and [major,minor]
                     axis. Defaults to None, such that the rcParams decide. This
-                    keyword is provided to easily set the edge and [major,minor]
-                    line styles equal, but can be overridden for each of the
-                    cases individually using 'axis_kw' and 'kwargs'.
+                    keyword is provided to easily set the edge and
+                    [major,minor] line styles equal, but can be overridden for
+                    each of the cases individually using 'axis_kw' and
+                    'kwargs'.
         :color: a valid matplotlib color specification to use for the ellipse
-                and [major,minor] axis. Defaults to None, such that the rcParams
-                decide. This keyword is provided to easily set the edge and
-                [major,minor] line styles equal, but can be overridden for each
-                of the cases individually using 'axis_kw' and 'kwargs'.
-        :fill: if True, plot a filled ellipse. If False (default), only plot the
-               ellipse edge.
+                and [major,minor] axis. Defaults to None, such that the
+                rcParams decide. This keyword is provided to easily set the
+                edge and [major,minor] line styles equal, but can be overridden
+                for each of the cases individually using 'axis_kw' and
+                'kwargs'.
+        :fill: if True, plot a filled ellipse. If False (default), only plot
+               the ellipse edge.
         :axis_kw: dict of keyword arguments to pass to the axes.plot() method
                   used to plot the (semi-)[major,minor] axis. Default: None
                   (empty dict)
-        :kwargs: additional keyword arguments passed on to the patches.Ellipse()
-                 constructor. Note in particular the keywords 'edgecolor',
-                 'facecolor' and 'label'.
+        :kwargs: additional keyword arguments passed on to the
+                 patches.Ellipse() constructor. Note in particular the keywords
+                 'edgecolor', 'facecolor' and 'label'.
         :returns: list containing the plotted objects: one
-                  matplotlib.pathces.Ellipse instance, and a Line2D instance per
-                  plotted axis.
+                  matplotlib.pathces.Ellipse instance, and a Line2D instance
+                  per plotted axis.
 
         """
         if axes is None:
