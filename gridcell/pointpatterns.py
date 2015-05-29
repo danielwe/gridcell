@@ -45,6 +45,18 @@ class Window(geometry.Polygon):
 
     """
 
+    def __reduce__(self):
+        memcache = memoize_method.CACHE_NAME
+        red = list(geometry.Polygon.__reduce__(self))
+        red[2] = {'state': red[2],
+                  memcache: getattr(self, memcache)}
+        return tuple(red)
+
+    def __setstate__(self, state):
+        geometry.Polygon.__setstate__(self, state.pop('state'))
+        for key in state:
+            setattr(self, key, state[key])
+
     @property
     @memoize_method
     def lattice(self):
@@ -192,23 +204,15 @@ class Window(geometry.Polygon):
         return self.intersection(affinity.translate(self, xoff=xoff,
                                                     yoff=yoff))
 
-    @property
     @memoize_method
-    def set_covariance(self):
+    def _set_covariance_interpolator(self):
         """
-        Compute a set covariance interpolator
+        Compute a set covariance interpolator for the window
 
-        The property decorator makes the interpolator directly accessible from
-        the name of this method: one can call w.set_covariance(x, y) on
-        a Window instance 'w' to get its set covariance evaluated at the
-        displacement (x, y). The interpolator instance is cached, so there is
-        no need to store it explicitly.
-
-        :returns: a function that takes two array-like arguments 'x' and 'y'
-                  and returns the interpolated value evaluated at the
-                  displacement vectors (x[i], y[i]), i = 0, ..., N - 1.
-                  Internally, the function wraps a RectangularGridInterpolator
-                  instance.
+        Returns
+        -------
+        RectangularGridInterpolator
+            Interpolator that computes the the set covariance of the window.
 
         """
         xoffs = numpy.linspace(-self.longest_diagonal, self.longest_diagonal,
@@ -219,32 +223,44 @@ class Window(geometry.Polygon):
         for (i, xoff) in enumerate(xoffs):
             for (j, yoff) in enumerate(yoffs):
                 scarray[i, j] = self.translated_intersection(xoff, yoff).area
-        ipl = interpolate.RegularGridInterpolator((xoffs, yoffs), scarray,
-                                                  bounds_error=False,
-                                                  fill_value=0.0)
+        return interpolate.RegularGridInterpolator((xoffs, yoffs), scarray,
+                                                   bounds_error=False,
+                                                   fill_value=0.0)
 
-        def scinterpolator(x, y):
-            xi = numpy.concatenate((x[..., numpy.newaxis],
-                                    y[..., numpy.newaxis]), axis=-1)
-            return ipl(xi)
-
-        return scinterpolator
-
-    @property
-    @memoize_method
-    def isotropised_set_covariance(self):
+    def set_covariance(self, x, y):
         """
-        Compute an isotropised set covariance interpolator
+        Compute the set covariance of the window at given displacements
 
-        The property decorator makes the interpolator directly accessible from
-        the name of this method: one can call w.isotropic_set_covariance(r) on
-        a Window instance 'w' to get its isotropic set covariance evaluated at
-        the radius 'r'. The interpolator instance is cached, so there is no
-        need to store it explicitly.
+        This is a wrapper around self._set_covariance_interpolator, providing
+        a user friendly call signature.
 
-        :returns: interp1d instance that can be called with an array-like
-                  argument 'r' and returns an array of the interpolated values
-                  evaluated at the displacements in r.
+        Parameters
+        ----------
+        x, y : array-like
+            Arrays of the same shape giving x and y values of the displacements
+            at which to evaluate the set covariance.
+
+        Returns
+        -------
+        ndarray
+            Array of the same shape as `x` and `y` containing the set
+            covariance at each displacement.
+
+        """
+        xi = numpy.concatenate((x[..., numpy.newaxis],
+                                y[..., numpy.newaxis]), axis=-1)
+        return self._set_covariance_interpolator()(xi)
+
+    @memoize_method
+    def _isotropised_set_covariance_interpolator(self):
+        """
+        Compute an isotropised set covariance interpolator for the window
+
+        Returns
+        -------
+        interp1d
+            Interpolator that computes the the isotropised set covariance of
+            the window.
 
         """
         rvals = numpy.linspace(0.0, self.longest_diagonal, RSAMPLES)
@@ -270,22 +286,39 @@ class Window(geometry.Polygon):
         return interpolate.interp1d(rvals, iso_set_cov, bounds_error=False,
                                     fill_value=0.0)
 
-    @property
+    def isotropised_set_covariance(self, r):
+        """
+        Compute the isotropised set covariance of the window at given
+        displacements
+
+        This is a wrapper around self._isotropised_set_covariance_interpolator,
+        providing a user friendly call signature.
+
+        Parameters
+        ----------
+        r : array-like
+            Array giving the displacements at which to evaluate the isotropised
+            set covariance.
+
+        Returns
+        -------
+        ndarray
+            Array of the same shape as `r` containing the isotropised set
+            covariance at each displacement.
+
+        """
+        return self._isotropised_set_covariance_interpolator()(r)
+
     @memoize_method
-    def pvdenom(self):
+    def _pvdenom_interpolator(self):
         """
         Compute an interpolator for the denominator of the p-function for the
         adapted intensity estimator based on area
 
-        The property decorator makes the interpolator directly accessible from
-        the name of this method: one can call w.pvdenom(r) on a Window instance
-        'w' to get its area p-function denominator evaluated at the radius 'r'.
-        The interpolator instance is cached, so there is no need to store it
-        explicitly, just call w.pvdenom(r).
-
-        :returns: interp1d instance that can be called with an array-like
-                  argument 'r' and returns an array of the interpolated values
-                  evaluated at the displacements in r.
+        Returns
+        -------
+        interp1d
+            Interpolator that computes the the p-function denominator.
 
         """
         def integrand(t):
@@ -297,6 +330,29 @@ class Window(geometry.Polygon):
             dvals[i] = integrate.quad(integrand, 0.0, rval, limit=QUADLIMIT)[0]
 
         return interpolate.interp1d(rvals, dvals, bounds_error=True)
+
+    def pvdenom(self, r):
+        """
+        Compute the denominator of the p-function for the adapted intensity
+        estimator based on area
+
+        This is a wrapper around self._pvdenom_interpolator, providing a user
+        friendly call signature.
+
+        Parameters
+        ----------
+        r : array-like
+            Array giving the distances at which to evaluate the p-function
+            denominator.
+
+        Returns
+        -------
+        ndarray
+            Array of the same shape as `r` containing the p-function
+            denominator at each distance.
+
+        """
+        return self._pvdenom_interpolator()(r)
 
     def p_V(self, point, r):
         """
@@ -483,7 +539,7 @@ class PointPattern(geometry.MultiPoint):
 
     """
 
-    def __init__(self, points, window=None, pluspoints=None, **kwargs):
+    def __init__(self, points=None, window=None, pluspoints=None, **kwargs):
         """
         Initialize the PointPattern instance
 
@@ -499,14 +555,28 @@ class PointPattern(geometry.MultiPoint):
         :kwargs: additional keyword arguments to the MultiPoint constructor
 
         """
-        # Avoid copying the window unless needed
-        if isinstance(window, Window):
-            self.window = window
-        else:
-            self.window = Window(window)
-
-        self.pluspoints = geometry.MultiPoint(pluspoints)
         geometry.MultiPoint.__init__(self, points, **kwargs)
+
+        # Avoid copying the window unless needed
+        if not isinstance(window, Window):
+            window = Window(window)
+
+        self.window = Window(window)
+        self.pluspoints = geometry.MultiPoint(pluspoints)
+
+    def __reduce__(self):
+        memcache = memoize_method.CACHE_NAME
+        red = list(geometry.MultiPoint.__reduce__(self))
+        red[2] = {'state': red[2],
+                  'window': self.window,
+                  'pluspoints': self.pluspoints,
+                  memcache: getattr(self, memcache)}
+        return tuple(red)
+
+    def __setstate__(self, state):
+        geometry.MultiPoint.__setstate__(self, state.pop('state'))
+        for key in state:
+            setattr(self, key, state[key])
 
     @property
     @memoize_method
@@ -635,7 +705,7 @@ class PointPattern(geometry.MultiPoint):
         return sorted(self.points(mode=mode).difference(point),
                       key=lambda p: point.distance(p))
 
-    def intensity(self, mode='standard'):
+    def intensity(self, mode='standard', r=None):
         """
         Compute an intensity estimate, assuming a stationary point pattern
 
@@ -648,56 +718,45 @@ class PointPattern(geometry.MultiPoint):
             'minus': The standard estimator in a window eroded by the radius r.
             'neighbor': The standard estimator subject to nearest neighbor edge
                         correction.
-        :returns: function taking an array-like with radii at which to evaluate
-                  the estimator, and returning the estimated intensity at each
-                  radius. Note that only the area, perimeter and minus
-                  estimators actually depend on the radius. For the other
-                  modes, the returned function may be called without arguments.
+        :r: array-like, containing distances at which to evaluate the intensity
+            estimator, for modes where this is relevant. For modes where
+            distance is not relevant, `r` may be omitted.
+        :returns: scalar or array-like containing the estimated intensities.
 
         """
         window = self.window
 
-        if mode in ('standard', 'neighbor'):
-            if mode == 'standard':
-                intensity = len(self) / window.area
-            else:
-                intensity = 0.0
-                for p in self:
-                    nn_dist = p.distance(self.difference(p))
-                    if nn_dist <= p.distance(window.boundary):
-                        intensity += 1.0 / window.buffer(-nn_dist).area
-
-            return (lambda r=None: intensity)
-
+        if mode == 'standard':
+            intensity = len(self) / window.area
         elif mode in ('area', 'perimeter'):
             if mode == 'area':
                 pfunc = window.p_V
             else:
                 pfunc = window.p_S
-
-            return (lambda r: sum(pfunc(p, r) for p in self))
-
+            intensity = sum(pfunc(p, r) for p in self)
         elif mode == 'minus':
-            def ilookup(r):
-                try:
-                    r_enum = enumerate(r)
-                except TypeError:
-                    ew = window.buffer(-r)
-                    intensity = len(self.intersection(ew)) / ew.area
-                else:
-                    intensity = numpy.zeros_like(r)
-                    for (i, rval) in r_enum:
-                        ew = window.buffer(-rval)
-                        intensity[i] = len(self.intersection(ew)) / ew.area
-                return intensity
-
-            return ilookup
-
+            try:
+                r_enum = enumerate(r)
+            except TypeError:
+                ew = window.buffer(-r)
+                intensity = len(self.intersection(ew)) / ew.area
+            else:
+                intensity = numpy.zeros_like(r)
+                for (i, rval) in r_enum:
+                    ew = window.buffer(-rval)
+                    intensity[i] = len(self.intersection(ew)) / ew.area
+        elif mode == 'neighbor':
+            intensity = 0.0
+            for p in self:
+                nn_dist = p.distance(self.difference(p))
+                if nn_dist <= p.distance(window.boundary):
+                    intensity += 1.0 / window.buffer(-nn_dist).area
         else:
             raise ValueError("unknown mode: {}".format(mode))
 
-    @memoize_method
-    def squared_intensity(self, mode='standard'):
+        return intensity
+
+    def squared_intensity(self, mode='standard', r=None):
         """
         Compute an estimate of the squared intensity, assuming a stationary
         point pattern
@@ -714,53 +773,42 @@ class PointPattern(geometry.MultiPoint):
             #'corrected': The square of the 'standard' intensity estimate,
             #             multiplied by (n - 1) / n to give an unbiased
             #             estimate of the squared intensity.
-        :returns: function taking an array-like with radii at which to evaluate
-                  the estimator, and returning the estimated squared intensity
-                  at each radius.
+        :r: array-like, containing distances at which to evaluate the squared
+            intensity estimator, for modes where this is relevant. For modes
+            where distance is not relevant, `r` may be omitted.
+        :returns: scalar or array-like containing the estimated squared
+                  intensities.
 
         """
         n = len(self)
 
         #if mode == 'corrected':
         #    if n == 0:
-        #        return (lambda r=None: 0.0)
-        #    else:
-        #        ilookup = self.intensity(mode='standard')
+        #        return 0.0
         #
-        #        def sqilookup(r=None):
-        #            lambda_ = ilookup(r)
-        #            return lambda_ * lambda_ * (n - 1) / n
-        #
-        #        return sqilookup
+        #    lambda_ = self.intensity(mode='standard')
+        #    return lambda_ * lambda_ * (n - 1) / n
         #else:
-        #    ilookup = self.intensity(mode=mode)
-        #
-        #    def sqilookup(r=None):
-        #        lambda_ = ilookup(r)
-        #        return lambda_ * lambda_
-        #
-        #    return sqilookup
+        #    lambda_ = self.intensity(mode=mode, r=r)
+        #    return lambda_ * lambda_
 
         if n == 0:
-            return (lambda r=None: 0.0)
-        else:
-            ilookup = self.intensity(mode=mode)
+            return 0.0
 
-            def sqilookup(r=None):
-                lambda_ = ilookup(r)
-                return lambda_ * lambda_ * (n - 1) / n
-
-            return sqilookup
+        lambda_ = self.intensity(mode=mode, r=r)
+        return lambda_ * lambda_ * (n - 1) / n
 
     def _edge_config(self, edge_correction):
         """
-        Select the set of points to include and the squared intensity estimator
+        Select the set of points to include and the intensity estimator mode
         to use in computations involving a particular edge correction
 
         :edge_correction: flag to select the handling of edges.
-        :returns: MultiPoint instance with the set of points to include in the
-                  computation, and a callable for the relevant squared
-                  intensity estimator, taking the radius 'r' as argument
+        :returns:
+            - mode flag to self.points giving points to include with this edge
+              correction
+            - mode flag to self.squared_intensity giving the intensity
+              estimator to use with this edge correction
 
         """
         if edge_correction == 'finite':
@@ -782,13 +830,53 @@ class PointPattern(geometry.MultiPoint):
             raise ValueError("unknown edge correction: {}"
                              .format(edge_correction))
 
-        return self.points(mode=pmode), self.squared_intensity(mode=imode)
+        return pmode, imode
 
     @memoize_method
-    def kfunction(self, edge_correction='stationary'):
+    def _kappasteps(self, edge_correction='stationary'):
+        """
+        Compute the steps in the numerator of empirical K-function of the point
+        pattern
+
+        :edge_correction: flag to select the handling of edges. See the
+                          documentation for PointPattern.kfunc() for details.
+        :returns:
+            - r: array of r-values where the numerator of the empirical
+              K-function steps up
+            - kappa: array with values of the numerator of the empirical
+              K-function.  Between r[i] and r[i + 1], the numerator has the
+              value kappa[i].
+
+        """
+        window = self.window
+        rmax = window.rmax(edge_correction)
+        pmode, __ = self._edge_config(edge_correction)
+
+        allpoints = self.points(mode=pmode)
+        distances = self.pairwise_distances(self, allpoints)
+        valid = numpy.logical_and(distances < rmax, distances != 0.0)
+
+        index1, = numpy.nonzero(numpy.any(valid, axis=1))
+        index2, = numpy.nonzero(numpy.any(valid, axis=0))
+        mp1 = geometry.MultiPoint([self[i] for i in index1])
+        mp2 = geometry.MultiPoint([allpoints[i] for i in index2])
+        weight_matrix = window.weights(mp1, mp2, edge_correction)
+
+        r = distances[valid]
+        sort_ind = numpy.argsort(r)
+        r = numpy.hstack((0.0, r[sort_ind], rmax))
+
+        weights = weight_matrix[valid[index1, :][:, index2]]
+        weights = numpy.hstack((0.0, weights[sort_ind]))
+        kappa = numpy.append(numpy.cumsum(weights), numpy.nan)
+
+        return r, kappa
+
+    def kfunction(self, r, edge_correction='stationary'):
         """
         Compute the empirical K-function of the point pattern
 
+        :r: array of r-values at which to evaluate the emprical K-function.
         :edge_correction: flag to select the handling of edges. Possible
                           values:
             'finite': Translational edge correction used. Intensity estimated
@@ -806,53 +894,30 @@ class PointPattern(geometry.MultiPoint):
                           area.
             'isotropic': Rotational edge correction used. Intensity estimated
                          by the adapted intensity estimator based on area.
-        :returns: a function that takes an array-like argument 'r' and returns
-                  values of the empirical K-function corresponding to the radii
-                  in 'r'.
+        :returns: array with the values of the empirical K-function
+                  corresponding to the distances in `r`.
 
         """
-        window = self.window
-        rmax = window.rmax(edge_correction)
-        allpoints, squared_intensity = self._edge_config(edge_correction)
+        __, imode = self._edge_config(edge_correction)
+        rsteps, kappa = self._kappasteps(edge_correction=edge_correction)
+        indices = numpy.searchsorted(rsteps, r, side='right') - 1
+        lambda2 = self.squared_intensity(mode=imode, r=r)
+        return sensibly_divide(kappa[indices], lambda2)
 
-        distances = self.pairwise_distances(self, allpoints)
-        valid = numpy.logical_and(distances < rmax, distances != 0.0)
-
-        index1, = numpy.nonzero(numpy.any(valid, axis=1))
-        index2, = numpy.nonzero(numpy.any(valid, axis=0))
-        mp1 = geometry.MultiPoint([self[i] for i in index1])
-        mp2 = geometry.MultiPoint([allpoints[i] for i in index2])
-        weight_matrix = window.weights(mp1, mp2, edge_correction)
-
-        rvals = distances[valid]
-        sort_ind = numpy.argsort(rvals)
-        rvals = numpy.hstack((0.0, rvals[sort_ind], rmax))
-
-        weights = weight_matrix[valid[index1, :][:, index2]]
-        weights = numpy.hstack((0.0, weights[sort_ind]))
-        kvals = numpy.append(numpy.cumsum(weights), numpy.nan)
-
-        def klookup(r):
-            indices = numpy.searchsorted(rvals, r, side='right') - 1
-            lambda2 = squared_intensity(r)
-            return sensibly_divide(kvals[indices], lambda2)
-
-        return klookup
-
-    @memoize_method
-    def lfunction(self, edge_correction='stationary'):
+    def lfunction(self, r, edge_correction='stationary'):
         """
         Compute the empirical L-function of the point pattern
 
+        :r: array of r-values at which to evaluate the emprical L-function.
         :edge_correction: flag to select the handling of edges. See the
-                          documentation for PointPattern.kfunc() for details.
-        :returns: a function that takes an array-like argument 'r' and returns
-                  values of the empirical L-function corresponding to the radii
-                  in 'r'.
+                          documentation for PointPattern.kfunction() for
+                          details.
+        :returns: array with the values of the empirical L-function
+                  corresponding to the distances in `r`.
 
         """
-        kfunction = self.kfunction(edge_correction=edge_correction)
-        return (lambda r: numpy.sqrt(kfunction(r) / numpy.pi))
+        return numpy.sqrt(self.kfunction(r, edge_correction=edge_correction) /
+                          numpy.pi)
 
     def plot_kfunction(self, axes=None, edge_correction='stationary',
                        linewidth=2.0, csr=False, csr_kw=None, **kwargs):
@@ -888,7 +953,7 @@ class PointPattern(geometry.MultiPoint):
 
         rmax = self.window.rmax(edge_correction)
         rvals = numpy.linspace(0.0, rmax, 3 * RSAMPLES)
-        kvals = self.kfunction(edge_correction=edge_correction)(rvals)
+        kvals = self.kfunction(rvals, edge_correction=edge_correction)
 
         lines = axes.plot(rvals, kvals, linewidth=linewidth, **kwargs)
 
@@ -935,7 +1000,7 @@ class PointPattern(geometry.MultiPoint):
 
         rmax = self.window.rmax(edge_correction)
         rvals = numpy.linspace(0.0, rmax, 3 * RSAMPLES)
-        lvals = self.lfunction(edge_correction=edge_correction)(rvals)
+        lvals = self.lfunction(rvals, edge_correction=edge_correction)
 
         lines = axes.plot(rvals, lvals, linewidth=linewidth, **kwargs)
 
@@ -1115,7 +1180,8 @@ class PointPatternCollection(AlmostImmutable):
         coming from each of the patterns
 
         """
-        return [len(pp) / self.npoints for pp in self.patterns]
+        npoints = self.npoints
+        return [len(pp) / npoints for pp in self.patterns]
 
     @property
     @memoize_method
@@ -1125,7 +1191,8 @@ class PointPatternCollection(AlmostImmutable):
         from to the window of each of the patterns
 
         """
-        return [pp.window.area / self.total_area for pp in self.patterns]
+        total_area = self.total_area
+        return [pp.window.area / total_area for pp in self.patterns]
 
     @memoize_method
     def rmax(self, edge_correction):
@@ -1136,17 +1203,18 @@ class PointPatternCollection(AlmostImmutable):
         """
         return min(pp.window.rmax(edge_correction) for pp in self.patterns)
 
-    @memoize_method
-    def aggregate_intensity(self, mode='standard'):
+    def aggregate_intensity(self, mode='standard', r=None):
         """
         Compute the aggregate of the intensity estimates of all patterns in the
         collection
 
         :mode: flag to select the kind of estimator to compute. For details,
                see PointPattern.intensity().
-        :returns: function taking an array-like with radii at which to evaluate
-                  the estimator, and returning the estimated aggregate
-                  intensity at each radius.
+        :r: array-like, containing distances at which to evaluate the aggregate
+            intensity estimator, for modes where this is relevant. For modes
+            where distance is not relevant, `r` may be omitted.
+        :returns: scalar or array-like containing the estimated aggregate
+                  intensities.
 
         """
         implemented_modes = ('standard',)
@@ -1156,21 +1224,19 @@ class PointPatternCollection(AlmostImmutable):
                                       .format(implemented_modes))
 
         aweights = self.aweights
-        ilookups = [pp.intensity(mode=mode) for pp in self.patterns]
+        intensities = [pp.intensity(mode=mode, r=r) for pp in self.patterns]
 
-        return (
-            lambda r=None: sum(aw * ilookup(r)
-                               for (aw, ilookup) in zip(aweights, ilookups)))
+        return sum(aw * intensity
+                   for (aw, intensity) in zip(aweights, intensities))
 
-    @memoize_method
-    def aggregate_squared_intensity(self, mode='standard'):
+    def aggregate_squared_intensity(self, mode='standard', r=None):
         """
         Compute the aggregate of the squared intensity estimates of all
         patterns in the collection
 
-        The estimate is found by squaring an estimate of the intensity, and
-        multiplying with (n - 1) / n, where n is the number of points in the
-        pattern, to remove statistical bias due to the squaring.
+        The estimate is found by squaring an estimate of the aggregate
+        intensity, and multiplying with (n - 1) / n, where n is the number of
+        points in the pattern, to remove statistical bias due to the squaring.
 
         :mode: flag to select the kind of estimator to compute. If any of the
                values listed in the documentation for PointPattern.intensity is
@@ -1180,162 +1246,166 @@ class PointPatternCollection(AlmostImmutable):
             #'corrected': The square of the 'standard' aggregate intensity
             #             estimate, multiplied by (n - 1) / n to give an
             #             unbiased estimate of the squared aggregate intensity.
-        :returns: function taking an array-like with radii at which to evaluate
-                  the estimator, and returning the estimated squared intensity
-                  at each radius.
+        :r: array-like, containing distances at which to evaluate the
+            aggregate squared intensity estimator, for modes where this is
+            relevant. For modes where distance is not relevant, `r` may be
+            omitted.
+        :returns: scalar or array-like containing the estimated aggregate
+                  squared intensities.
 
         """
         n = self.npoints
 
         #if mode == 'corrected':
         #    if n == 0:
-        #        return (lambda r=None: 0.0)
-        #    else:
-        #        agg_ilookup = self.aggregate_intensity(mode='standard')
+        #        return 0.0
         #
-        #        def agg_sqilookup(r=None):
-        #            lambda_ = agg_ilookup(r)
-        #            return lambda_ * lambda_ * (n - 1) / n
-        #
-        #        return agg_sqilookup
+        #    lambda_ = self.aggregate_intensity(mode='standard')
+        #    return lambda_ * lambda_ * (n - 1) / n
         #else:
-        #    agg_ilookup = self.aggregate_intensity(mode=mode)
-        #
-        #    def agg_sqilookup(r=None):
-        #        lambda_ = agg_ilookup(r)
-        #        return lambda_ * lambda_
-        #
-        #    return agg_sqilookup
+        #    lambda_ = self.aggregate_intensity(mode=mode, r=r)
+        #    return lambda_ * lambda_
 
         if n == 0:
-            return (lambda r=None: 0.0)
-        else:
-            agg_ilookup = self.intensity(mode=mode)
+            return 0.0
 
-            def agg_sqilookup(r=None):
-                lambda_ = agg_ilookup(r)
-                return lambda_ * lambda_ * (n - 1) / n
+        lambda_ = self.aggregate_intensity(mode=mode, r=r)
+        return lambda_ * lambda_ * (n - 1) / n
 
-            return agg_sqilookup
-
-    @memoize_method
-    def aggregate_kfunction(self, edge_correction='stationary'):
+    def aggregate_kfunction(self, r, edge_correction='stationary'):
         """
         Compute the aggregate of the empirical K-function over all patterns in
         the collection
 
+        :r: array of r-values at which to evaluate the emprical aggregate
+            K-function.
         :edge_correction: flag to select the handling of edges. See
                           PointPattern.kfunction() for details.
-        :returns: a function that takes an array-like argument 'r' and returns
-                  values of the aggregate empirical K-function corresponding to
-                  the radii in 'r'.
+        :returns: array with the values of the empirical aggregate K-function
+                  corresponding to the distances in `r`.
 
         """
         nweights = self.nweights
-        klookups = [pp.kfunction(edge_correction=edge_correction)
-                    for pp in self.patterns]
+        kvalues = [pp.kfunction(r, edge_correction=edge_correction)
+                   for pp in self.patterns]
 
-        return (lambda r: sum(nw * klookup(r)
-                              for (nw, klookup) in zip(nweights, klookups)))
+        return sum(nw * kv for (nw, kv) in zip(nweights, kvalues))
 
-    @memoize_method
-    def aggregate_lfunction(self, edge_correction='stationary'):
+    def aggregate_lfunction(self, r, edge_correction='stationary'):
         """
         Compute the aggregate of the empirical L-function over all patterns in
         the collection
 
+        :r: array of r-values at which to evaluate the emprical aggregate
+            L-function.
         :edge_correction: flag to select the handling of edges. See
                           PointPattern.kfunction() for details.
-        :returns: a function that takes an array-like argument 'r' and returns
-                  values of the aggregate empirical L-function corresponding to
-                  the radii in 'r'.
+        :returns: array with the values of the empirical aggregate L-function
+                  corresponding to the distances in `r`.
 
         """
-        agg_kfunction = self.aggregate_kfunction(
-            edge_correction=edge_correction)
-        return (lambda r: numpy.sqrt(agg_kfunction / numpy.pi))
+        return numpy.sqrt(self.aggregate_kfunction(
+            r, edge_correction=edge_correction) / numpy.pi)
 
-    @memoize_method
-    def kcritical(self, alpha, edge_correction='stationary'):
+    def kframe(self, r, edge_correction='stationary'):
+        """
+        Compute a DataFrame containing values of the empirical K-functions of
+        the patterns
+
+        :r: array of r-values at which to evaluate the empirical K-functions.
+        :edge_correction: flag to select the handling of edges. See the
+                          documentation for PointPattern.kfunction() for
+                          details.
+        :returns: DataFrame where each row contains values of the empirical
+                  K-function of one pattern, evaluated at the distances in `r`.
+
+        """
+        return pandas.DataFrame(
+            [pp.kfunction(r, edge_correction=edge_correction)
+             for pp in self.patterns])
+
+    def kcritical(self, alpha, r, edge_correction='stationary'):
         """
         Compute critical values of the empirical K-functions of the patterns
 
         :alpha: percentile defining the critical values
+        :r: array of r-values at which to evaluate the critical values of the
+            empirical K-functions.
         :edge_correction: flag to select the handling of edges. See the
                           documentation for PointPattern.kfunction() for
                           details.
-        :returns: a function that takes an array-like argument 'r' and returns
-                  critical values of the empirical K-functions at the radii in
-                  'r'.
+        :returns: array with the critical values of the empirical K-functions
+                  at the distances in `r`.
 
         """
-        kfunclist = [p.kfunction(edge_correction=edge_correction)
-                     for p in self.patterns]
+        kvals = self.kframe(r, edge_correction=edge_correction)
+        return kvals.quantile(q=alpha, axis=0)
 
-        def kc(r):
-            kvals = pandas.DataFrame([kfunc(r) for kfunc in kfunclist])
-            return kvals.quantile(q=alpha, axis=0)
-
-        return kc
-
-    @memoize_method
-    def kmean(self, edge_correction='stationary'):
+    def kmean(self, r, edge_correction='stationary'):
         """
         Compute the mean of the empirical K-functions of the patterns
 
+        :r: array of r-values at which to evaluate the critical values of the
+            empirical K-functions.
         :edge_correction: flag to select the handling of edges. See the
                           documentation for PointPattern.kfunction() for
                           details.
-        :returns: a function that takes an array-like argument 'r' and returns
-                  the mean of the empirical K-functions at the radii in 'r'.
+        :returns: array with the mean of the empirical K-functions at the
+                  distances in `r`.
 
         """
-        kfunclist = [p.kfunction(edge_correction=edge_correction)
-                     for p in self.patterns]
+        kvals = self.kframe(r, edge_correction=edge_correction)
+        return kvals.mean(axis=0, skipna=True)
 
-        def km(r):
-            kvals = pandas.DataFrame([kfunc(r) for kfunc in kfunclist])
-            return kvals.mean(axis=0, skipna=True)
+    def lframe(self, r, edge_correction='stationary'):
+        """
+        Compute a DataFrame containing values of the empirical L-functions of
+        the patterns
 
-        return km
+        :r: array of r-values at which to evaluate the empirical L-functions.
+        :edge_correction: flag to select the handling of edges. See the
+                          documentation for PointPattern.kfunction() for
+                          details.
+        :returns: DataFrame where each row contains values of the empirical
+                  L-function of one pattern, evaluated at the distances in `r`.
 
-    @memoize_method
-    def lcritical(self, alpha, edge_correction='stationary', tail='lower'):
+        """
+        return pandas.DataFrame(
+            [pp.lfunction(r, edge_correction=edge_correction)
+             for pp in self.patterns])
+
+    def lcritical(self, alpha, r, edge_correction='stationary'):
         """
         Compute critical values of the empirical L-functions of the patterns
 
         :alpha: percentile defining the critical values
+        :r: array of r-values at which to evaluate the critical values of the
+            empirical L-functions.
         :edge_correction: flag to select the handling of edges. See the
                           documentation for PointPattern.kfunction() for
                           details.
-        :returns: a function that takes an array-like argument 'r' and returns
-                  critical values of the empirical L-functions at the radii in
-                  'r'.
+        :returns: array with the critical values of the empirical L-functions
+                  at the distances in `r`.
 
         """
-        kc = self.kcritical(alpha, edge_correction=edge_correction)
-        return (lambda r: numpy.sqrt(kc(r) / numpy.pi))
+        lvals = self.lframe(r, edge_correction=edge_correction)
+        return lvals.quantile(q=alpha, axis=0)
 
-    @memoize_method
-    def lmean(self, edge_correction='stationary'):
+    def lmean(self, r, edge_correction='stationary'):
         """
         Compute the mean of the empirical L-functions of the patterns
 
+        :r: array of r-values at which to evaluate the critical values of the
+            empirical L-functions.
         :edge_correction: flag to select the handling of edges. See the
                           documentation for PointPattern.kfunction() for
                           details.
-        :returns: a function that takes an array-like argument 'r' and returns
-                  the mean of the empirical L-functions at the radii in 'r'.
+        :returns: array with the mean of the empirical L-functions at the
+                  distances in `r`.
 
         """
-        lfunclist = [p.lfunction(edge_correction=edge_correction)
-                     for p in self.patterns]
-
-        def lm(r):
-            lvals = pandas.DataFrame([lfunc(r) for lfunc in lfunclist])
-            return lvals.mean(axis=0, skipna=True)
-
-        return lm
+        lvals = self.lframe(r, edge_correction=edge_correction)
+        return lvals.mean(axis=0, skipna=True)
 
     def plot_kenvelope(self, axes=None, edge_correction='stationary',
                        low=0.025, high=0.975, alpha=0.25, **kwargs):
@@ -1363,9 +1433,9 @@ class PointPatternCollection(AlmostImmutable):
             axes = pyplot.gca()
 
         rvals = numpy.linspace(0.0, self.rmax(edge_correction), 3 * RSAMPLES)
-        kvals_low = self.kcritical(low, edge_correction=edge_correction)(rvals)
-        kvals_high = self.kcritical(high,
-                                    edge_correction=edge_correction)(rvals)
+        kvals_low = self.kcritical(low, rvals, edge_correction=edge_correction)
+        kvals_high = self.kcritical(high, rvals,
+                                    edge_correction=edge_correction)
 
         h = axes.fill_between(rvals, kvals_low, kvals_high, alpha=alpha,
                               **kwargs)
@@ -1393,7 +1463,7 @@ class PointPatternCollection(AlmostImmutable):
             axes = pyplot.gca()
 
         rvals = numpy.linspace(0.0, self.rmax(edge_correction), 3 * RSAMPLES)
-        kmean = self.kmean(edge_correction=edge_correction)(rvals)
+        kmean = self.kmean(rvals, edge_correction=edge_correction)
 
         h = axes.plot(rvals, kmean, **kwargs)
         return h
@@ -1424,9 +1494,9 @@ class PointPatternCollection(AlmostImmutable):
             axes = pyplot.gca()
 
         rvals = numpy.linspace(0.0, self.rmax(edge_correction), 3 * RSAMPLES)
-        lvals_low = self.lcritical(low, edge_correction=edge_correction)(rvals)
-        lvals_high = self.lcritical(high,
-                                    edge_correction=edge_correction)(rvals)
+        lvals_low = self.lcritical(low, rvals, edge_correction=edge_correction)
+        lvals_high = self.lcritical(high, rvals,
+                                    edge_correction=edge_correction)
 
         h = axes.fill_between(rvals, lvals_low, lvals_high, alpha=alpha,
                               **kwargs)
@@ -1454,7 +1524,7 @@ class PointPatternCollection(AlmostImmutable):
             axes = pyplot.gca()
 
         rvals = numpy.linspace(0.0, self.rmax(edge_correction), 3 * RSAMPLES)
-        lmean = self.lmean(edge_correction=edge_correction)(rvals)
+        lmean = self.lmean(rvals, edge_correction=edge_correction)
 
         h = axes.plot(rvals, lmean, **kwargs)
         return h
@@ -1496,7 +1566,7 @@ class PointPatternCollection(AlmostImmutable):
         rmax = self.window.rmax(edge_correction)
         rvals = numpy.linspace(0.0, rmax, 3 * RSAMPLES)
         kvals = self.aggregate_kfunction(
-            edge_correction=edge_correction)(rvals)
+            rvals, edge_correction=edge_correction)
 
         lines = axes.plot(rvals, kvals, linewidth=linewidth, **kwargs)
 
@@ -1546,7 +1616,7 @@ class PointPatternCollection(AlmostImmutable):
         rmax = self.window.rmax(edge_correction)
         rvals = numpy.linspace(0.0, rmax, 3 * RSAMPLES)
         lvals = self.aggregate_lfunction(
-            edge_correction=edge_correction)(rvals)
+            rvals, edge_correction=edge_correction)
 
         lines = axes.plot(rvals, lvals, linewidth=linewidth, **kwargs)
 

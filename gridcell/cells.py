@@ -2063,8 +2063,8 @@ class Module(CellCollection):
         """
         phase_pattern = self.phase_pattern(keys=keys)
         window = phase_pattern.window
-        intensity = phase_pattern.intensity()
-        return PointPatternCollection.from_simulation(window, intensity(),
+        intensity = phase_pattern.intensity(mode='standard')
+        return PointPatternCollection.from_simulation(window, intensity,
                                                       process=process,
                                                       nsims=nsims)
 

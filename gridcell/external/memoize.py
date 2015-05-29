@@ -166,6 +166,8 @@ class memoize_method(object):
     # OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
     # USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+    CACHE_NAME = '_memoize_method_cache'
+
     def __init__(self, f):
         self._f = f
         update_wrapper(self, f)
@@ -181,9 +183,10 @@ class memoize_method(object):
         obj = args[0]
 
         try:
-            cache = obj._memoize_method_cache
+            cache = getattr(obj, self.CACHE_NAME)
         except AttributeError:
-            cache = obj._memoize_method_cache = {}
+            cache = {}
+            setattr(obj, self.CACHE_NAME, cache)
 
         try:
             key = (f.__name__, args[1:], frozenset(kwargs.items()))
@@ -194,8 +197,8 @@ class memoize_method(object):
             res = f(*args, **kwargs)
         return res
 
-    @staticmethod
-    def clear_cache(obj):
+    @classmethod
+    def clear_cache(cls, obj):
         """
         Clear the memoizer's cache on an object
 
@@ -219,7 +222,7 @@ class memoize_method(object):
 
         """
         try:
-            cache = obj._memoize_method_cache
+            cache = getattr(obj, cls.CACHE_NAME)
         except AttributeError:
             pass
         else:
