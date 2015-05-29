@@ -168,24 +168,13 @@ class memoize_method(object):
 
     def __init__(self, f):
         self._f = f
+        update_wrapper(self, f)
 
     def __get__(self, obj, otype=None):
         f = self._f
         if obj is None:
             return f
-
-        try:
-            methods = obj._memoize_method_instance_methods
-        except AttributeError:
-            methods = obj._memoize_method_instance_methods = {}
-
-        try:
-            obj_f = methods[f]
-        except KeyError:
-            obj_f = partial(self, obj)
-            update_wrapper(obj_f, f)
-            methods[f] = obj_f
-        return obj_f
+        return partial(self, obj)
 
     def __call__(self, *args, **kwargs):
         f = self._f
@@ -197,7 +186,7 @@ class memoize_method(object):
             cache = obj._memoize_method_cache = {}
 
         try:
-            key = (f, args[1:], frozenset(kwargs.items()))
+            key = (f.__name__, args[1:], frozenset(kwargs.items()))
             res = cache[key]
         except KeyError:
             cache[key] = res = f(*args, **kwargs)
