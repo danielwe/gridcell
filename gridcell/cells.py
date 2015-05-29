@@ -1281,16 +1281,16 @@ class CellCollection(AlmostImmutable, Mapping):
         :kwargs: none supported at the moment
 
         """
-        self.cells = cells
+        self._cells = cells
 
     def __getitem__(self, key):
-        return self.cells.__getitem__(key)
+        return self._cells.__getitem__(key)
 
     def __iter__(self):
-        return self.cells.__iter__()
+        return self._cells.__iter__()
 
     def __len__(self):
-        return self.cells.__len__()
+        return self._cells.__len__()
 
     @classmethod
     def from_session(cls, session, bins, range_, thresholds, **kwargs):
