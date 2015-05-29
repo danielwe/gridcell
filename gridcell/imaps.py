@@ -1173,7 +1173,7 @@ class IntensityMap(AlmostImmutable):
 
         In case anyone is wondering: the reason this method is not memoized is
         that the argument 'mask' usually takes a numpy array, which is not
-        hashable. However, the underlying fit_ndgaussian function is memoized.
+        hashable.
 
         :mask: boolean array of the same shape as self.data, used to mask bins
                from contributing to the fit. Only the values in
