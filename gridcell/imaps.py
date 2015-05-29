@@ -1279,7 +1279,8 @@ class IntensityMap2D(IntensityMap):
 
     @memoize_method
     def blobs(self, min_sigma=None, max_sigma=None, num_sigma=25,
-              threshold=None, overlap=0.5, log_scale=True):
+              threshold=None, overlap=0.5, log_scale=True,
+              ignore_missing=False):
         """
         Detect blobs in the IntensityMap2D instance
 
@@ -1319,7 +1320,7 @@ class IntensityMap2D(IntensityMap):
         :threshold: lower bound for scale-space maxima (that is, the minimum
                     height of detected peaks in the arrays created by passing
                     the intensity array through a Gaussian-Laplace filter). If
-                    None (default), the value self.data.min() + (2 / 3)
+                    None (default), the value self.data.min() + (1 / 3)
                     * self.data.ptp() will be used.
         :overlap: maximum fraction of overlap of two detected blobs.
                   If any two blobs overlap by a greater fraction than this, the
@@ -1331,6 +1332,14 @@ class IntensityMap2D(IntensityMap):
                     sizes. If False, the intermediate sigmas are chosen with
                     regular spacing on a linear scale, and the errors will be
                     approximately constant. Default is True.
+        :ignore_missing: by default, blob detection fails for intensity maps
+                         with missing values. When this parameter is set to
+                         True, however, this limitation is overcome by applying
+                         a normalized smoothing filter before blob detection.
+                         The smoothing filter is just wide enough to fill one
+                         row of missing values while barely affecting the other
+                         intensities, and will be applied repeatedly until all
+                         missing values have been replaced.
         :returns: an array with a row [x, y, s] for each detected blob, where
                   x and y are the coordinates of the blob center and s is the
                   sigma (standard deviation) of the Gaussian kernel that
@@ -1346,10 +1355,23 @@ class IntensityMap2D(IntensityMap):
                              "Gaussian blob detection"
                              .format(self.__class__.__name__,
                                      self.bset.__class__.__name__))
-        binwidth = numpy.mean(self.bset.binwidths)
 
         data = self.data
+        if ignore_missing:
+            size = 0.125 * numpy.amax(self.bset.binwidths)
+            filled = self
+            while numpy.isnan(data).any():
+                filled = filled.smoothed(size, filter_='gaussian',
+                                         normalized=True)
+                data = filled.data
+        elif numpy.isnan(data).any():
+            raise ValueError("cannot detect blobs in IntensityMap2D instances "
+                             "with missing data unless ignore_missing == "
+                             "True.")
+
         #data = exposure.equalize_hist(data)  # Improves detection
+
+        binwidth = numpy.mean(self.bset.binwidths)
 
         if min_sigma is None:
             min_sigma = 1
@@ -1364,7 +1386,7 @@ class IntensityMap2D(IntensityMap):
         else:
             max_sigma /= binwidth
         if threshold is None:
-            threshold = data.min() + (2 / 3) * data.ptp()
+            threshold = data.min() + (1.0 / 3.0) * data.ptp()
 
         blob_indices = feature.blob_log(data, min_sigma=min_sigma,
                                         max_sigma=max_sigma,
