@@ -1053,7 +1053,7 @@ class IdealGridCell(BaseCell):
             firing_rate += gaussian(xypoints, mean=peak, cov=firing_field)
 
         # Normalize to a peak rate of 1 Hz, mostly for aesthetics
-        firing_rate *= 1.0 / numpy.max(firing_rate)
+        firing_rate *= 1.0 / numpy.amax(firing_rate)
 
         # Reshape to the shape of xcm and ycm
         firing_rate = firing_rate.reshape(xcm.shape)
