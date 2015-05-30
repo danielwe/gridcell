@@ -176,7 +176,8 @@ def sensibly_divide(num, denom, masked=False):
         denom_bc[match] = numpy.nan
 
         if isinstance(denom, numpy.ma.MaskedArray):
-            __, mask_bc = numpy.broadcast_arrays(num, denom.mask)
+            __, mask_bc = numpy.broadcast_arrays(num,
+                                                 numpy.ma.getmaskarray(denom))
             denom = numpy.ma.masked_where(mask_bc, denom_bc)
         else:
             denom = denom_bc

@@ -23,6 +23,7 @@ peak detection etc.
 from __future__ import (absolute_import, division, print_function,
                         unicode_literals)
 import numpy
+from numpy.ma import MaskedArray
 from scipy import signal, fftpack, special
 from scipy.ndimage import filters, measurements
 from skimage import feature  # , exposure
@@ -168,6 +169,9 @@ class BinnedSet(AlmostImmutable):
                  all(numpy.allclose(se, oe)
                      for (se, oe) in zip(sedges, oedges)))
         return equal
+
+    def __ne__(self, other):
+        return not self.__eq__(other)
 
     def __add__(self, vector):
         """
@@ -611,310 +615,50 @@ class IntensityMap(AlmostImmutable):
     for convolving, correlating, smoothing, computing Fourier transforms, peak
     detection etc.
 
+    Parameters
+    ----------
+    data : array-like
+        A map of scalar intensities. Nan-valued and/or masked elements (using
+        the `numpy.ma` module) may be used to represent missing data. Note that
+        while several `IntensityMap` methods are explicitly designed to handle
+        missing values (e.g. `smoothing`, `convolve` and `correlate`, when
+        `normalized == True`), other methods are not designed with this in mind
+        (e.g. `fft`).  In the latter case, missing values will be represented
+        as nans in an unmasked array and handled by floating-point arithmetic.
+    bset : BinnedSet or sequence
+        A `BinnedSet` instance, or a valid argument list to the `BinnedSet`
+        constructor, defining the spatial bins where the `IntensityMap`
+        instance takes values. The ordering of axes in `bset` and `data` should
+        correspond, such that `data[i0, i1, ..., ik_1]` gives the intensity in
+        the bin defined by
+        ```
+        (bset.edges[0][i0], bset.edges[0][i0 + 1],
+         bset.edges[1][i1], bset.edges[1][i1 + 1],
+         ...,
+         bset[k-1][ik_1], bset[k-1][ik_1 + 1])
+        ```
+    **kwargs : dict, optional
+        Any other keyword arguments are passed to the `MaskedArray` constructor
+        along with `numpy.ma.masked_where(numpy.isnan(data), data)`.
+
     """
 
-    def __init__(self, data, *args):
-        """
-        Initialize an IntensityMap instance
+    def __init__(self, data, bset, **kwargs):
+        data = numpy.ma.masked_where(numpy.isnan(data), data)
+        self.data = MaskedArray(data, **kwargs)
 
-        :data: array-like map containing a scalar intensity for each bin in
-               bset. Nan-valued and/or masked elements (using the numpy.ma
-               module) may be used to represent missing data. Note that while
-               several methods are explicitly designed to handle missing values
-               (e.g. smoothing, convolve and correlate, when normalized ==
-               True), other methods are not designed with this in mind (e.g.
-               fft). In the latter case, missing values will be represented as
-               nans in an unmasked array and handled by floating-point
-               arithmetic.  The ordering of axes in the array should correspond
-               to that in the underlying BinnedSet instance, such that data[i0,
-               i1, ..., ik_1] gives the intensity in the cell defined by
-               (bset.edges[0][i0], bset.edges[0][i0 + 1],
-                bset.edges[1][i1], bset.edges[1][i1 + 1],
-                ...,
-                bset[k-1][ik_1], bset[k-1][ik_1 + 1])
-        :args: if the first element is a BinnedSet instance, it will be used to
-               give the bins in which data takes values. Otherwise, an attempt
-               is made to initialize a new BinnedSet instance with *args.
-
-        """
-        self.data = numpy.ma.filled(data, fill_value=numpy.nan)
-
-        potential_bset = args[0]
-        if isinstance(potential_bset, BinnedSet):
-            self.bset = potential_bset
-        else:
-            self.bset = BinnedSet(*args)
+        if not isinstance(bset, BinnedSet):
+            bset = BinnedSet(*bset)
 
         # Check that data and bset are compatible
-        shape, edges = self.data.shape, self.bset.edges
+        shape, edges = self.shape, bset.edges
         dims_equal = (len(shape) == len(edges))
         size_equal = (s == e.size - 1 for (s, e) in zip(shape, edges))
         if not (dims_equal and all(size_equal)):
-            raise ValueError("shapes of 'data' and 'bset.edges' are not "
-                             "compatible")
+            raise ValueError("`bset` shape not compatible with this {} "
+                             "instance".format(self.__class__.__name__))
 
-    def __eq__(self, other):
-        """
-        Define equality of two IntensityMap instances as the approximate
-        equality of the intensity arrays, along with equality of the underlying
-        BinnedSet instances (according to BinnedSet.__eq__())
-
-        The precise definition of approximately equal is left to
-        numpy.allclose()
-
-        :other: another IntensityMap instance
-        :returns: True if equal, otherwise False
-
-        """
-        equal = ((self.bset == other.bset) and
-                 numpy.ma.allclose(self.masked_data, other.masked_data))
-        return equal
-
-    @memoize_method
-    def __add__(self, other):
-        """
-        Define addition of IntensityMap instances defined over equal-comparing
-        BinnedSet instances, and of IntensityMap instances with scalars
-
-        :other: another IntensityMap instance, or a scalar
-        :returns: new, summed IntensityMap instance
-
-        """
-        sbset = self.bset
-        try:
-            obset = other.bset
-        except AttributeError:
-            new_data = self.data + other
-        else:
-            if not (sbset == obset):
-                raise ValueError("instances of {} must be defined over "
-                                 "instances of {} that compare equal for "
-                                 "addition to be defined"
-                                 .format(self.__class__.__name__,
-                                         self.bset.__class__.__name__))
-
-            new_data = self.data + other.data
-
-        return self.__class__(new_data, sbset)
-
-    def __radd__(self, other):
-        return self.__add__(other)
-
-    @memoize_method
-    def __sub__(self, other):
-        """
-        Define subtraction of IntensityMap instances defined over
-        equal-comparing BinnedSet instances, and of IntensityMap instances with
-        scalars
-
-        :other: another IntensityMap instance, or a scalar
-        :returns: new, subtracted IntensityMap instance
-
-        """
-        sbset = self.bset
-        try:
-            obset = other.bset
-        except AttributeError:
-            new_data = self.data - other
-        else:
-            if not (sbset == obset):
-                raise ValueError("instances of {} must be defined over "
-                                 "instances of {} that compare equal for "
-                                 "addition to be defined"
-                                 .format(self.__class__.__name__,
-                                         self.bset.__class__.__name__))
-
-            new_data = self.data - other.data
-
-        return self.__class__(new_data, sbset)
-
-    def __rsub__(self, other):
-        return -self.__sub__(other)
-
-    @memoize_method
-    def __mul__(self, other):
-        """
-        Define multiplication of IntensityMap instances defined over
-        equal-comparing BinnedSet instances, and of IntensityMap instances with
-        scalars
-
-        :other: another IntensityMap instance, or a scalar
-        :returns: new, multiplied IntensityMap instance
-
-        """
-        sbset = self.bset
-        try:
-            obset = other.bset
-        except AttributeError:
-            new_data = self.data * other
-        else:
-            if not (sbset == obset):
-                raise ValueError("instances of {} must be defined over "
-                                 "instances of {} that compare equal for "
-                                 "addition to be defined"
-                                 .format(self.__class__.__name__,
-                                         self.bset.__class__.__name__))
-
-            new_data = self.data * other.data
-
-        return self.__class__(new_data, sbset)
-
-    def __rmul__(self, other):
-        return self.__mul__(other)
-
-    @memoize_method
-    def __truediv__(self, other):
-        """
-        Define division of IntensityMap instances defined over equal-comparing
-        BinnedSet instances, and of IntensityMap instances with scalars
-
-        The intensities are divided using the sensibly_divide() function from
-        the utils module, with masked == True. This returns an intensity map
-        which is masked in bins where a "0 / 0"- or "nan / 0"-situation occured
-        (instead of raising a ZeroDivisionError).
-
-        :other: another IntensityMap instance, or a scalar
-        :returns: new, divided IntensityMap instance
-
-        """
-        sbset = self.bset
-        try:
-            obset = other.bset
-        except AttributeError:
-            new_data = sensibly_divide(self.data, other, masked=True)
-        else:
-            if not (sbset == obset):
-                raise ValueError("instances of {} must be defined over "
-                                 "instances of {} that compare equal for "
-                                 "division to be defined"
-                                 .format(self.__class__.__name__,
-                                         self.bset.__class__.__name__))
-
-            new_data = sensibly_divide(self.data, other.data)
-
-        return self.__class__(new_data, sbset)
-
-    def __div__(self, other):
-        return self.__truediv__(other)
-
-    @memoize_method
-    def __rtruediv__(self, other):
-        """
-        Define division of other objects (e.g. scalars) with IntensityMap
-        instances
-
-        The division is performed using the sensibly_divide() function from the
-        utils module, with masked == True. This returns an intensity map
-        which is masked in bins where a "0 / 0"- or "nan / 0"-situation occured
-        (instead of raising a ZeroDivisionError).
-
-        :other: object to divide by the IntensityMap instance
-        :returns: new, divided IntensityMap instance
-
-        """
-        new_data = sensibly_divide(other, self.data)
-        return self.__class__(new_data, self.bset)
-
-    def __rdiv__(self, other):
-        return self.__rtruediv__(other)
-
-    def __neg__(self):
-        """
-        Define negation of an IntensityMap instance as the negation of its
-        intensity array
-
-        :returns: new, negated IntensityMap instance
-
-        """
-        # Manually memoize to take advantage of the fact that this is an
-        # involution
-        try:
-            return self._neg
-        except AttributeError:
-            new_data = -self.data
-            self._neg = self.__class__(new_data, self.bset)
-            self._neg._neg = self  # Involution at work
-            return self._neg
-
-    @memoize_method
-    def mean(self):
-        """
-        Compute the mean intensity of the instance, ignoring missing values
-
-        Returns
-        -------
-        scalar
-            The mean intensity.
-
-        """
-        return numpy.nanmean(self.data)
-
-    @memoize_method
-    def std(self, ddof=0):
-        """
-        Compute the standard deviation of the intensity of the instance,
-        ignoring missing values
-
-        Parameters
-        ----------
-        ddof : int, optional
-            Delta degrees of freedom: see the documentation for
-            `IntensityMap.var` for details.
-
-        Returns
-        -------
-        scalar
-            The standard deviation of the intensity.
-
-        """
-        return numpy.nanstd(self.data, ddof=ddof)
-
-    @memoize_method
-    def var(self, ddof=0):
-        """
-        Compute the variance of the intensity of the instance, ignoring missing
-        values
-
-        Parameters
-        ----------
-        ddof : int, optional
-            Delta degrees of freedom: the divisor used in calculating the
-            variance is `N - ddof`, where `N` is the number of bins with values
-            present. See the documentation for `numpy.nanvar` for details.
-
-        Returns
-        -------
-        scalar
-            The variance of the intensity.
-
-        """
-        return numpy.nanvar(self.data, ddof=ddof)
-
-    @memoize_method
-    def min(self):
-        """
-        Find the minimum intensity of the instance, ignoring missing values
-
-        Returns
-        -------
-        scalar
-            The minimum intensity.
-
-        """
-        return numpy.nanmin(self.data)
-
-    @memoize_method
-    def max(self):
-        """
-        Find the maximum intensity of the instance, ignoring missing values
-
-        Returns
-        -------
-        scalar
-            The maximum intensity.
-
-        """
-        return numpy.nanmax(self.data)
+        self.bset = bset
 
     def new_from_array(self, arr):
         """
@@ -945,39 +689,153 @@ class IntensityMap(AlmostImmutable):
 
         return self.__class__(arr, new_bset)
 
-    @property
-    def ndim(self):
+    def _inherit_binary_operation(self, other, op):
         """
-        The dimensionality of this IntensityMap instance
+        Define the general pattern for inheriting a binary operation from
+        MaskedArray
+
+        Parameters
+        ----------
+        other : array-like
+            The binary operation is applied to `self` and `other`. If `other`
+            is also an `IntensityMap` instance, an exception is raised if they
+            are not defined over `BinnedSet` instances that compare equal.
+        op : callable
+            Callable implementing the binary operation on a `MaskedArray`
+            instance and another object.
+
+        Returns
+        -------
+        IntensityMap
+            The result of the binary operation applied to the `IntensityMap`
+            instances.
 
         """
-        return self.data.ndim
+        sbset = self.bset
+        try:
+            obset = other.bset
+        except AttributeError:
+            # Apparently, other is not an IntensityMap
+            new_data = op(self.data, other)
+        else:
+            if not (sbset == obset):
+                raise ValueError("instances of {} must be defined over "
+                                 "instances of {} for binary operations to be "
+                                 "defined".format(self.__class__.__name__,
+                                                  sbset.__class__.__name__))
+            new_data = op(self.data, other.data)
+        return self.__class__(new_data, sbset)
 
-    @property
-    def shape(self):
+    def __eq__(self, other):
+        return self._inherit_binary_operation(other, MaskedArray.__eq__)
+
+    def __ne__(self, other):
+        return self._inherit_binary_operation(other, MaskedArray.__ne__)
+
+    def __lt__(self, other):
+        return self._inherit_binary_operation(other, MaskedArray.__lt__)
+
+    def __le__(self, other):
+        return self._inherit_binary_operation(other, MaskedArray.__le__)
+
+    def __gt__(self, other):
+        return self._inherit_binary_operation(other, MaskedArray.__gt__)
+
+    def __ge__(self, other):
+        return self._inherit_binary_operation(other, MaskedArray.__ge__)
+
+    def __add__(self, other):
+        return self._inherit_binary_operation(other, MaskedArray.__add__)
+
+    def __radd__(self, other):
+        return self._inherit_binary_operation(other, MaskedArray.__radd__)
+
+    def __sub__(self, other):
+        return self._inherit_binary_operation(other, MaskedArray.__sub__)
+
+    def __rsub__(self, other):
+        return self._inherit_binary_operation(other, MaskedArray.__rsub__)
+
+    def __mul__(self, other):
+        return self._inherit_binary_operation(other, MaskedArray.__mul__)
+
+    def __rmul__(self, other):
+        return self._inherit_binary_operation(other, MaskedArray.__rmul__)
+
+    def __div__(self, other):
+        return self._inherit_binary_operation(other, MaskedArray.__div__)
+
+    def __truediv__(self, other):
+        def truediv(arr1, arr2):
+            return sensibly_divide(arr1, arr2, masked=True)
+        return self._inherit_binary_operation(other, truediv)
+
+    def __rtruediv__(self, other):
+        def rtruediv(arr1, arr2):
+            return sensibly_divide(arr2, arr1, masked=True)
+        return self._inherit_binary_operation(other, rtruediv)
+
+    def __floordiv__(self, other):
+        return self._inherit_binary_operation(other, MaskedArray.__floordiv__)
+
+    def __rfloordiv__(self, other):
+        return self._inherit_binary_operation(other, MaskedArray.__rfloordiv__)
+
+    def __pow__(self, other):
+        return self._inherit_binary_operation(other, MaskedArray.__pow__)
+
+    def __rpow__(self, other):
+        return self._inherit_binary_operation(other, MaskedArray.__rpow__)
+
+    def __and__(self, other):
+        return self._inherit_binary_operation(other, MaskedArray.__and__)
+
+    def __rand__(self, other):
+        return self._inherit_binary_operation(other, MaskedArray.__rand__)
+
+    def __xor__(self, other):
+        return self._inherit_binary_operation(other, MaskedArray.__xor__)
+
+    def __rxor__(self, other):
+        return self._inherit_binary_operation(other, MaskedArray.__rxor__)
+
+    def __or__(self, other):
+        return self._inherit_binary_operation(other, MaskedArray.__or__)
+
+    def __ror__(self, other):
+        return self._inherit_binary_operation(other, MaskedArray.__ror__)
+
+    # Negation is implemented explicitly to take advantage of the involution
+    # property
+    #def __neg__(self):
+    #    return self.__class__(self.data.__neg__(), self.bset)
+
+    def __pos__(self):
+        return self
+
+    def __abs__(self):
+        return self.__class__(self.data.__abs__(), self.bset)
+
+    def __invert__(self):
+        return self.__class__(self.data.__invert__(), self.bset)
+
+    def __neg__(self):
         """
-        The number of elements in the IntensityMap instance along each axis
+        Define negation of an IntensityMap instance as the negation of its
+        intensity array
+
+        :returns: negated IntensityMap instance
 
         """
-        return self.data.shape
-
-    @property
-    def range_(self):
-        """
-        The range of values spanned by the underlying BinnedSet along each axis
-
-        """
-        return self.bset.range_
-
-    @property
-    @memoize_method
-    def masked_data(self):
-        """
-        A representation of the intensity data with missing values masked
-
-        """
-        data = self.data
-        return numpy.ma.masked_where(numpy.isnan(data), data)
+        # Manually memoize to take advantage of the fact that this is an
+        # involution
+        try:
+            return self._neg
+        except AttributeError:
+            new_data = -self.data
+            self._neg = self.__class__(new_data, self.bset)
+            self._neg._neg = self  # Involution at work
+            return self._neg
 
     def reflected(self):
         """
@@ -997,6 +855,145 @@ class IntensityMap(AlmostImmutable):
             self._reflected._reflected = self  # Involution at work
             return self._reflected
 
+    def astype(self, dtype):
+        """
+        Return a copy of the IntensityMap instance cast to a new dtype
+
+        Parameters
+        ----------
+        dtype : dtype
+            Type to cast the `IntensityMap` instance to
+
+        Returns
+        -------
+        IntensityMap
+            A copy of `self`, cast to `dtype`.
+
+        """
+        return self.__class__(self.data.astype(dtype), self.bset)
+
+    @memoize_method
+    def mean(self):
+        """
+        Compute the mean intensity of the instance, ignoring missing values
+
+        Returns
+        -------
+        scalar
+            The mean intensity.
+
+        """
+        return numpy.ma.mean(self.data)
+
+    @memoize_method
+    def std(self, ddof=0):
+        """
+        Compute the standard deviation of the intensity of the instance,
+        ignoring missing values
+
+        Parameters
+        ----------
+        ddof : int, optional
+            Delta degrees of freedom: see the documentation for
+            `IntensityMap.var` for details.
+
+        Returns
+        -------
+        scalar
+            The standard deviation of the intensity.
+
+        """
+        return numpy.ma.std(self.data, ddof=ddof)
+
+    @memoize_method
+    def var(self, ddof=0):
+        """
+        Compute the variance of the intensity of the instance, ignoring missing
+        values
+
+        Parameters
+        ----------
+        ddof : int, optional
+            Delta degrees of freedom: the divisor used in calculating the
+            variance is `N - ddof`, where `N` is the number of bins with values
+            present. See the documentation for `numpy.nanvar` for details.
+
+        Returns
+        -------
+        scalar
+            The variance of the intensity.
+
+        """
+        return numpy.ma.var(self.data, ddof=ddof)
+
+    @memoize_method
+    def min(self):
+        """
+        Find the minimum intensity of the instance, ignoring missing values
+
+        Returns
+        -------
+        scalar
+            The minimum intensity.
+
+        """
+        return numpy.ma.min(self.data)
+
+    @memoize_method
+    def max(self):
+        """
+        Find the maximum intensity of the instance, ignoring missing values
+
+        Returns
+        -------
+        scalar
+            The maximum intensity.
+
+        """
+        return numpy.ma.max(self.data)
+
+    @property
+    def ndim(self):
+        """
+        The dimensionality of this IntensityMap instance
+
+        """
+        return self.data.ndim
+
+    @property
+    def shape(self):
+        """
+        The number of elements in the IntensityMap instance along each axis
+
+        """
+        return self.data.shape
+
+    @property
+    def dtype(self):
+        """
+        The dtype of the IntensityMap instance
+
+        """
+        return self.data.dtype
+
+    @property
+    def range_(self):
+        """
+        The range of values spanned by the underlying BinnedSet along each axis
+
+        """
+        return self.bset.range_
+
+    @property
+    @memoize_method
+    def unmasked_data(self):
+        """
+        A representation of the intensity data with missing values as nans
+        instead of masked. This requires casting the data to float.
+
+        """
+        return numpy.ma.filled(self.data.astype(numpy.float_), numpy.nan)
+
     @memoize_method
     def filled(self, fill_value):
         """
@@ -1008,8 +1005,9 @@ class IntensityMap(AlmostImmutable):
                   unchanged if there are no missing values.
 
         """
-        new_data = numpy.ma.filled(self.masked_data, fill_value=fill_value)
-        if new_data == self.data:
+        sdata = self.data
+        new_data = numpy.ma.filled(sdata, fill_value=fill_value)
+        if new_data == sdata:
             return self
         else:
             return self.__class__(new_data, self.bset)
@@ -1024,7 +1022,7 @@ class IntensityMap(AlmostImmutable):
 
         """
         new_bset = self.bset.fft()
-        new_data = fftpack.fftn(self.data)
+        new_data = fftpack.fftn(self.unmasked_data)
 
         return self.__class__(new_data, new_bset)
 
@@ -1193,7 +1191,7 @@ class IntensityMap(AlmostImmutable):
         :returns: array of labels, and the number of labeled regions
 
         """
-        data = self.data
+        data = self.unmasked_data
         regions = (data > threshold)
         data_thres = numpy.zeros_like(data)
         data_thres[regions] = data[regions]
@@ -1230,8 +1228,8 @@ class IntensityMap(AlmostImmutable):
             raise ValueError("no peaks found, try lowering 'threshold'")
 
         index = range(1, n + 1)
-        peak_list = measurements.center_of_mass(self.data, labels=labels,
-                                                index=index)
+        peak_list = measurements.center_of_mass(self.unmasked_data,
+                                                labels=labels, index=index)
 
         labeled_areas = [numpy.sum(self.bset.area * (labels == i))
                          for i in index]
@@ -1268,9 +1266,8 @@ class IntensityMap(AlmostImmutable):
 
         """
         data = self.data
-        nanmask = numpy.isnan(data)
-        mask = numpy.logical_or(mask, nanmask)
-        fdata = data[~mask]
+        mask = numpy.logical_or(mask, numpy.ma.getmaskarray(data))
+        fdata = data[~mask].data
         xdata = numpy.asarray([cm[~mask]
                               for cm in self.bset.cmesh]).transpose()
         scale, mean, cov = fit_ndgaussian(xdata, fdata)
@@ -1288,7 +1285,7 @@ class IntensityMap(AlmostImmutable):
                   all-masked slices along edges are removed.
 
         """
-        new_data = numpy.ma.copy(self.masked_data)
+        new_data = numpy.ma.copy(self.data)
         new_edges = list(self.bset.edges)  # Mutable copy
 
         # Remove all-masked edge slices along all dimensions
@@ -1298,7 +1295,8 @@ class IntensityMap(AlmostImmutable):
 
             # Find first slice to keep
             try:
-                first = next(i for (i, mask) in enumerate(new_data.mask)
+                first = next(i for (i, mask) in
+                             enumerate(numpy.ma.getmaskarray(new_data))
                              if not mask.all())
                 new_data = new_data[first:]
                 new_edges[axis] = new_edges[axis][first:]
@@ -1307,7 +1305,8 @@ class IntensityMap(AlmostImmutable):
 
             # Find last slice to keep
             try:
-                last = next(i for (i, mask) in enumerate(new_data.mask[::-1])
+                last = next(i for (i, mask) in
+                            enumerate(numpy.ma.getmaskarray(new_data)[::-1])
                             if not mask.all())
                 if last != 0:
                     new_data = new_data[:-last]
@@ -1327,34 +1326,34 @@ class IntensityMap2D(IntensityMap):
     Features a simplified call signature, 2D-specific properties, and
     a plotting method.
 
+    Parameters
+    ----------
+    data : array-like
+        A 2D array of scalar intensities. Nan-valued and/or masked elements
+        (using the `numpy.ma` module) may be used to represent missing data.
+        See the documentation for `IntensityMap` for information.
+    bset : BinnedSet2D or sequence
+        A `BinnedSet2D` instance, or a valid argument list to the `BinnedSet2D`
+        constructor, defining the spatial bins where the `IntensityMap`
+        instance takes values. The ordering of axes in `bset` and `data` should
+        correspond, such that `data[i, j]` gives the intensity in
+        the bin defined by
+        ```
+        (bset.edges[0][i], bset.edges[0][i + 1],
+         bset[1][j], bset[1][j + 1])
+        ```
+    **kwargs : dict, optional
+        Any other keyword arguments are passed to the `MaskedArray` constructor
+        along with `numpy.ma.masked_where(numpy.isnan(data), data)`.
+
     """
-    def __init__(self, data, *args):
-        """
-        Initilize an IntensityMap instance
-
-        :data: array-like map containing a scalar intensity for each bin in
-               bset. The array may be masked (using the numpy.ma module) to
-               represent missing data etc. The ordering of axes in the array
-               should correspond to that in the underlying BinnedSet2D
-               instance, such that data[i, j] gives the intensity in the cell
-               defined by
-               (bset.edges[0][i], bset.edges[0][i + 1],
-                bset.edges[1][j], bset.edges[1][j + 1])
-        :args: if the first element is a BinnedSet2D instance, it will be used
-               to give the bins in which data takes values. Otherwise, an
-               attempt is made to initialize a new BinnedSet2D instance with
-               *args.
-
-        """
+    def __init__(self, data, bset, **kwargs):
         # Need to explicitly make sure that we get a BinnedSet2D instance
         # before invoking the parent constructor
-        potential_bset = args[0]
-        if isinstance(potential_bset, BinnedSet2D):
-            bset = potential_bset
-        else:
-            bset = BinnedSet2D(*args)
+        if not isinstance(bset, BinnedSet2D):
+            bset = BinnedSet2D(*bset)
 
-        IntensityMap.__init__(self, data, bset)
+        IntensityMap.__init__(self, data, bset, **kwargs)
 
     @memoize_method
     def blobs(self, min_sigma=None, max_sigma=None, num_sigma=25,
@@ -1435,7 +1434,7 @@ class IntensityMap2D(IntensityMap):
                              .format(self.__class__.__name__,
                                      self.bset.__class__.__name__))
 
-        data = self.data
+        data = self.unmasked_data
         if ignore_missing:
             size = 0.125 * numpy.amax(self.bset.binwidths)
             filled = self
@@ -1529,11 +1528,11 @@ class IntensityMap2D(IntensityMap):
 
         x, y = self.bset.mesh
 
-        mdata = self.masked_data
+        data = self.data
         if threshold is not None:
-            mdata = numpy.ma.masked_where(mdata <= threshold, mdata)
+            data = numpy.ma.masked_where(data <= threshold, data)
 
-        mesh = axes.pcolormesh(x, y, mdata, vmin=vmin, vmax=vmax, cmap=cmap,
+        mesh = axes.pcolormesh(x, y, data, vmin=vmin, vmax=vmax, cmap=cmap,
                                **kwargs)
         cbar = pyplot.colorbar(mesh, cax=cax, **cbar_kw)
         axes.set(xlim=self.bset.xedges[(0, -1), ],
@@ -1564,22 +1563,21 @@ def _safe_mmap(normalized, mapfunc, *arrs):
               unnormalized mapping
     :arrs: list of arrays to compute the map over
     :returns: result of the mapping, optionally normalized. If normalized, the
-              result has nans where only missing values would have contributed.
+              result is masked where only missing values would have
+              contributed.
 
     """
     filled_arrs = []
     indicators = []
     for arr in arrs:
-        filled_arr = numpy.ma.filled(arr, fill_value=numpy.nan)
-        if filled_arr is arr:
-            filled_arr = numpy.copy(arr)
-        nanmask = numpy.isnan(filled_arr)
-        indicators.append((~nanmask).astype(numpy.float_))
-        filled_arr[nanmask] = 0.0
-        filled_arrs.append(filled_arr)
+        masked_arr = numpy.ma.masked_where(numpy.isnan(arr), arr)
+        mask = numpy.ma.getmaskarray(masked_arr)
+        indicators.append((~mask).astype(numpy.float_))
+        filled_arrs.append(numpy.ma.filled(masked_arr, fill_value=0.0))
 
     if normalized:
-        new_arr = sensibly_divide(mapfunc(*filled_arrs), mapfunc(*indicators))
+        new_arr = sensibly_divide(mapfunc(*filled_arrs), mapfunc(*indicators),
+                                  masked=True)
     else:
         if any(numpy.any(ind == 0.0) for ind in indicators):
             raise ValueError("cannot filter IntensityMap instances with "

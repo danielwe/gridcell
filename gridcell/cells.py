@@ -184,7 +184,7 @@ class Position(AlmostImmutable):
             normed=False,
             weights=numpy.ma.compressed(self.tweights))
 
-        return IntensityMap2D(hist, xedges, yedges)
+        return IntensityMap2D(hist, (xedges, yedges))
 
     def plot_path(self, axes=None, linewidth=0.5, color='0.5', **kwargs):
         """
