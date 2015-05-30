@@ -836,6 +836,86 @@ class IntensityMap(AlmostImmutable):
             self._neg._neg = self  # Involution at work
             return self._neg
 
+    @memoize_method
+    def mean(self):
+        """
+        Compute the mean intensity of the instance, ignoring missing values
+
+        Returns
+        -------
+        scalar
+            The mean intensity.
+
+        """
+        return numpy.nanmean(self.data)
+
+    @memoize_method
+    def std(self, ddof=0):
+        """
+        Compute the standard deviation of the intensity of the instance,
+        ignoring missing values
+
+        Parameters
+        ----------
+        ddof : int, optional
+            Delta degrees of freedom: see the documentation for
+            `IntensityMap.var` for details.
+
+        Returns
+        -------
+        scalar
+            The standard deviation of the intensity.
+
+        """
+        return numpy.nanstd(self.data, ddof=ddof)
+
+    @memoize_method
+    def var(self, ddof=0):
+        """
+        Compute the variance of the intensity of the instance, ignoring missing
+        values
+
+        Parameters
+        ----------
+        ddof : int, optional
+            Delta degrees of freedom: the divisor used in calculating the
+            variance is `N - ddof`, where `N` is the number of bins with values
+            present. See the documentation for `numpy.nanvar` for details.
+
+        Returns
+        -------
+        scalar
+            The variance of the intensity.
+
+        """
+        return numpy.nanvar(self.data, ddof=ddof)
+
+    @memoize_method
+    def min(self):
+        """
+        Find the minimum intensity of the instance, ignoring missing values
+
+        Returns
+        -------
+        scalar
+            The minimum intensity.
+
+        """
+        return numpy.nanmin(self.data)
+
+    @memoize_method
+    def max(self):
+        """
+        Find the maximum intensity of the instance, ignoring missing values
+
+        Returns
+        -------
+        scalar
+            The maximum intensity.
+
+        """
+        return numpy.nanmax(self.data)
+
     def new_from_array(self, arr):
         """
         Create a new IntensityMap instance which is compatible ("convolutable",
@@ -1078,9 +1158,8 @@ class IntensityMap(AlmostImmutable):
         new_bset = self.bset.correlate(other.bset, mode=mode)
 
         if pearson:
-            # Make sure nans don't propagate through the Pearson normalization
-            sdata = (sdata - numpy.nanmean(sdata)) / numpy.nanstd(sdata)
-            odata = (odata - numpy.nanmean(odata)) / numpy.nanstd(odata)
+            sdata = (sdata - self.mean()) / self.std()
+            odata = (odata - other.mean()) / other.std()
 
         def corrfunc(arr1, arr2):
             return signal.correlate(arr1, arr2, mode=mode)
