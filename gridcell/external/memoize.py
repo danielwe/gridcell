@@ -8,6 +8,8 @@ http://code.activestate.com/recipes/577452-a-memoize-decorator-for-instance-meth
 
 """
 
+from __future__ import (absolute_import, division, print_function,
+                        unicode_literals)
 from functools import partial, update_wrapper
 
 

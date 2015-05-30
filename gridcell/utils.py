@@ -19,6 +19,8 @@ package
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import (absolute_import, division, print_function,
+                        unicode_literals)
 import numpy
 from scipy import stats
 from scipy.ndimage import measurements
@@ -145,6 +147,9 @@ def sensibly_divide(num, denom, masked=False):
     the denominator is zero and the numerator is non-zero and non-nan. If both
     the numerator and denominator are zero, or if the numerator is nan, the
     result of the division is nan.
+
+    The use of nans means that the output is always a float array, regardless
+    of the input types.
 
     :num: numerator
     :denom: denominator
