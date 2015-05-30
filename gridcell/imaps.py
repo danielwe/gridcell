@@ -836,7 +836,7 @@ class IntensityMap(AlmostImmutable):
             self._neg._neg = self  # Involution at work
             return self._neg
 
-    def from_array(self, arr):
+    def new_from_array(self, arr):
         """
         Create a new IntensityMap instance which is compatible ("convolutable",
         "correlatable") with this instance, from a numpy array.
@@ -1028,7 +1028,7 @@ class IntensityMap(AlmostImmutable):
         try:
             odata = other.data
         except AttributeError:
-            other = self.from_array(self, other)
+            other = self.new_from_array(other)
             odata = other.data
 
         new_bset = self.bset.convolve(other.bset, mode=mode)
@@ -1072,7 +1072,7 @@ class IntensityMap(AlmostImmutable):
         try:
             odata = other.data
         except AttributeError:
-            other = self.from_array(self, other)
+            other = self.new_from_array(other)
             odata = other.data
 
         new_bset = self.bset.correlate(other.bset, mode=mode)
