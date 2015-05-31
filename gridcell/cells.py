@@ -73,27 +73,24 @@ class Position(AlmostImmutable):
                  information available here.
 
         """
-        self.t = t
-        self._x = x
-        self._y = y
-
+        if not min_speed >= 0.0:
+            raise ValueError("'min_speed' must be a non-negative number")
+        if not speed_window >= 0.0:
+            raise ValueError("'speed_window' must be a non-negative number")
         self.speed_window = speed_window
         self.min_speed = min_speed
 
-        if not self.min_speed >= 0.0:
-            raise ValueError("'min_speed' must be a non-negative number")
-        if not self.speed_window >= 0.0:
-            raise ValueError("'speed_window' must be a non-negative number")
-
-        self.speed, tweights, __ = self.speed_and_weights(self.t, self._x,
-                                                          self._y,
-                                                          self.speed_window)
+        self.speed, tweights, __ = self.speed_and_weights(t, x, y,
+                                                          speed_window)
 
         speedmask = numpy.logical_or(self.speed < min_speed,
-                                     numpy.isnan(self.speed))
+                                     numpy.ma.getmaskarray(self.speed))
         nanmask = numpy.logical_or(numpy.isnan(x), numpy.isnan(y))
-        mask = numpy.logical_or(nanmask, speedmask)
+        mask = numpy.logical_or(speedmask, nanmask)
 
+        self.t = t
+        self._x = x
+        self._y = y
         self.x = numpy.ma.masked_where(mask, x)
         self.y = numpy.ma.masked_where(mask, y)
         self.tweights = numpy.ma.masked_where(mask, tweights)
@@ -119,25 +116,24 @@ class Position(AlmostImmutable):
                        number of samples to get a symmetric window. Must be
                        a non-negative number, given in the same unit as 't'.
         :returns: array with speed at each position sample, and time- and
-                  distance weight arrays
+                  distance weight arrays. Missing values are masked.
 
         """
         tsteps = numpy.diff(t)
         tweights = 0.5 * numpy.hstack((tsteps[0], tsteps[:-1] + tsteps[1:],
                                        tsteps[-1]))
 
-        x = numpy.ma.filled(x, fill_value=numpy.nan)
-        y = numpy.ma.filled(y, fill_value=numpy.nan)
+        x = numpy.ma.masked_where(numpy.isnan(x), x)
+        y = numpy.ma.masked_where(numpy.isnan(y), y)
 
-        xsteps = numpy.diff(x)
-        ysteps = numpy.diff(y)
-        dsteps = numpy.sqrt(xsteps*xsteps + ysteps*ysteps)
-        dweights = 0.5 * numpy.hstack((dsteps[0], dsteps[:-1] + dsteps[1:],
-                                       dsteps[-1]))
+        xsteps = numpy.ma.diff(x)
+        ysteps = numpy.ma.diff(y)
+        dsteps = numpy.ma.sqrt(xsteps * xsteps + ysteps * ysteps)
+        dweights = 0.5 * numpy.ma.hstack((dsteps[0], dsteps[:-1] + dsteps[1:],
+                                          dsteps[-1]))
 
-        dweights_nanmask = numpy.isnan(dweights)
-        dweights_filled = numpy.copy(dweights)
-        dweights_filled[dweights_nanmask] = 0.0
+        dw_mask = numpy.ma.getmaskarray(dweights)
+        dw_filled = numpy.ma.filled(dweights, fill_value=0.0)
 
         window_length = 2 * int(0.5 * speed_window / numpy.mean(tsteps)) + 1
         window_sequence = numpy.empty((window_length,))
@@ -148,9 +144,9 @@ class Position(AlmostImmutable):
             signal.convolve(numpy.ones_like(tweights), window_sequence,
                             mode='same'))
         dweights_filt = sensibly_divide(
-            signal.convolve(dweights_filled, window_sequence, mode='same'),
-            signal.convolve((~dweights_nanmask).astype(numpy.float_),
-                            window_sequence, mode='same'))
+            signal.convolve(dw_filled, window_sequence, mode='same'),
+            signal.convolve((~dw_mask).astype(numpy.float_),
+                            window_sequence, mode='same'), masked=True)
 
         speed = dweights_filt / tweights_filt
 
@@ -1135,13 +1131,13 @@ class Cell(BaseCell):
         self.pos = pos
         self.filter_size = filter_size
 
-        self.spike_x, self.spike_y = self.interpolate_spikes(
-            spike_t, pos.t, pos.x, pos.y)
+        spike_x, spike_y = self.interpolate_spikes(spike_t, pos.t, pos.x,
+                                                   pos.y)
+        self.spike_x, self.spike_y = spike_x, spike_y
 
         timemap = pos.timemap(bins=bins, range_=range_)
-
-        firing_rate = self.compute_firing_rate(self.spike_x, self.spike_y,
-                                               timemap, filter_size)
+        firing_rate = self.compute_firing_rate(spike_x, spike_y, timemap,
+                                               filter_size)
         BaseCell.__init__(self, firing_rate, threshold=threshold)
 
     @staticmethod
@@ -1163,18 +1159,19 @@ class Cell(BaseCell):
                   The arrays are masked if the input x and y arrays are masked.
 
         """
-        x_filled = numpy.ma.filled(x, fill_value=numpy.nan)
-        y_filled = numpy.ma.filled(y, fill_value=numpy.nan)
+        xf = numpy.ma.array(x, dtype=numpy.float_)
+        yf = numpy.ma.array(y, dtype=numpy.float_)
+        xf = numpy.ma.filled(xf, fill_value=numpy.nan)
+        yf = numpy.ma.filled(yf, fill_value=numpy.nan)
 
-        spike_x_filled = numpy.interp(spike_t, t, x_filled)
-        spike_y_filled = numpy.interp(spike_t, t, y_filled)
-        mask = numpy.logical_or(numpy.isnan(spike_x_filled),
-                                numpy.isnan(spike_y_filled))
+        spike_xf = numpy.interp(spike_t, t, xf)
+        spike_yf = numpy.interp(spike_t, t, yf)
+        mask = numpy.logical_or(numpy.isnan(spike_xf), numpy.isnan(spike_yf))
 
-        spike_x_tmp = numpy.interp(spike_t, t, x)
-        spike_y_tmp = numpy.interp(spike_t, t, y)
-        spike_x = numpy.ma.masked_where(mask, spike_x_tmp)
-        spike_y = numpy.ma.masked_where(mask, spike_y_tmp)
+        spike_x = numpy.interp(spike_t, t, x)
+        spike_y = numpy.interp(spike_t, t, y)
+        spike_x = numpy.ma.masked_where(mask, spike_x)
+        spike_y = numpy.ma.masked_where(mask, spike_y)
         return spike_x, spike_y
 
     @staticmethod
