@@ -1540,7 +1540,7 @@ class CellCollection(AlmostImmutable, Mapping):
         return mean_tilt, mean_ecc
 
     @memoize_method
-    def stacked_firing_rate(self, keys=None, normalize=None):
+    def stacked_firing_rate(self, keys=None, normalize=None, threshold=None):
         """
         Compute the stacked firing rate map of cells in the collection
 
@@ -1556,25 +1556,44 @@ class CellCollection(AlmostImmutable, Mapping):
             'mean': the mean of the rate maps will be normalized to 1.0
             'std': the standard deviation of the rate maps will be normalized
                    to 1.0
+            'zscore': the rate maps are replaced with the correpsonding Z-score
+                      maps: for each rate map, its mean is be subtracted and
+                      the result is be divided by the standard deviation.
+        'threshold': if not None, each firing rate will be transformed to
+                     a binary variable with the value 1 in bins where the
+                     normalized firing rate exceeds `threshold`, and
+                     0 otherwise.
         :returns: IntensityMap2D instance containing the stacked firing rate.
 
         """
         __, cells = self.lookup(keys)
 
         if normalize is None:
-            def norm_func(imap):
+            def _norm(imap):
                 return imap
         elif normalize == 'max':
-            def norm_func(imap):
-                return imap / numpy.nanmax(imap.data)
+            def _norm(imap):
+                return imap / imap.max()
         elif normalize == 'mean':
-            def norm_func(imap):
-                return imap / numpy.nanmean(imap.data)
+            def _norm(imap):
+                return imap / imap.mean()
         elif normalize == 'std':
-            def norm_func(imap):
-                return imap / numpy.nanstd(imap.data)
+            def _norm(imap):
+                return imap / imap.std()
+        elif normalize == 'zscore':
+            def _norm(imap):
+                return (imap - imap.mean()) / imap.std()
+        else:
+            raise ValueError("unknown normalization: {}".format(normalize))
 
-        return sum(norm_func(cell.firing_rate) for cell in cells) / len(cells)
+        if threshold is None:
+            norm = _norm
+        else:
+            def norm(imap):
+                imap = _norm(imap)
+                return (imap > threshold).astype(numpy.float_)
+
+        return sum(norm(cell.firing_rate) for cell in cells) / len(cells)
 
     @memoize_method
     def distances(self, keys1=None, keys2=None):
@@ -1954,7 +1973,10 @@ class CellCollection(AlmostImmutable, Mapping):
         :keys: sequence of cell keys to select cells to plot the stacked firing
                rate of. If None (default), all cells are included.
         :normalize: string to select how to normalize the rate maps before
-                    stacking. See self.stacked_firing_rate for details.
+                    stacking. See self.stacked_firing_rate for details. Note
+                    that this method does not support the optional `threshold`
+                    keyword to self.stacked_firing_rate -- if required, use
+                    self.stacked_firing_rate.plot instead.
         :cax: Axes instance to plot the colorbar into. If None (default),
               matplotlib automatically makes space for a colorbar on the
               right-hand side of the plot.
