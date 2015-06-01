@@ -23,7 +23,6 @@ peak detection etc.
 from __future__ import (absolute_import, division, print_function,
                         unicode_literals)
 import numpy
-from numpy.ma import MaskedArray
 from scipy import signal, fftpack, special
 from scipy.ndimage import filters, measurements
 from skimage import feature  # , exposure
@@ -638,14 +637,14 @@ class IntensityMap(AlmostImmutable):
          bset[k-1][ik_1], bset[k-1][ik_1 + 1])
         ```
     **kwargs : dict, optional
-        Any other keyword arguments are passed to the `MaskedArray` constructor
-        along with `numpy.ma.masked_where(numpy.isnan(data), data)`.
+        Any other keyword arguments are passed to the `numpy.ma.array`
+        constructor along with `data` and `mask=numpy.isnan(data)`.
 
     """
 
     def __init__(self, data, bset, **kwargs):
-        data = numpy.ma.masked_where(numpy.isnan(data), data)
-        self.data = MaskedArray(data, **kwargs)
+        self.data = numpy.ma.array(data, mask=numpy.isnan(data),
+                                   keep_mask=True, copy=True, **kwargs)
 
         if not isinstance(bset, BinnedSet):
             bset = BinnedSet(*bset)
@@ -691,8 +690,8 @@ class IntensityMap(AlmostImmutable):
 
     def _inherit_binary_operation(self, other, op):
         """
-        Define the general pattern for inheriting a binary operation from
-        MaskedArray
+        Define the general pattern for inheriting a binary operation on the
+        data as a binary operation on the IntensityMap
 
         Parameters
         ----------
@@ -700,9 +699,10 @@ class IntensityMap(AlmostImmutable):
             The binary operation is applied to `self` and `other`. If `other`
             is also an `IntensityMap` instance, an exception is raised if they
             are not defined over `BinnedSet` instances that compare equal.
-        op : callable
-            Callable implementing the binary operation on a `MaskedArray`
-            instance and another object.
+        op : string or callable
+            Either a string naming the attribute of `self.data` that implements
+            the binary operation, or a callable implementing the binary
+            operation on two `self.data`-like objects.
 
         Returns
         -------
@@ -711,99 +711,108 @@ class IntensityMap(AlmostImmutable):
             instances.
 
         """
+        sdata = self.data
+        try:
+            bound_op = getattr(sdata, op)
+        except TypeError:
+            def bound_op(odata):
+                return op(sdata, odata)
+
         sbset = self.bset
         try:
             obset = other.bset
         except AttributeError:
             # Apparently, other is not an IntensityMap
-            new_data = op(self.data, other)
+            new_data = bound_op(other)
         else:
             if not (sbset == obset):
                 raise ValueError("instances of {} must be defined over "
-                                 "instances of {} for binary operations to be "
-                                 "defined".format(self.__class__.__name__,
-                                                  sbset.__class__.__name__))
-            new_data = op(self.data, other.data)
+                                 "instances of {} that compare equal for "
+                                 "binary operations to be defined"
+                                 .format(self.__class__.__name__,
+                                         sbset.__class__.__name__))
+            new_data = bound_op(other.data)
+
         return self.__class__(new_data, sbset)
 
     def __eq__(self, other):
-        return self._inherit_binary_operation(other, MaskedArray.__eq__)
+        return self._inherit_binary_operation(other, '__eq__')
 
     def __ne__(self, other):
-        return self._inherit_binary_operation(other, MaskedArray.__ne__)
+        return self._inherit_binary_operation(other, '__ne__')
 
     def __lt__(self, other):
-        return self._inherit_binary_operation(other, MaskedArray.__lt__)
+        return self._inherit_binary_operation(other, '__lt__')
 
     def __le__(self, other):
-        return self._inherit_binary_operation(other, MaskedArray.__le__)
+        return self._inherit_binary_operation(other, '__le__')
 
     def __gt__(self, other):
-        return self._inherit_binary_operation(other, MaskedArray.__gt__)
+        return self._inherit_binary_operation(other, '__gt__')
 
     def __ge__(self, other):
-        return self._inherit_binary_operation(other, MaskedArray.__ge__)
+        return self._inherit_binary_operation(other, '__ge__')
 
     def __add__(self, other):
-        return self._inherit_binary_operation(other, MaskedArray.__add__)
+        return self._inherit_binary_operation(other, '__add__')
 
     def __radd__(self, other):
-        return self._inherit_binary_operation(other, MaskedArray.__radd__)
+        return self._inherit_binary_operation(other, '__radd__')
 
     def __sub__(self, other):
-        return self._inherit_binary_operation(other, MaskedArray.__sub__)
+        return self._inherit_binary_operation(other, '__sub__')
 
     def __rsub__(self, other):
-        return self._inherit_binary_operation(other, MaskedArray.__rsub__)
+        return self._inherit_binary_operation(other, '__rsub__')
 
     def __mul__(self, other):
-        return self._inherit_binary_operation(other, MaskedArray.__mul__)
+        return self._inherit_binary_operation(other, '__mul__')
 
     def __rmul__(self, other):
-        return self._inherit_binary_operation(other, MaskedArray.__rmul__)
+        return self._inherit_binary_operation(other, '__rmul__')
 
     def __div__(self, other):
-        return self._inherit_binary_operation(other, MaskedArray.__div__)
+        return self._inherit_binary_operation(other, '__div__')
 
     def __truediv__(self, other):
-        def truediv(arr1, arr2):
-            return sensibly_divide(arr1, arr2, masked=True)
+        def truediv(sdata, odata):
+            return sensibly_divide(sdata, odata, masked=True)
         return self._inherit_binary_operation(other, truediv)
 
     def __rtruediv__(self, other):
-        def rtruediv(arr1, arr2):
-            return sensibly_divide(arr2, arr1, masked=True)
+        def rtruediv(sdata, odata):
+            return sensibly_divide(odata, sdata, masked=True)
         return self._inherit_binary_operation(other, rtruediv)
 
     def __floordiv__(self, other):
-        return self._inherit_binary_operation(other, MaskedArray.__floordiv__)
+        return self._inherit_binary_operation(other, '__floordiv__')
 
     def __rfloordiv__(self, other):
-        return self._inherit_binary_operation(other, MaskedArray.__rfloordiv__)
+        return self._inherit_binary_operation(other, '__rfloordiv__')
 
     def __pow__(self, other):
-        return self._inherit_binary_operation(other, MaskedArray.__pow__)
+        return self._inherit_binary_operation(other, '__pow__')
 
     def __rpow__(self, other):
-        return self._inherit_binary_operation(other, MaskedArray.__rpow__)
+        return self._inherit_binary_operation(other, '__rpow__')
 
     def __and__(self, other):
-        return self._inherit_binary_operation(other, MaskedArray.__and__)
+        return self._inherit_binary_operation(other, '__and__')
 
     def __rand__(self, other):
-        return self._inherit_binary_operation(other, MaskedArray.__rand__)
+        return self._inherit_binary_operation(other, '__rand__')
 
     def __xor__(self, other):
-        return self._inherit_binary_operation(other, MaskedArray.__xor__)
+        return self._inherit_binary_operation(other, '__xor__')
 
     def __rxor__(self, other):
-        return self._inherit_binary_operation(other, MaskedArray.__rxor__)
+        return self._inherit_binary_operation(other, '__rxor__')
 
     def __or__(self, other):
-        return self._inherit_binary_operation(other, MaskedArray.__or__)
+        return self._inherit_binary_operation(other, '__or__')
 
     def __ror__(self, other):
-        return self._inherit_binary_operation(other, MaskedArray.__ror__)
+        return self._inherit_binary_operation(other, '__ror__')
 
     # Negation is implemented explicitly to take advantage of the involution
     # property
@@ -811,7 +820,7 @@ class IntensityMap(AlmostImmutable):
     #    return self.__class__(self.data.__neg__(), self.bset)
 
     def __pos__(self):
-        return self
+        return self.__class__(self.data.__pos__(), self.bset)
 
     def __abs__(self):
         return self.__class__(self.data.__abs__(), self.bset)
@@ -832,8 +841,7 @@ class IntensityMap(AlmostImmutable):
         try:
             return self._neg
         except AttributeError:
-            new_data = -self.data
-            self._neg = self.__class__(new_data, self.bset)
+            self._neg = self.__class__(self.data.__neg__(), self.bset)
             self._neg._neg = self  # Involution at work
             return self._neg
 
@@ -850,8 +858,7 @@ class IntensityMap(AlmostImmutable):
             return self._reflected
         except AttributeError:
             sl = tuple(slice(None, None, -1) for __ in range(self.ndim))
-            new_data = self.data[sl]
-            self._reflected = self.__class__(new_data, -self.bset)
+            self._reflected = self.__class__(self.data[sl], -self.bset)
             self._reflected._reflected = self  # Involution at work
             return self._reflected
 
@@ -992,7 +999,8 @@ class IntensityMap(AlmostImmutable):
         instead of masked. This requires casting the data to float.
 
         """
-        return numpy.ma.filled(self.data.astype(numpy.float_), numpy.nan)
+        return numpy.ma.filled(self.data.astype(numpy.float_),
+                               fill_value=numpy.nan)
 
     @memoize_method
     def filled(self, fill_value):
@@ -1343,8 +1351,9 @@ class IntensityMap2D(IntensityMap):
          bset[1][j], bset[1][j + 1])
         ```
     **kwargs : dict, optional
-        Any other keyword arguments are passed to the `MaskedArray` constructor
-        along with `numpy.ma.masked_where(numpy.isnan(data), data)`.
+        Any other keyword arguments are passed to the `numpy.ma.array`
+        constructor along with `numpy.ma.masked_where(numpy.isnan(data),
+        data)`.
 
     """
     def __init__(self, data, bset, **kwargs):
