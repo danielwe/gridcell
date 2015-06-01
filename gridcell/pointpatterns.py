@@ -130,14 +130,12 @@ class Window(geometry.Polygon):
 
         :edge_correction: flag to select the handling of edges. Possible
                           values:
-            'finite': Translational edge correction used.
-            'periodic': No edge correction used. Care is taken to avoid
-                        counting the same pair multiple times, under the
-                        assumption that points are repeated periodically in the
-                        pattern according to self.lattice.
-            'plus': No edge correction used.
-            'stationary': Translational edge correction used.
-            'isotropic': Rotational edge correction used.
+            'finite': Translational edge correction.
+            'periodic': No edge correction, but points are assumed to repeat
+                        periodically in the pattern according to self.lattice.
+            'plus': No edge correction.
+            'stationary': Translational edge correction.
+            'isotropic': Rotational edge correction.
         :returns: maximum relevant interpoint distance
 
         """
@@ -532,14 +530,14 @@ class Window(geometry.Polygon):
         return wpatch
 
 
-class PointPattern(geometry.MultiPoint):
+class PointPattern(AlmostImmutable):
     """
     Represent a planar point pattern and its associated window, and provide
     methods for analyzing its statistical properties
 
     """
 
-    def __init__(self, points=None, window=None, pluspoints=None, **kwargs):
+    def __init__(self, points, window, pluspoints=None):
         """
         Initialize the PointPattern instance
 
@@ -552,31 +550,96 @@ class PointPattern(geometry.MultiPoint):
         :pluspoints: an optional MultiPoint instance or valid argument to the
                      MultiPoint constructor, representing a set of extra points
                      (usually outside the window) to use for plus sampling
-        :kwargs: additional keyword arguments to the MultiPoint constructor
 
         """
-        geometry.MultiPoint.__init__(self, points, **kwargs)
+        self._points = geometry.MultiPoint(points)
+        self.pluspoints = geometry.MultiPoint(pluspoints)
 
         # Avoid copying the window unless needed
         if not isinstance(window, Window):
             window = Window(window)
-
         self.window = Window(window)
-        self.pluspoints = geometry.MultiPoint(pluspoints)
 
-    def __reduce__(self):
-        memcache = memoize_method.CACHE_NAME
-        red = list(geometry.MultiPoint.__reduce__(self))
-        red[2] = {'state': red[2],
-                  'window': self.window,
-                  'pluspoints': self.pluspoints,
-                  memcache: getattr(self, memcache)}
-        return tuple(red)
+    def __getitem__(self, key):
+        return self._points.__getitem__(key)
 
-    def __setstate__(self, state):
-        geometry.MultiPoint.__setstate__(self, state.pop('state'))
-        for key in state:
-            setattr(self, key, state[key])
+    def __iter__(self):
+        return self._points.__iter__()
+
+    def __len__(self):
+        return self._points.__len__()
+
+    def _inherit_binary_operation(self, other, op):
+        """
+        Define the general pattern for inheriting a binary operation on the
+        points as a binary operation on the PointPattern
+
+        Parameters
+        ----------
+        other : shapely object
+            The binary operation is applied to `self` and `other`. If `other`
+            is also a `PointPattern` instance, an exception is raised if they
+            are not defined in `Window` instances that compare equal. If other
+            is not a `PointPattern` instance, the union of self._points with
+            the intersection of other and self.window is used as the points in
+            the PointPattern, while the union of self.pluspoints with the
+            difference of other and self.window is used as the pluspoints.
+        op : string or callable
+            Either a string naming the attribute of `self._points` that
+            implements the binary operation, or a callable implementing the
+            binary operation on two shapely objects.
+
+        Returns
+        -------
+        PointPattern
+            The result of the binary operation applied to the `PointPattern`
+            instances.
+
+        """
+        spoints = self._points
+        spluspoints = self.pluspoints
+        try:
+            bound_op = getattr(spoints, op)
+            bound_op_plus = getattr(spluspoints, op)
+        except TypeError:
+            def bound_op(opoints):
+                return op(spoints, opoints)
+
+            def bound_op_plus(opluspoints):
+                return op(spluspoints, opluspoints)
+
+        swindow = self.window
+        try:
+            owindow = other.window
+        except AttributeError:
+            # Apparently, other is not a PointPattern
+            opoints = other.intersection(swindow)
+            opluspoints = other.difference(opoints)
+            new_points = bound_op(opoints)
+            new_pluspoints = bound_op_plus(opluspoints)
+        else:
+            if not (swindow == owindow):
+                raise ValueError("instances of {} must be defined over "
+                                 "instances of {} that compare equal for "
+                                 "binary operations to be defined"
+                                 .format(self.__class__.__name__,
+                                         swindow.__class__.__name__))
+            new_points = bound_op(other._points)
+            new_pluspoints = bound_op_plus(other.pluspoints)
+
+        return self.__class__(new_points, swindow, pluspoints=new_pluspoints)
+
+    def difference(self, other):
+        return self._inherit_binary_operation(other, 'difference')
+
+    def intersection(self, other):
+        return self._inherit_binary_operation(other, 'intersection')
+
+    def symmetric_difference(self, other):
+        return self._inherit_binary_operation(other, 'symmetric_difference')
+
+    def union(self, other):
+        return self._inherit_binary_operation(other, 'union')
 
     @property
     @memoize_method
@@ -618,11 +681,11 @@ class PointPattern(geometry.MultiPoint):
 
         """
         if mode == 'standard':
-            return geometry.MultiPoint(self)
+            return self._points
         elif mode == 'periodic':
-            return self.periodic_extension.union(self)
+            return self._points.union(self.periodic_extension)
         elif mode == 'plus':
-            return self.pluspoints.union(self)
+            return self._points.union(self.pluspoints)
         else:
             raise ValueError("unknown mode: {}".format(mode))
 
@@ -739,16 +802,16 @@ class PointPattern(geometry.MultiPoint):
                 r_enum = enumerate(r)
             except TypeError:
                 ew = window.buffer(-r)
-                intensity = len(self.intersection(ew)) / ew.area
+                intensity = len(self._points.intersection(ew)) / ew.area
             else:
                 intensity = numpy.zeros_like(r)
                 for (i, rval) in r_enum:
                     ew = window.buffer(-rval)
-                    intensity[i] = len(self.intersection(ew)) / ew.area
+                    intensity[i] = len(self._points.intersection(ew)) / ew.area
         elif mode == 'neighbor':
             intensity = 0.0
             for p in self:
-                nn_dist = p.distance(self.difference(p))
+                nn_dist = p.distance(self._points.difference(p))
                 if nn_dist <= p.distance(window.boundary):
                     intensity += 1.0 / window.buffer(-nn_dist).area
         else:
@@ -853,7 +916,7 @@ class PointPattern(geometry.MultiPoint):
         pmode, __ = self._edge_config(edge_correction)
 
         allpoints = self.points(mode=pmode)
-        distances = self.pairwise_distances(self, allpoints)
+        distances = self.pairwise_distances(self._points, allpoints)
         valid = numpy.logical_and(distances < rmax, distances != 0.0)
 
         index1, = numpy.nonzero(numpy.any(valid, axis=1))
@@ -881,12 +944,10 @@ class PointPattern(geometry.MultiPoint):
                           values:
             'finite': Translational edge correction used. Intensity estimated
                       by the standard intensity estimator.
-            'periodic': No edge correction used. Care is taken to avoid
-                        counting the same pair multiple times, under the
-                        assumption that self.pluspoints is a periodic extension
-                        of self.points as defined by self.window.lattice.
-                        Intensity estimated by the standard intensity
-                        estimator.
+            'periodic': No edge correction used, but points are assumed to
+                        repeat periodically in the pattern according to
+                        self.window.lattice. Intensity estimated by the
+                        standard intensity estimator.
             'plus': No edge correction used. Intensity estimated by the
                     standard intensity estimator.
             'stationary': Translational edge correction used. Intensity
@@ -1053,7 +1114,7 @@ class PointPattern(geometry.MultiPoint):
             axes.set(xlim=(cent.x - diag, cent.x + diag),
                      ylim=(cent.y - diag, cent.y + diag))
 
-        pp = numpy.asarray(self)
+        pp = numpy.asarray(self._points)
         h = axes.plot(pp[:, 0], pp[:, 1], linestyle='None', marker=marker,
                       **kwargs)
 
