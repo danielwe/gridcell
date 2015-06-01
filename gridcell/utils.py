@@ -162,30 +162,48 @@ def sensibly_divide(num, denom, masked=False):
     :returns: num / denom, sensibly
 
     """
-    num_bc, denom_bc = (numpy.array(a, dtype=numpy.float_, copy=True)
-                        for a in numpy.broadcast_arrays(num, denom))
+    # Get broadcasted views
+    num_bc, denom_bc = numpy.broadcast_arrays(num, denom)
 
+    if isinstance(num, numpy.ma.MaskedArray):
+        # Apply mask to broadcasted view
+        num_bc_mask, __ = numpy.broadcast_arrays(
+            numpy.ma.getmaskarray(num), denom)
+        num_bc = numpy.ma.array(num_bc, mask=num_bc_mask)
+        num_bc_float = numpy.ma.array(num_bc, dtype=numpy.float_,
+                                      keep_mask=True)
+    else:
+        num_bc_float = numpy.array(num_bc, dtype=numpy.float_)
+
+    if isinstance(denom, numpy.ma.MaskedArray):
+        # Apply mask to broadcasted view
+        __, denom_bc_mask = numpy.broadcast_arrays(
+            num, numpy.ma.getmaskarray(denom))
+        denom_bc = numpy.ma.array(denom_bc, mask=denom_bc_mask)
+        denom_bc_float = numpy.ma.array(denom_bc, dtype=numpy.float_,
+                                        copy=True, keep_mask=True)
+    else:
+        denom_bc_float = numpy.array(denom_bc, dtype=numpy.float_, copy=True)
+
+    # Identify potentially problematic locations
     #denom_zero = numpy.isclose(denom_bc, 0.0)
-    denom_zero = (denom_bc == 0.0)
+    denom_zero = (denom_bc_float == 0.0)
     if numpy.any(denom_zero):
-        #num_zero_or_nan = numpy.logical_or(numpy.isclose(num_bc, 0.0),
-        #                                   numpy.isnan(num_bc))
-        num_zero_or_nan = numpy.logical_or(num_bc == 0.0,
-                                           numpy.isnan(num_bc))
-        match = numpy.logical_and(denom_zero, num_zero_or_nan)
-        denom_bc[match] = numpy.nan
+        #num_zero_or_nan = numpy.logical_or(numpy.isclose(num_bc_float, 0.0),
+        #                                   numpy.isnan(num_bc_float))
+        num_zero_or_nan = numpy.logical_or(num_bc_float == 0.0,
+                                           numpy.isnan(num_bc_float))
+        problems = numpy.logical_and(denom_zero, num_zero_or_nan)
 
-        if isinstance(denom, numpy.ma.MaskedArray):
-            __, mask_bc = numpy.broadcast_arrays(num,
-                                                 numpy.ma.getmaskarray(denom))
-            denom = numpy.ma.masked_where(mask_bc, denom_bc)
-        else:
-            denom = denom_bc
-
+        # Either mask the problematic locations, or set them to nan
         if masked:
-            denom = numpy.ma.masked_where(match, denom)
+            denom_bc = numpy.ma.masked_where(problems, denom_bc)
+        else:
+            # denom_bc_float is a copy (safe to modify), and float (takes nan)
+            denom_bc = denom_bc_float
+            denom_bc[problems] = numpy.nan
 
-    return num / denom
+    return num_bc / denom_bc
 
 
 def add_ticks(axis, ticklocs, ticklabels):
