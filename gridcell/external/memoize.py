@@ -168,7 +168,7 @@ class memoize_method(object):
     # OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
     # USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-    CACHE_NAME = '_memoize_method_cache'
+    cache_name = '_memoize_method_cache'
 
     def __init__(self, f):
         self._f = f
@@ -185,10 +185,10 @@ class memoize_method(object):
         obj = args[0]
 
         try:
-            cache = getattr(obj, self.CACHE_NAME)
+            cache = getattr(obj, self.cache_name)
         except AttributeError:
             cache = {}
-            setattr(obj, self.CACHE_NAME, cache)
+            setattr(obj, self.cache_name, cache)
 
         try:
             key = (f.__name__, args[1:], frozenset(kwargs.items()))
@@ -224,7 +224,7 @@ class memoize_method(object):
 
         """
         try:
-            cache = getattr(obj, cls.CACHE_NAME)
+            cache = getattr(obj, cls.cache_name)
         except AttributeError:
             pass
         else:

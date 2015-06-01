@@ -46,7 +46,7 @@ class Window(geometry.Polygon):
     """
 
     def __reduce__(self):
-        memcache = memoize_method.CACHE_NAME
+        memcache = memoize_method.cache_name
         red = list(geometry.Polygon.__reduce__(self))
         red[2] = {'state': red[2],
                   memcache: getattr(self, memcache)}
