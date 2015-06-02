@@ -1131,7 +1131,7 @@ class IntensityMap(AlmostImmutable):
         else:
             raise ValueError("unknown filter {}".format(filter_))
 
-        new_data = _safe_mmap(normalized, smoothfunc, self.data)
+        new_data = _safe_mmap(normalized, smoothfunc, (self.data,))
 
         return self.__class__(new_data, self.bset)
 
@@ -1170,7 +1170,7 @@ class IntensityMap(AlmostImmutable):
         def convfunc(arr1, arr2):
             return signal.convolve(arr1, arr2, mode=mode)
 
-        new_data = _safe_mmap(normalized, convfunc, sdata, odata)
+        new_data = _safe_mmap(normalized, convfunc, (sdata, odata))
 
         return self.__class__(new_data, new_bset)
 
@@ -1218,7 +1218,7 @@ class IntensityMap(AlmostImmutable):
         def corrfunc(arr1, arr2):
             return signal.correlate(arr1, arr2, mode=mode)
 
-        new_data = _safe_mmap(normalized, corrfunc, sdata, odata)
+        new_data = _safe_mmap(normalized, corrfunc, (sdata, odata))
 
         return self.__class__(new_data, new_bset)
 
@@ -1598,7 +1598,7 @@ class IntensityMap2D(IntensityMap):
         return axes, cbar
 
 
-def _safe_mmap(normalized, mapfunc, *arrs):
+def _safe_mmap(normalized, mapfunc, arrs):
     """
     Safely compute a general multilinear map (e.g. filtering, convolution) over
     any number of arrays, optionally normalizing the result to eliminate the
@@ -1616,9 +1616,10 @@ def _safe_mmap(normalized, mapfunc, *arrs):
                  the map is applied without normalization, and the presence of
                  nans or masked values in any of the arrays will raise
                  a ValueError.
-    :mapfunc: callable defining the multilinear map: mapfunc(*arrs) returns the
+    :mapfunc: callable defining the multilinear map: mapfunc(arrs) returns the
               unnormalized mapping
-    :arrs: list of arrays to compute the map over
+    :arrs: argument list to `mapfunc`, containing the arrays to compute the map
+           over
     :returns: result of the mapping, optionally normalized. If normalized, the
               result is masked where only missing values would have
               contributed.
