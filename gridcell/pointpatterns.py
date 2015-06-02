@@ -1023,6 +1023,37 @@ class PointPattern(AlmostImmutable):
         offset = numpy.hstack((lvals_high - rsteps, lvals_low - rsteps))
         return numpy.nanmax(numpy.abs(offset))
 
+    def _rvals(self, edge_correction):
+        """
+        Construct an array of r values tailored for the empirical K/L-functions
+
+        The returned array contains a pair of tightly spaced values around each
+        vertical step in the K/L-functions, and evenly spaced r values with
+        moderate resolution elsewhere.
+
+        Parameters
+        ----------
+        edge_correction : {'finite', 'periodic', 'plus', 'stationary',
+                           'isotropic'}, optional
+            Flag to select the handling of edges. See the documentation for
+            PointPattern.kfunction() for details.
+
+        Returns
+        -------
+        array
+            Array of r values tailored to the empirical K/L-functions
+
+        """
+        rmax = self.window.rmax(edge_correction)
+        rvals = numpy.linspace(0.0, rmax, RSAMPLES)
+        # Get step locations
+        rsteps = self._kappasteps(edge_correction=edge_correction)[0][1:]
+        micrormax = 1.e-6 * rmax
+        # Add r values tightly around each step
+        rvals = numpy.sort(numpy.hstack((rvals, rsteps - micrormax,
+                                         rsteps + micrormax)))
+        return rvals
+
     def plot_kfunction(self, axes=None, edge_correction='stationary',
                        linewidth=2.0, csr=False, csr_kw=None, **kwargs):
         """
@@ -1055,8 +1086,7 @@ class PointPattern(AlmostImmutable):
         if axes is None:
             axes = pyplot.gca()
 
-        rmax = self.window.rmax(edge_correction)
-        rvals = numpy.linspace(0.0, rmax, 3 * RSAMPLES)
+        rvals = self._rvals(edge_correction)
         kvals = self.kfunction(rvals, edge_correction=edge_correction)
 
         lines = axes.plot(rvals, kvals, linewidth=linewidth, **kwargs)
@@ -1102,8 +1132,7 @@ class PointPattern(AlmostImmutable):
         if axes is None:
             axes = pyplot.gca()
 
-        rmax = self.window.rmax(edge_correction)
-        rvals = numpy.linspace(0.0, rmax, 3 * RSAMPLES)
+        rvals = self._rvals(edge_correction)
         lvals = self.lfunction(rvals, edge_correction=edge_correction)
 
         lines = axes.plot(rvals, lvals, linewidth=linewidth, **kwargs)
@@ -1637,7 +1666,7 @@ class PointPatternCollection(AlmostImmutable):
         if axes is None:
             axes = pyplot.gca()
 
-        rvals = numpy.linspace(0.0, self.rmax(edge_correction), 3 * RSAMPLES)
+        rvals = numpy.linspace(0.0, self.rmax(edge_correction), RSAMPLES)
         kvals_low = self.kcritical(low, rvals, edge_correction=edge_correction)
         kvals_high = self.kcritical(high, rvals,
                                     edge_correction=edge_correction)
@@ -1667,7 +1696,7 @@ class PointPatternCollection(AlmostImmutable):
         if axes is None:
             axes = pyplot.gca()
 
-        rvals = numpy.linspace(0.0, self.rmax(edge_correction), 3 * RSAMPLES)
+        rvals = numpy.linspace(0.0, self.rmax(edge_correction), RSAMPLES)
         kmean = self.kmean(rvals, edge_correction=edge_correction)
 
         h = axes.plot(rvals, kmean, **kwargs)
@@ -1698,7 +1727,7 @@ class PointPatternCollection(AlmostImmutable):
         if axes is None:
             axes = pyplot.gca()
 
-        rvals = numpy.linspace(0.0, self.rmax(edge_correction), 3 * RSAMPLES)
+        rvals = numpy.linspace(0.0, self.rmax(edge_correction), RSAMPLES)
         lvals_low = self.lcritical(low, rvals, edge_correction=edge_correction)
         lvals_high = self.lcritical(high, rvals,
                                     edge_correction=edge_correction)
@@ -1728,7 +1757,7 @@ class PointPatternCollection(AlmostImmutable):
         if axes is None:
             axes = pyplot.gca()
 
-        rvals = numpy.linspace(0.0, self.rmax(edge_correction), 3 * RSAMPLES)
+        rvals = numpy.linspace(0.0, self.rmax(edge_correction), RSAMPLES)
         lmean = self.lmean(rvals, edge_correction=edge_correction)
 
         h = axes.plot(rvals, lmean, **kwargs)
@@ -1769,7 +1798,7 @@ class PointPatternCollection(AlmostImmutable):
             axes = pyplot.gca()
 
         rmax = self.window.rmax(edge_correction)
-        rvals = numpy.linspace(0.0, rmax, 3 * RSAMPLES)
+        rvals = numpy.linspace(0.0, rmax, RSAMPLES)
         kvals = self.aggregate_kfunction(
             rvals, edge_correction=edge_correction)
 
@@ -1819,7 +1848,7 @@ class PointPatternCollection(AlmostImmutable):
             axes = pyplot.gca()
 
         rmax = self.window.rmax(edge_correction)
-        rvals = numpy.linspace(0.0, rmax, 3 * RSAMPLES)
+        rvals = numpy.linspace(0.0, rmax, RSAMPLES)
         lvals = self.aggregate_lfunction(
             rvals, edge_correction=edge_correction)
 
