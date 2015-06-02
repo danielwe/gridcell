@@ -50,7 +50,7 @@ class Window(geometry.Polygon):
         memcache = memoize_method.cache_name
         red = list(geometry.Polygon.__reduce__(self))
         red[2] = {'state': red[2],
-                  memcache: getattr(self, memcache)}
+                  memcache: getattr(self, memcache, {})}
         return tuple(red)
 
     def __setstate__(self, state):
