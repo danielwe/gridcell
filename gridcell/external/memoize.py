@@ -69,14 +69,16 @@ class memoize_function(object):
     # OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
     # USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+    cache_name = '_memoize_function_cache'
+
     def __init__(self, f):
         self._f = f
-        self._memoize_function_cache = {}
+        setattr(self, self.cache_name, {})
         update_wrapper(self, f)
 
     def __call__(self, *args, **kwargs):
         f = self._f
-        cache = self._memoize_function_cache
+        cache = getattr(self, self.cache_name)
 
         try:
             key = (args, frozenset(kwargs.items()))
@@ -104,7 +106,8 @@ class memoize_function(object):
         >>> types.clear_cache()  # cache on 'types' cleared
 
         """
-        self._memoize_function_cache.clear()
+        cache = getattr(self, self.cache_name)
+        cache.clear()
 
 
 class memoize_method(object):
