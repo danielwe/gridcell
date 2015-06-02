@@ -24,6 +24,7 @@ import numpy
 import pandas
 from scipy import integrate, optimize, interpolate
 from scipy.spatial import distance
+from scipy.stats import percentileofscore
 from shapely import geometry, affinity, ops, speedups
 from matplotlib import pyplot, patches
 
@@ -980,6 +981,48 @@ class PointPattern(AlmostImmutable):
         return numpy.sqrt(self.kfunction(r, edge_correction=edge_correction) /
                           numpy.pi)
 
+    @memoize_method
+    def lstatistic(self, edge_correction='stationary'):
+        """
+        Compute the L test statistic for CSR
+
+        The test statstic is defined as max(abs(L(r) - r)) for r-values between
+        zero and some maximum radius. Here, the radius of the largest inscribed
+        circle in self.window is used as maximum r-value.  Note that if
+        edge_correction == 'finite', the power of the L test may depend heavily
+        on the maximum r-value and the number of points in the pattern, and the
+        statistic computed by this function may not be adequate.
+
+        Parameters
+        ----------
+        edge_correction : {'finite', 'periodic', 'plus', 'stationary',
+                           'isotropic'}, optional
+            Flag to select the handling of edges. See the documentation for
+            PointPattern.kfunction() for details.
+
+        Returns
+        -------
+        scalar
+            the L test statistic
+
+        """
+        rmax = self.window.inscribed_circle['radius']
+        # The largest deviation between L(r) and r is bound to be at a vertical
+        # step. We go manual instead of using self.lfunction, in order to get
+        # it as exactly and cheaply as possible.
+        rsteps, kappa = self._kappasteps(edge_correction=edge_correction)
+        valid = rsteps < rmax
+        rsteps = rsteps[valid][1:]  # Nothing interesting at 0.0
+        kappa = kappa[valid]
+        __, imode = self._edge_config(edge_correction)
+        lambda2 = self.squared_intensity(mode=imode, r=rsteps)
+        # Compute the L-values just before and after each step
+        lvals_high = numpy.sqrt(sensibly_divide(kappa[1:], numpy.pi * lambda2))
+        lvals_low = numpy.sqrt(sensibly_divide(kappa[:-1], numpy.pi * lambda2))
+        # Compute the offset and return the maximum
+        offset = numpy.hstack((lvals_high - rsteps, lvals_low - rsteps))
+        return numpy.nanmax(numpy.abs(offset))
+
     def plot_kfunction(self, axes=None, edge_correction='stationary',
                        linewidth=2.0, csr=False, csr_kw=None, **kwargs):
         """
@@ -1214,6 +1257,25 @@ class PointPatternCollection(AlmostImmutable):
 
     def __len__(self):
         return self.patterns.__len__()
+
+    # Fun to consider:
+    #def __getattr__(self, name):
+    #    try:
+    #        return AlmostImmutable.__getattr__(self, name)
+    #    except AttributeError as e:
+    #        if name[-1] == 's':
+    #            try:
+    #                ppattr = getattr(PointPattern, name[:-1])
+    #            except AttributeError:
+    #                pass
+    #            else:
+    #
+    #                def aggregate(edge_correction='stationary'):
+    #                    return pandas.Series(
+    #                        [ppattr(pp, edge_correction=edge_correction)
+    #                         for pp in self.patterns])
+    #                return aggregate
+    #        raise e
 
     @property
     @memoize_method
@@ -1468,6 +1530,88 @@ class PointPatternCollection(AlmostImmutable):
         lvals = self.lframe(r, edge_correction=edge_correction)
         return lvals.mean(axis=0, skipna=True)
 
+    def lstatistics(self, edge_correction='stationary'):
+        """
+        Compute the L test statistic for CSR for each pattern in the collection
+
+        See `PointPattern.lstatistic` for details about the L test statistic.
+
+        Parameters
+        ----------
+        edge_correction : {'finite', 'periodic', 'plus', 'stationary',
+                           'isotropic'}, optional
+            Flag to select the handling of edges. See the documentation for
+            PointPattern.kfunction() for details.
+
+        Returns
+        -------
+        Series
+            Series containing the L test statistic for each pattern in the
+            collection.
+
+        """
+        return pandas.Series([pp.lstatistic(edge_correction=edge_correction)
+                              for pp in self.patterns])
+
+    def ltest(self, pattern, edge_correction='stationary'):
+        """
+        Perform an L test for CSR on a PointPattern, based on the distribution
+        of L test statictics from the patterns in this collection.
+
+        Parameters
+        ----------
+        pattern : PointPattern
+            PointPattern to perform the L test on.
+        edge_correction : {'finite', 'periodic', 'plus', 'stationary',
+                           'isotropic'}, optional
+            Flag to select the handling of edges. See the documentation for
+            PointPattern.kfunction() for details.
+
+        Returns
+        -------
+        scalar
+            The p-value of the L test statistic for `pattern`.
+
+        """
+        lstat = pattern.lstatistic(edge_correction=edge_correction)
+        ldist = self.lstatistics(edge_correction=edge_correction).dropna()
+        return 1.0 - 0.01 * percentileofscore(ldist, lstat, kind='mean')
+
+    def histogram(self, attribute, edge_correction='stationary', **kwargs):
+        """
+        Compute the histogram of a statistic of the patterns in the collection
+
+        Parameters
+        ----------
+        attribute : {'lstatistic'}
+            Statistic for which to compute the histogram. The valid names
+            reflect the `PointPattern` attribute name for the corresponding
+            statistic.
+        edge_correction : {'finite', 'periodic', 'plus', 'stationary',
+                           'isotropic'}, optional
+            Flag to select the handling of edges. See the documentation for
+            PointPattern.kfunction() for details.
+        **kwargs : dict, optional
+            Keyword arguments passed to the `numpy.histogram` function.
+
+        Returns
+        -------
+        hist: array
+            The values of the histogram. See `numpy.histogram` for details.
+        bin_edges: array of dtype float
+            The bin edges: an array of length `len(hist) + 1` giving the edges
+            of the histogram bins.
+
+        """
+        try:
+            vals = getattr(self, attribute + 's')(
+                edge_correction=edge_correction)
+        except AttributeError:
+            vals = numpy.array(
+                [getattr(pp, attribute)(edge_correction=edge_correction)
+                 for pp in self.patterns])
+        return numpy.histogram(vals, **kwargs)
+
     def plot_kenvelope(self, axes=None, edge_correction='stationary',
                        low=0.025, high=0.975, alpha=0.25, **kwargs):
         """
@@ -1688,3 +1832,47 @@ class PointPatternCollection(AlmostImmutable):
             lines += axes.plot(rvals, rvals, linestyle='dashed', **csr_kw)
 
         return lines
+
+    def plot_histogram(self, attribute, axes=None,
+                       edge_correction='stationary', histtype='stepfilled',
+                       **kwargs):
+        """
+        Plot the histogram of a statistic of the patterns in the collection
+
+        Parameters
+        ----------
+        attribute : {'lstatistic'}
+            Statistic for which to plot the histogram. See the documentation
+            for `PointPatternCollection.histogram` for details.
+        axes : Axes
+            Axes instance to add the histogram to. If None (default), the
+            current Axes instance is used if any, or a new one created.
+        edge_correction : {'finite', 'periodic', 'plus', 'stationary',
+                           'isotropic'}, optional
+            Flag to select the handling of edges. See the documentation for
+            PointPattern.kfunction() for details.
+        histtype : {'bar', 'step', 'stepfilled'}, optional
+            The type of histogram to draw. See the documentation for
+            `pyplot.hist` for details. Note that 'barstacked' is not a relevant
+            option in this case, since a `PointPatternCollection` only provides
+            a single set of data.
+        **kwargs : dict, optional
+            Keyword arguments passed to the `pyplot.hist` function.
+
+        Returns
+        -------
+        list
+            List of matplotlib patches used to create the histogram.
+
+        """
+        if axes is None:
+            axes = pyplot.gca()
+
+        try:
+            vals = getattr(self, attribute + 's')(
+                edge_correction=edge_correction)
+        except AttributeError:
+            vals = numpy.array(
+                [getattr(pp, attribute)(edge_correction=edge_correction)
+                 for pp in self.patterns])
+        return axes.hist(vals, histtype=histtype, **kwargs)[2]
