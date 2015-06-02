@@ -879,6 +879,56 @@ class IntensityMap(AlmostImmutable):
         """
         return self.__class__(self.data.astype(dtype), self.bset)
 
+    @staticmethod
+    def mean_map(maps, ignore_missing=True):
+        """
+        Compute the mean of a sequence of intensity maps
+
+        Parameters
+        ----------
+        maps : iterable
+            Sequence or iterable yielding maps to compute the mean over.
+            A ValueError is raised if not all maps in the sequence are defined
+            over equal-comparing BinnedSets.
+        ignore_missing : bool, optional
+            If True, missing values are ignored, and the mean value in a bin is
+            the mean of all the non-missing values in this bin from `maps`. If
+            False, any bin where at least one map in `maps` has a missing value
+            will be have a missing value in the output.
+
+        Returns
+        -------
+        IntensityMap
+            Map of the mean of the intensities in `maps`.
+
+        """
+        maps = iter(maps)  # We accept iterators/generators
+        ref_map = maps.next()
+        ref_bset = ref_map.bset
+
+        data = ref_map.data
+        new_data = numpy.ma.filled(data, fill_value=0.0)
+        num_valid = (~numpy.ma.getmaskarray(data)).astype(numpy.int_)
+        length = 0  # Since iterators have no len(), we must sum it up manually
+        for map_ in maps:  # No [1:]: the first element was consumed by .next()
+            if not (map_.bset == ref_bset):
+                raise ValueError("instances of {} must be defined over "
+                                 "instances of {} that compare equal for "
+                                 "the mean to be defined"
+                                 .format(ref_map.__class__.__name__,
+                                         ref_bset.__class__.__name__))
+            data = map_.data
+            new_data += numpy.ma.filled(data, fill_value=0.0)
+            num_valid += (~numpy.ma.getmaskarray(data)).astype(numpy.int_)
+            length += 1
+
+        new_data = sensibly_divide(new_data, num_valid, masked=True)
+        if not ignore_missing:
+            full_mask = (num_valid < length)
+            new_data = numpy.ma.array(new_data, mask=full_mask, keep_mask=True)
+
+        return ref_map.__class__(new_data, ref_bset)
+
     @memoize_method
     def mean(self):
         """

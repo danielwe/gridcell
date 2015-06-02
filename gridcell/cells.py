@@ -1590,7 +1590,9 @@ class CellCollection(AlmostImmutable, Mapping):
                 imap = _norm(imap)
                 return (imap > threshold).astype(numpy.float_)
 
-        return sum(norm(cell.firing_rate) for cell in cells) / len(cells)
+        return IntensityMap2D.mean_map((norm(cell.firing_rate)
+                                        for cell in cells),
+                                       ignore_missing=True)
 
     @memoize_method
     def distances(self, keys1=None, keys2=None):
