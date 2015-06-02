@@ -2048,13 +2048,25 @@ class Module(CellCollection):
         return phases
 
     @memoize_method
-    def phase_pattern(self, keys=None):
+    def phase_pattern(self, edge_correction='periodic', keys=None):
         """
         Create a PointPattern instance of the phases of the cells in the module
 
-        :keys: sequence of cell keys to select cells for which to include the
-               phase in the PointPattern. If None, all cells are included.
-        :returns: PointPattern instance
+        Parameters
+        ----------
+        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
+                               'plus'}, optional
+            String to select the default edge handling to apply in computations
+            involving the returned PointPattern instance. See the documentation
+            for `PointPattern` for details.
+        keys : sequence
+            Keys to select cells from which to include the phase in the
+            PointPattern. If None, all cells are included.
+
+        Returns
+        -------
+        PointPattern
+            PointPattern instance representning the phases.
 
         """
         phases = self.phases(keys=keys).values()
@@ -2063,31 +2075,43 @@ class Module(CellCollection):
         angles = numpy.arctan2(window[:, 1], window[:, 0])
         sort_ind = numpy.argsort(angles)
         window = window[sort_ind]
-        return PointPattern(phases, window)
+        return PointPattern(phases, window, edge_correction=edge_correction)
 
     @memoize_method
-    def simulate_phase_patterns(self, process='binomial', nsims=1000,
-                                keys=None):
+    def simulate_phase_patterns(self, nsims=100, process='binomial',
+                                edge_correction='periodic', keys=None):
         """
         Simulate a number of point processes in the same window, and of the
         same intensity, as the phase pattern for this module
 
-        :process: string specifying the process to simulate. Possible values:
-                  'binomial', 'poisson'
-        :nsims: the number of patterns to generate from the process
-        :keys: sequence of cell keys to select cells whose phases make up the
-               PointPattern instance that underlies the simulation. If None,
-               all cells are included.
-        :returns: a PointPatternCollection instance containing the simulated
-                  processes
+        Parameters
+        ----------
+        nsims : integer
+            The number of point patterns to generate.
+        process : str {'binomial', 'poisson'}, optional
+            String to select the kind of process to simulate.
+        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
+                               'plus'}, optional
+            String to select the default edge handling to apply in
+            computations involving the returned PointPatternCollection
+            instance. See the documentation for `PointPattern` for details.
+        keys : sequence
+            Keys to select cells whose phase pattern provides the window and
+            intensity for the simulation. If None, all cells are included.
+
+        Returns
+        -------
+        PointPatternCollection
+            Collection of the simulated patterns.
 
         """
-        phase_pattern = self.phase_pattern(keys=keys)
+        phase_pattern = self.phase_pattern(edge_correction=edge_correction,
+                                           keys=keys)
         window = phase_pattern.window
-        intensity = phase_pattern.intensity(mode='standard')
-        return PointPatternCollection.from_simulation(window, intensity,
-                                                      process=process,
-                                                      nsims=nsims)
+        intensity = phase_pattern.intensity()
+        return PointPatternCollection.from_simulation(
+            nsims, window, intensity, process=process,
+            edge_correction=edge_correction)
 
     def plot_phases(self, axes=None, keys=None, periodic=False, **kwargs):
         """
@@ -2113,8 +2137,7 @@ class Module(CellCollection):
         return phase_pattern.plot_pattern(axes=axes, periodic=periodic,
                                           **kwargs)
 
-    def plot_phase_k(self, axes=None, keys=None, edge_correction='periodic',
-                     **kwargs):
+    def plot_phase_k(self, axes=None, keys=None, **kwargs):
         """
         Plot the empirical K-function for the grid phase point pattern
 
@@ -2125,9 +2148,6 @@ class Module(CellCollection):
                PointPattern.plot_kfunction() method.
         :keys: sequence of cell keys to select cells to include in the
                phase pattern. If None, all cells are included.
-        :edge_correction: flag to select the edge_correction to use in the
-                          K-function. See the documentation for
-                          PointPattern.kfunction() for details.
         :kwargs: additional keyword arguments passed on to the
                  PointPattern.plot_kfunction() method. Note in particular the
                  keywords 'csr' and 'csr_kw'.
@@ -2136,12 +2156,9 @@ class Module(CellCollection):
 
         """
         phase_pattern = self.phase_pattern(keys=keys)
-        return phase_pattern.plot_kfunction(axes=axes,
-                                            edge_correction=edge_correction,
-                                            **kwargs)
+        return phase_pattern.plot_kfunction(axes=axes, **kwargs)
 
-    def plot_phase_l(self, axes=None, keys=None, edge_correction='periodic',
-                     **kwargs):
+    def plot_phase_l(self, axes=None, keys=None, **kwargs):
         """
         Plot the empirical L-function for the grid phase point pattern
 
@@ -2152,9 +2169,6 @@ class Module(CellCollection):
                PointPattern.plot_lfunction() method.
         :keys: sequence of cell keys to select cells to include in the
                phase pattern. If None, all cells are included.
-        :edge_correction: flag to select the edge_correction to use in the
-                          L-function. See the documentation for
-                          PointPattern.lfunction() for details.
         :kwargs: additional keyword arguments passed on to the
                  PointPattern.plot_lfunction() method. Note in particular the
                  keywords 'csr' and 'csr_kw'.
@@ -2163,13 +2177,10 @@ class Module(CellCollection):
 
         """
         phase_pattern = self.phase_pattern(keys=keys)
-        return phase_pattern.plot_lfunction(axes=axes,
-                                            edge_correction=edge_correction,
-                                            **kwargs)
+        return phase_pattern.plot_lfunction(axes=axes, **kwargs)
 
-    def plot_phase_kenvelope(self, axes=None, process='binomial', nsims=1000,
-                             keys=None, edge_correction='periodic', low=0.025,
-                             high=0.975, **kwargs):
+    def plot_phase_kenvelope(self, nsims=100, process='binomial', axes=None,
+                             keys=None, low=0.025, high=0.975, **kwargs):
         """
         Plot an envelope of empirical K-function values
 
@@ -2179,17 +2190,14 @@ class Module(CellCollection):
         The envelope can be added to an existing plot via the optional 'axes'
         argument.
 
-        :axes: Axes instance to add the envelope to. If None (default), the
-               current Axes instance is used if any, or a new one created.
+        :nsims: the number of patterns to generate from the process
         :process: string specifying the process to simulate. Possible values:
                   'binomial', 'poisson'
-        :nsims: the number of patterns to generate from the process
+        :axes: Axes instance to add the envelope to. If None (default), the
+               current Axes instance is used if any, or a new one created.
         :keys: sequence of cell keys to select cells whose phases make up the
                PointPattern instance that underlies the simulation. If None,
                all cells are included.
-        :edge_correction: flag to select the handling of edges. See the
-                          documentation for PointPattern.kfunction() for
-                          details.
         :low: percentile defining the lower edge of the envelope
         :high: percentile defining the higher edge of the envelope
         :kwargs: additional keyword arguments passed on to the
@@ -2199,13 +2207,12 @@ class Module(CellCollection):
         :returns: the PolyCollection instance filling the envelope.
 
         """
-        sims = self.simulate_phase_patterns(process=process, nsims=nsims,
+        sims = self.simulate_phase_patterns(nsims=nsims, process=process,
                                             keys=keys)
-        return sims.plot_kenvelope(axes=axes, edge_correction=edge_correction,
-                                   low=low, high=high, **kwargs)
+        return sims.plot_kenvelope(axes=axes, low=low, high=high, **kwargs)
 
-    def plot_phase_kmean(self, axes=None, process='binomial', nsims=1000,
-                         keys=None, edge_correction='periodic', **kwargs):
+    def plot_phase_kmean(self, nsims=100, process='binomial', axes=None, keys=None,
+                         **kwargs):
         """
         Plot the mean of empirical K-function values
 
@@ -2215,31 +2222,26 @@ class Module(CellCollection):
         The mean can be added to an existing plot via the optional 'axes'
         argument.
 
-        :axes: Axes instance to add the mean to. If None (default), the current
-               Axes instance is used if any, or a new one created.
+        :nsims: the number of patterns to generate from the process
         :process: string specifying the process to simulate. Possible values:
                   'binomial', 'poisson'
-        :nsims: the number of patterns to generate from the process
+        :axes: Axes instance to add the mean to. If None (default), the current
+               Axes instance is used if any, or a new one created.
         :keys: sequence of cell keys to select cells whose phases make up the
                PointPattern instance that underlies the simulation. If None,
                all cells are included.
-        :edge_correction: flag to select the handling of edges. See the
-                          documentation for PointPattern.kfunction() for
-                          details.
         :kwargs: additional keyword arguments passed on to the
                  PointPatternCollection.plot_kmean() method. Note in particular
                  the keywords 'linewidth', 'linestyle', 'color', and 'label'.
         :returns: list containing the Line2D of the plotted mean.
 
         """
-        sims = self.simulate_phase_patterns(process=process, nsims=nsims,
+        sims = self.simulate_phase_patterns(nsims=nsims, process=process,
                                             keys=keys)
-        return sims.plot_kmean(axes=axes, edge_correction=edge_correction,
-                               **kwargs)
+        return sims.plot_kmean(axes=axes, **kwargs)
 
-    def plot_phase_lenvelope(self, axes=None, process='binomial', nsims=1000,
-                             keys=None, edge_correction='periodic', low=0.025,
-                             high=0.975, **kwargs):
+    def plot_phase_lenvelope(self, nsims=100, process='binomial', axes=None,
+                             keys=None, low=0.025, high=0.975, **kwargs):
         """
         Plot an envelope of empirical L-function values
 
@@ -2249,17 +2251,14 @@ class Module(CellCollection):
         The envelope can be added to an existing plot via the optional 'axes'
         argument.
 
-        :axes: Axes instance to add the envelope to. If None (default), the
-               current Axes instance is used if any, or a new one created.
+        :nsims: the number of patterns to generate from the process
         :process: string specifying the process to simulate. Possible values:
                   'binomial', 'poisson'
-        :nsims: the number of patterns to generate from the process
+        :axes: Axes instance to add the envelope to. If None (default), the
+               current Axes instance is used if any, or a new one created.
         :keys: sequence of cell keys to select cells whose phases make up the
                PointPattern instance that underlies the simulation. If None,
                all cells are included.
-        :edge_correction: flag to select the handling of edges. See the
-                          documentation for PointPattern.kfunction() for
-                          details.
         :low: percentile defining the lower edge of the envelope
         :high: percentile defining the higher edge of the envelope
         :kwargs: additional keyword arguments passed on to the
@@ -2269,13 +2268,12 @@ class Module(CellCollection):
         :returns: the PolyCollection instance filling the envelope.
 
         """
-        sims = self.simulate_phase_patterns(process=process, nsims=nsims,
+        sims = self.simulate_phase_patterns(nsims=nsims, process=process,
                                             keys=keys)
-        return sims.plot_lenvelope(axes=axes, edge_correction=edge_correction,
-                                   low=low, high=high, **kwargs)
+        return sims.plot_lenvelope(axes=axes, low=low, high=high, **kwargs)
 
-    def plot_phase_lmean(self, axes=None, process='binomial', nsims=1000,
-                         keys=None, edge_correction='periodic', **kwargs):
+    def plot_phase_lmean(self, nsims=100, process='binomial', axes=None, keys=None,
+                         **kwargs):
         """
         Plot the mean of empirical L-function values
 
@@ -2293,16 +2291,12 @@ class Module(CellCollection):
         :keys: sequence of cell keys to select cells whose phases make up the
                PointPattern instance that underlies the simulation. If None,
                all cells are included.
-        :edge_correction: flag to select the handling of edges. See the
-                          documentation for PointPattern.kfunction() for
-                          details.
         :kwargs: additional keyword arguments passed on to the
                  PointPatternCollection.plot_lmean() method. Note in particular
                  the keywords 'linewidth', 'linestyle', 'color', and 'label'.
         :returns: list containing the Line2D of the plotted mean.
 
         """
-        sims = self.simulate_phase_patterns(process=process, nsims=nsims,
+        sims = self.simulate_phase_patterns(nsims=nsims, process=process,
                                             keys=keys)
-        return sims.plot_lmean(axes=axes, edge_correction=edge_correction,
-                               **kwargs)
+        return sims.plot_lmean(axes=axes, **kwargs)
