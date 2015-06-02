@@ -154,20 +154,18 @@ class BinnedSet(AlmostImmutable):
 
     def __eq__(self, other):
         """
-        Define equality as the approximate equality of all bin edge arrays
-
-        The precise definition of approximately equal is left to
-        numpy.allclose()
+        Define equality as the equality of all bin edge arrays
 
         :other: another BinnedSet instance
         :returns: True if equal, otherwise False
 
         """
+        if other is self:
+            return True
+
         sedges, oedges = self.edges, other.edges
-        equal = ((len(sedges) == len(oedges)) and
-                 all(numpy.allclose(se, oe)
-                     for (se, oe) in zip(sedges, oedges)))
-        return equal
+        return ((len(sedges) == len(oedges)) and
+                all(numpy.all(se == oe) for (se, oe) in zip(sedges, oedges)))
 
     def __ne__(self, other):
         return not self.__eq__(other)
