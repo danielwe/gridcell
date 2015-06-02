@@ -578,8 +578,8 @@ class BaseCell(AlmostImmutable):
 
         :other: another Cell instance.
         :mode: string indicating the size of the output. See
-               IntensityMap2D.autocorrelate() for details. Valid options:
-               'full', 'valid', 'same'. Default is 'full'.
+               IntensityMap2D.correlate() for details. Valid options: 'full',
+               'valid', 'same'. Default is 'full'.
         :pearson: if True, the IntensityMap instances are normalized to mean
                   0.0 and variance 1.0 before correlating. The result of the
                   computation will then be the Pearson product-moment
