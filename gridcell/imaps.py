@@ -1455,7 +1455,7 @@ class IntensityMap2D(IntensityMap):
         :threshold: lower bound for scale-space maxima (that is, the minimum
                     height of detected peaks in the arrays created by passing
                     the intensity array through a Gaussian-Laplace filter). If
-                    None (default), the value self.data.min() + (1 / 3)
+                    None (default), the value self.data.min() + 0.2
                     * self.data.ptp() will be used.
         :overlap: maximum fraction of overlap of two detected blobs.
                   If any two blobs overlap by a greater fraction than this, the
@@ -1521,12 +1521,13 @@ class IntensityMap2D(IntensityMap):
         else:
             max_sigma /= binwidth
         if threshold is None:
-            threshold = data.min() + (1.0 / 3.0) * data.ptp()
+            threshold = data.min() + 0.2 * data.ptp()
 
         blob_indices = feature.blob_log(data, min_sigma=min_sigma,
                                         max_sigma=max_sigma,
                                         num_sigma=num_sigma,
                                         threshold=threshold,
+                                        overlap=overlap,
                                         log_scale=log_scale)
         try:
             blob_list = blob_indices[:, :2]
