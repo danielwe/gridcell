@@ -812,7 +812,7 @@ class PointPattern(AlmostImmutable):
         window : Window
             Window in which the points take values.
         edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
-                           'plus'}
+                               'plus'}
             String to select the edge handling to apply in computations. See
             the documentation for `PointPattern` for details.
 
@@ -846,7 +846,7 @@ class PointPattern(AlmostImmutable):
         Parameters
         ----------
         edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
-                           'plus'}
+                               'plus'}
             String to select the edge handling to apply in computations. See
             the documentation for `PointPattern` for details.
 
@@ -860,7 +860,7 @@ class PointPattern(AlmostImmutable):
         rvals = numpy.linspace(0.0, rmax, RSAMPLES)
 
         # Get step locations
-        rsteps = self._kappasteps(edge_correction=edge_correction)[0][1:]
+        rsteps, __ = self._estimator_base(edge_correction=edge_correction)
         micrormax = 1.e-6 * rmax
 
         # Add r values tightly around each step
@@ -871,8 +871,8 @@ class PointPattern(AlmostImmutable):
     @staticmethod
     def pair_weights(window, mp1, mp2, edge_correction):
         """
-        Compute the weights that a pairs of points in a window contribute in
-        the estimation of second-order summary characteristics
+        Compute the weights that pairs of points in a window contribute in the
+        estimation of second-order summary characteristics
 
         Parameters
         ----------
@@ -881,7 +881,7 @@ class PointPattern(AlmostImmutable):
         mp1, mp2 : MultiPoint
             MultiPoint instances containing the points to pair up.
         edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
-                           'plus'}
+                               'plus'}
             String to select the edge handling to apply in computations. See
             the documentation for `PointPattern` for details.
 
@@ -962,27 +962,29 @@ class PointPattern(AlmostImmutable):
                              .format(edge_correction))
 
     @memoize_method
-    def _kappasteps(self, edge_correction):
+    def _estimator_base(self, edge_correction):
         """
-        Compute the steps in the numerator of empirical K-function of the point
-        pattern
+        Compute the distances between pairs of points in the pattern, and the
+        weights they contribute in the estimation of second-order
+        characteristics
 
         Parameters
         ----------
         edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
-                           'plus'}
+                               'plus'}
             String to select the edge handling to apply in computations. See
             the documentation for `PointPattern` for details.
 
         Returns
         -------
-        rsteps: array
-            Array of r values where the numerator of the empirical K-function
-            steps up
-        kappasteps: array
-            Array with values of the numerator of the empirical K-function.
-            Between rsteps[i] and rsteps[i + 1], the numerator has the value
-            kappasteps[i].
+        r : array
+            Array of containing the pairwise distances in the point pattern,
+            sorted from small to large. Only pairs that actually contribute
+            with the selected edge correction are included.
+        weights : array
+            Array containing the weights associated with pairs in the point
+            pattern, sorted such that weights[i] gives the weight of the pair
+            with distance r[i].
 
         """
         window = self.window
@@ -999,15 +1001,14 @@ class PointPattern(AlmostImmutable):
         mp2 = geometry.MultiPoint([allpoints[i] for i in index2])
         weight_matrix = self.pair_weights(window, mp1, mp2, edge_correction)
 
-        rsteps = distances[valid]
-        sort_ind = numpy.argsort(rsteps)
-        rsteps = numpy.hstack((0.0, rsteps[sort_ind], rmax))
+        r = distances[valid]
+        sort_ind = numpy.argsort(r)
+        r = r[sort_ind]
 
         weights = weight_matrix[valid[index1, :][:, index2]]
-        weights = numpy.hstack((0.0, weights[sort_ind]))
-        kappasteps = numpy.append(numpy.cumsum(weights), numpy.nan)
+        weights = weights[sort_ind]
 
-        return rsteps, kappasteps
+        return r, weights
 
     def kfunction(self, r, edge_correction=None):
         """
@@ -1018,7 +1019,7 @@ class PointPattern(AlmostImmutable):
         r : array-like
             array of values at which to evaluate the emprical K-function.
         edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
-                           'plus'}, optional
+                               'plus'}, optional
             String to select the edge handling to apply in computations. See
             the documentation for `PointPattern` for details.
             If not supplied, the edge correction falls back to the default
@@ -1033,11 +1034,17 @@ class PointPattern(AlmostImmutable):
         if edge_correction is None:
             edge_correction = self._edge_correction
 
-        imode = self._edge_config[edge_correction]['imode']
-        rsteps, kappasteps = self._kappasteps(edge_correction=edge_correction)
+        rmax = self.rmax(self.window, edge_correction)
+        rsteps, weights = self._estimator_base(edge_correction=edge_correction)
+        rsteps = numpy.hstack((0.0, rsteps, rmax))
+        weights = numpy.hstack((0.0, weights, numpy.nan))
+        numsteps = numpy.cumsum(weights)
+
         indices = numpy.searchsorted(rsteps, r, side='right') - 1
+
+        imode = self._edge_config[edge_correction]['imode']
         lambda2 = self.squared_intensity(mode=imode, r=r)
-        return sensibly_divide(kappasteps[indices], lambda2)
+        return sensibly_divide(numsteps[indices], lambda2)
 
     def lfunction(self, r, edge_correction=None):
         """
@@ -1048,7 +1055,7 @@ class PointPattern(AlmostImmutable):
         r : array-like
             array of values at which to evaluate the emprical K-function.
         edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
-                           'plus'}, optional
+                               'plus'}, optional
             String to select the edge handling to apply in computations. See
             the documentation for `PointPattern` for details.
             If not supplied, the edge correction falls back to the default
@@ -1067,7 +1074,7 @@ class PointPattern(AlmostImmutable):
                           numpy.pi)
 
     @memoize_method
-    def lstatistic(self, edge_correction=None):
+    def lstatistic(self, rmin=None, rmax=None, edge_correction=None):
         """
         Compute the L test statistic for CSR
 
@@ -1080,8 +1087,16 @@ class PointPattern(AlmostImmutable):
 
         Parameters
         ----------
+        rmin : scalar
+            The minimum r value to use when computing the statistic. If None,
+            the value :math:`0.2 / \sqrt(\lambda)`, is used, where
+            :math:`\lambda` is the standard intensity estimate for the process.
+        rmax : scalar
+            The maximum r value to use when computing the statistic. If None,
+            the radius of the largest inscribed circle in the window of the
+            point pattern is used.
         edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
-                           'plus'}, optional
+                               'plus'}, optional
             String to select the edge handling to apply in computations. See
             the documentation for `PointPattern` for details.
             If not supplied, the edge correction falls back to the default
@@ -1096,25 +1111,81 @@ class PointPattern(AlmostImmutable):
         if edge_correction is None:
             edge_correction = self._edge_correction
 
-        rmax = self.window.inscribed_circle['radius']
+        if rmin is None:
+            rmin = 0.2 / numpy.sqrt(self.intensity())
+
+        r_absolute_max = self.rmax(self.window, edge_correction)
+        if rmax is None:
+            rmax = self.window.inscribed_circle['radius']
+        rmax = min(rmax, r_absolute_max)
 
         # The largest deviation between L(r) and r is bound to be at a vertical
         # step. We go manual instead of using self.lfunction, in order to get
         # it as exactly and cheaply as possible.
-        rsteps, kappa = self._kappasteps(edge_correction=edge_correction)
-        valid = (rsteps < rmax)
-        rsteps = rsteps[valid][1:]  # Nothing interesting at 0.0
+        rsteps, weights = self._estimator_base(edge_correction=edge_correction)
+        rsteps = numpy.hstack((0.0, rsteps, r_absolute_max))
+        valid = numpy.logical_and(rsteps > rmin, rsteps < rmax)
+        rsteps = rsteps[valid]
+        weights = numpy.hstack((0.0, weights, numpy.nan))
+        numsteps = numpy.cumsum(weights)
+        numsteps_high = numsteps[valid]
+        numsteps_low = numsteps[numpy.roll(valid, -1)]
 
         # Compute the L-values just before and after each step
         imode = self._edge_config[edge_correction]['imode']
-        kappa = kappa[valid]
         lambda2 = self.squared_intensity(mode=imode, r=rsteps)
-        lvals_high = numpy.sqrt(sensibly_divide(kappa[1:], numpy.pi * lambda2))
-        lvals_low = numpy.sqrt(sensibly_divide(kappa[:-1], numpy.pi * lambda2))
+        lvals_high = numpy.sqrt(sensibly_divide(numsteps_high,
+                                                numpy.pi * lambda2))
+        lvals_low = numpy.sqrt(sensibly_divide(numsteps_low,
+                                               numpy.pi * lambda2))
 
         # Compute the offset and return the maximum
         offset = numpy.hstack((lvals_high - rsteps, lvals_low - rsteps))
         return numpy.nanmax(numpy.abs(offset))
+
+    def pair_corr_function(self, r, bandwidth=None, edge_correction=None):
+        """
+        Evaluate the empirical pair correlation function of the point pattern
+
+        Parameters
+        ----------
+        r : array-like
+            array of values at which to evaluate the emprical pair correlation
+            function.
+        bandwidth : scalar
+            The bandwidth of the box kernel used to estimate the density of
+            points pairs at a given distance. If None, the bandwidth is
+            automatically chose as :math:`0.2 / \sqrt(\lambda)`, where
+            :math:`\lambda` is the standard intensity estimate for the process.
+        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
+                               'plus'}, optional
+            String to select the edge handling to apply in computations. See
+            the documentation for `PointPattern` for details.
+            If not supplied, the edge correction falls back to the default
+            value (set at instance initialization).
+
+        Returns
+        -------
+        array
+            Values of the empirical pair correlation function evaulated at `r`.
+
+        """
+        if edge_correction is None:
+            edge_correction = self._edge_correction
+
+        if bandwidth is None:
+            bandwidth = 0.2 / numpy.sqrt(self.intensity())
+
+        rpairs, weights = self._estimator_base(edge_correction=edge_correction)
+
+        # Find the contribution from each pair to each element in `r`
+        d = numpy.abs(r[numpy.newaxis, ...] - rpairs[..., numpy.newaxis])
+        num = numpy.sum((d < bandwidth) * weights[..., numpy.newaxis], axis=0)
+        num *= 1.0 / (4.0 * numpy.pi * r * bandwidth)
+
+        imode = self._edge_config[edge_correction]['imode']
+        lambda2 = self.squared_intensity(mode=imode, r=r)
+        return sensibly_divide(num, lambda2)
 
     def plot_kfunction(self, axes=None, edge_correction=None, linewidth=2.0,
                        csr=False, csr_kw=None, **kwargs):
@@ -1127,7 +1198,7 @@ class PointPattern(AlmostImmutable):
             Axes instance to add the K-function to. If None (default), the
             current Axes instance is used if any, or a new one created.
         edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
-                           'plus'}, optional
+                               'plus'}, optional
             String to select the edge handling to apply in computations. See
             the documentation for `PointPattern` for details.
             If not supplied, the edge correction falls back to the default
@@ -1183,7 +1254,7 @@ class PointPattern(AlmostImmutable):
             Axes instance to add the L-function to. If None (default), the
             current Axes instance is used if any, or a new one created.
         edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
-                           'plus'}, optional
+                               'plus'}, optional
             String to select the edge handling to apply in computations. See
             the documentation for `PointPattern` for details.
             If not supplied, the edge correction falls back to the default
@@ -1224,6 +1295,70 @@ class PointPattern(AlmostImmutable):
                 csr_kw = {}
 
             lines += axes.plot(rvals, rvals, linestyle='dashed', **csr_kw)
+
+        return lines
+
+    def plot_pair_corr_function(self, axes=None, bandwidth=None,
+                                edge_correction=None, linewidth=2.0, csr=False,
+                                csr_kw=None, **kwargs):
+        """
+        Plot the empirical pair correlation function for the pattern
+
+        Parameters
+        ----------
+        axes : Axes, optional
+            Axes instance to add the K-function to. If None (default), the
+            current Axes instance is used if any, or a new one created.
+        bandwidth : scalar
+            The bandwidth of the box kernel used to estimate the density of
+            points pairs at a given distance. See the documentation for
+            `PointPattern.pair_corr_function` for details.
+        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
+                               'plus'}, optional
+            String to select the edge handling to apply in computations. See
+            the documentation for `PointPattern` for details.
+            If not supplied, the edge correction falls back to the default
+            value (set at instance initialization).
+        linewidth : scalar, optional
+            The width of the line showing the K-function.
+        csr : bool, optional
+            If True, overlay the curve :math:`g(r) = 1`, which is the
+            theoretical pair correlation function for complete spatial
+            randomness. The style of this line may be customized using csr_kw.
+        csr_kw : dict, optional
+            Keyword arguments to pass to `axes.plot` when plotting the CSR
+            curve.
+        **kwargs : dict, optional
+            Additional keyword arguments to pass to `axes.plot`. Note in
+            particular the keywords 'linestyle', 'color' and 'label'.
+
+        Returns
+        -------
+        list
+            List of handles to the Line2D instances added to the plot, in the
+            following order: empirical pair correlation function, CSR curve
+            (optional).
+
+        """
+        if axes is None:
+            axes = pyplot.gca()
+
+        if edge_correction is None:
+            edge_correction = self._edge_correction
+
+        rmax = self.rmax(self.window, edge_correction)
+        rvals = numpy.linspace(0.0, rmax, RSAMPLES)
+        gvals = self.pair_corr_function(rvals, bandwidth=bandwidth,
+                                        edge_correction=edge_correction)
+
+        lines = axes.plot(rvals, gvals, linewidth=linewidth, **kwargs)
+
+        if csr:
+            if csr_kw is None:
+                csr_kw = {}
+
+            gcsr = numpy.ones_like(rvals)
+            lines += axes.plot(rvals, gcsr, linestyle='dashed', **csr_kw)
 
         return lines
 
@@ -1535,7 +1670,7 @@ class PointPatternCollection(AlmostImmutable):
             Array of values at which to evaluate the emprical aggregate
             K-function.
         edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
-                           'plus'}, optional
+                               'plus'}, optional
             String to select the edge handling to apply in computations. See
             the documentation for `PointPattern` for details.
             If not supplied, the edge correction falls back to the default
@@ -1567,7 +1702,7 @@ class PointPatternCollection(AlmostImmutable):
             Array of values at which to evaluate the emprical aggregate
             L-function.
         edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
-                           'plus'}, optional
+                               'plus'}, optional
             String to select the edge handling to apply in computations. See
             the documentation for `PointPattern` for details.
             If not supplied, the edge correction falls back to the default
@@ -1585,6 +1720,107 @@ class PointPatternCollection(AlmostImmutable):
         return numpy.sqrt(self.aggregate_kfunction(
             r, edge_correction=edge_correction) / numpy.pi)
 
+    def _pp_attr_r_frame(self, attr, r, edge_correction=None, **kwargs):
+        """
+        Compute a DataFrame containing values of some PointPattern attribute
+        which is a function of a distance.
+
+        Parameters
+        ----------
+        attr : string
+            Name of `PointPattern` attribute to use.
+        r : array-like
+            Array of values at which to evaluate the `PointPattern` attribute.
+        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
+                               'plus'}, optional
+            String to select the edge handling to apply in computations. See
+            the documentation for `PointPattern` for details.
+            If not supplied, the edge correction falls back to the default
+            value (set at instance initialization).
+        **kwargs : dict, optional
+            Other arguments to pass to the `PointPattern` attribute.
+
+        Returns
+        -------
+        DataFrame
+            DataFrame where each row contains values of the
+            `PointPattern` attribute from one pattern, evaluated at `r`.
+
+        """
+        if edge_correction is None:
+            edge_correction = self._edge_correction
+
+        return pandas.DataFrame(
+            [getattr(pp, attr)(r, edge_correction=edge_correction, **kwargs)
+             for pp in self.patterns])
+
+    def _pp_attr_r_critical(self, attr, alpha, r, edge_correction=None,
+                            **kwargs):
+        """
+        Compute critical values of some PointPattern attribute
+
+        Parameters
+        ----------
+        attr : string
+            name of `pointpattern` attribute to use.
+        alpha : scalar between 0.0 and 1.0
+            Percentile defining the critical values.
+        r : array-like
+            Array of values at which to evaluate the critical values.
+        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
+                               'plus'}, optional
+            String to select the edge handling to apply in computations. See
+            the documentation for `PointPattern` for details.
+            If not supplied, the edge correction falls back to the default
+            value (set at instance initialization).
+        **kwargs : dict, optional
+            Other arguments to pass to the `PointPattern` attribute.
+
+        Returns
+        -------
+        array
+            Critical values of the `PointPattern` attribute evaluated at `r`.
+
+        """
+        if edge_correction is None:
+            edge_correction = self._edge_correction
+
+        attr_frame = self._pp_attr_r_frame(attr, r,
+                                           edge_correction=edge_correction,
+                                           **kwargs)
+        return attr_frame.quantile(q=alpha, axis=0)
+
+    def _pp_attr_r_mean(self, attr, r, edge_correction=None, **kwargs):
+        """
+        Compute the mean of some PointPattern attribute
+
+        Parameters
+        ----------
+        attr : string
+            name of `pointpattern` attribute to use.
+        r : array-like
+            Array of values at which to evaluate the mean values.
+        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
+                               'plus'}, optional
+            String to select the edge handling to apply in computations. See
+            the documentation for `PointPattern` for details.
+            If not supplied, the edge correction falls back to the default
+            value (set at instance initialization).
+
+        Returns
+        -------
+        array
+            Mean of the `PointPattern` attribute evaluated at `r`.
+
+        """
+        if edge_correction is None:
+            edge_correction = self._edge_correction
+
+        attr_frame = self._pp_attr_r_frame(attr, r,
+                                           edge_correction=edge_correction,
+                                           **kwargs)
+        return attr_frame.mean(axis=0, skipna=True)
+
     def kframe(self, r, edge_correction=None):
         """
         Compute a DataFrame containing values of the empirical K-functions of
@@ -1595,7 +1831,7 @@ class PointPatternCollection(AlmostImmutable):
         r : array-like
             Array of values at which to evaluate the emprical K-functions.
         edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
-                           'plus'}, optional
+                               'plus'}, optional
             String to select the edge handling to apply in computations. See
             the documentation for `PointPattern` for details.
             If not supplied, the edge correction falls back to the default
@@ -1608,12 +1844,8 @@ class PointPatternCollection(AlmostImmutable):
             K-function from one pattern, evaluated at `r`.
 
         """
-        if edge_correction is None:
-            edge_correction = self._edge_correction
-
-        return pandas.DataFrame(
-            [pp.kfunction(r, edge_correction=edge_correction)
-             for pp in self.patterns])
+        return self._pp_attr_r_frame('kfunction', r,
+                                     edge_correction=edge_correction)
 
     def kcritical(self, alpha, r, edge_correction=None):
         """
@@ -1627,7 +1859,7 @@ class PointPatternCollection(AlmostImmutable):
             Array of values at which to evaluate the critical values of the
             empirical K-functions.
         edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
-                           'plus'}, optional
+                               'plus'}, optional
             String to select the edge handling to apply in computations. See
             the documentation for `PointPattern` for details.
             If not supplied, the edge correction falls back to the default
@@ -1639,11 +1871,8 @@ class PointPatternCollection(AlmostImmutable):
             Critical values of the empirical K-functions evaluated at `r`.
 
         """
-        if edge_correction is None:
-            edge_correction = self._edge_correction
-
-        kvals = self.kframe(r, edge_correction=edge_correction)
-        return kvals.quantile(q=alpha, axis=0)
+        return self._pp_attr_r_critical('kfunction', alpha, r,
+                                        edge_correction=edge_correction)
 
     def kmean(self, r, edge_correction=None):
         """
@@ -1655,7 +1884,7 @@ class PointPatternCollection(AlmostImmutable):
             Array of values at which to evaluate the mean values of the
             empirical K-functions.
         edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
-                           'plus'}, optional
+                               'plus'}, optional
             String to select the edge handling to apply in computations. See
             the documentation for `PointPattern` for details.
             If not supplied, the edge correction falls back to the default
@@ -1667,11 +1896,8 @@ class PointPatternCollection(AlmostImmutable):
             Mean of the empirical K-functions evaluated at `r`.
 
         """
-        if edge_correction is None:
-            edge_correction = self._edge_correction
-
-        kvals = self.kframe(r, edge_correction=edge_correction)
-        return kvals.mean(axis=0, skipna=True)
+        return self._pp_attr_r_mean('kfunction', r,
+                                    edge_correction=edge_correction)
 
     def lframe(self, r, edge_correction=None):
         """
@@ -1684,7 +1910,7 @@ class PointPatternCollection(AlmostImmutable):
         r : array-like
             Array of values at which to evaluate the emprical L-functions.
         edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
-                           'plus'}, optional
+                               'plus'}, optional
             String to select the edge handling to apply in computations. See
             the documentation for `PointPattern` for details.
             If not supplied, the edge correction falls back to the default
@@ -1697,12 +1923,8 @@ class PointPatternCollection(AlmostImmutable):
             L-function from one pattern, evaluated at `r`.
 
         """
-        if edge_correction is None:
-            edge_correction = self._edge_correction
-
-        return pandas.DataFrame(
-            [pp.lfunction(r, edge_correction=edge_correction)
-             for pp in self.patterns])
+        return self._pp_attr_r_frame('lfunction', r,
+                                     edge_correction=edge_correction)
 
     def lcritical(self, alpha, r, edge_correction=None):
         """
@@ -1716,7 +1938,7 @@ class PointPatternCollection(AlmostImmutable):
             Array of values at which to evaluate the critical values of the
             empirical L-functions.
         edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
-                           'plus'}, optional
+                               'plus'}, optional
             String to select the edge handling to apply in computations. See
             the documentation for `PointPattern` for details.
             If not supplied, the edge correction falls back to the default
@@ -1728,11 +1950,8 @@ class PointPatternCollection(AlmostImmutable):
             Critical values of the empirical L-functions evaluated at `r`.
 
         """
-        if edge_correction is None:
-            edge_correction = self._edge_correction
-
-        lvals = self.lframe(r, edge_correction=edge_correction)
-        return lvals.quantile(q=alpha, axis=0)
+        return self._pp_attr_r_critical('lfunction', alpha, r,
+                                        edge_correction=edge_correction)
 
     def lmean(self, r, edge_correction=None):
         """
@@ -1744,7 +1963,7 @@ class PointPatternCollection(AlmostImmutable):
             Array of values at which to evaluate the mean values of the
             empirical L-functions.
         edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
-                           'plus'}, optional
+                               'plus'}, optional
             String to select the edge handling to apply in computations. See
             the documentation for `PointPattern` for details.
             If not supplied, the edge correction falls back to the default
@@ -1756,14 +1975,175 @@ class PointPatternCollection(AlmostImmutable):
             Mean of the empirical L-functions evaluated at `r`.
 
         """
+        return self._pp_attr_r_mean('lfunction', r,
+                                    edge_correction=edge_correction)
+
+    def pair_corr_frame(self, r, bandwidth=None, edge_correction=None):
+        """
+        Compute a DataFrame containing values of the empirical pair correlation
+        functions of the patterns
+
+        Parameters
+        ----------
+        r : array-like
+            Array of values at which to evaluate the functions.
+        bandwidth : scalar
+            The bandwidth of the box kernel used to estimate the density of
+            points pairs at a given distance. See the documentation for
+            `PointPattern.pair_corr_function` for details.
+        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
+                               'plus'}, optional
+            String to select the edge handling to apply in computations. See
+            the documentation for `PointPattern` for details.
+            If not supplied, the edge correction falls back to the default
+            value (set at instance initialization).
+
+        Returns
+        -------
+        DataFrame
+            DataFrame where each row contains values of the empirical
+            pair correlation function from one pattern, evaluated at `r`.
+
+        """
+        return self._pp_attr_r_frame('pair_corr_function', r,
+                                     bandwidth=bandwidth,
+                                     edge_correction=edge_correction)
+
+    def pair_corr_critical(self, alpha, r, bandwidth=None,
+                           edge_correction=None):
+        """
+        Compute critical values of the empirical pair correlation functions of
+        the patterns
+
+        Parameters
+        ----------
+        alpha : scalar between 0.0 and 1.0
+            Percentile defining the critical values.
+        r : array-like
+            Array of values at which to evaluate the critical values of the
+            functions.
+        bandwidth : scalar
+            The bandwidth of the box kernel used to estimate the density of
+            points pairs at a given distance. See the documentation for
+            `PointPattern.pair_corr_function` for details.
+        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
+                               'plus'}, optional
+            String to select the edge handling to apply in computations. See
+            the documentation for `PointPattern` for details.
+            If not supplied, the edge correction falls back to the default
+            value (set at instance initialization).
+
+        Returns
+        -------
+        array
+            Critical values of the pair correlation functions evaluated at `r`.
+
+        """
+        return self._pp_attr_r_critical('pair_corr_function', alpha, r,
+                                        bandwidth=bandwidth,
+                                        edge_correction=edge_correction)
+
+    def pair_corr_mean(self, r, bandwidth=None, edge_correction=None):
+        """
+        Compute the mean of the pair correlation functions of the patterns
+
+        Parameters
+        ----------
+        r : array-like
+            Array of values at which to evaluate the mean values of the
+            functions.
+        bandwidth : scalar
+            The bandwidth of the box kernel used to estimate the density of
+            points pairs at a given distance. See the documentation for
+            `PointPattern.pair_corr_function` for details.
+        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
+                               'plus'}, optional
+            String to select the edge handling to apply in computations. See
+            the documentation for `PointPattern` for details.
+            If not supplied, the edge correction falls back to the default
+            value (set at instance initialization).
+
+        Returns
+        -------
+        array
+            Mean of the empirical pair correlation functions evaluated at `r`.
+
+        """
+        return self._pp_attr_r_mean('pair_corr_function', r,
+                                    bandwidth=bandwidth,
+                                    edge_correction=edge_correction)
+
+    @memoize_method
+    def _pp_attr_series(self, attr, edge_correction=None, **kwargs):
+        """
+        Compute a Series containing values of some scalar PointPattern
+        attribute.
+
+        Parameters
+        ----------
+        attr : string
+            Name of `PointPattern` attribute to use.
+        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
+                               'plus'}, optional
+            String to select the edge handling to apply in computations. See
+            the documentation for `PointPattern` for details.
+            If not supplied, the edge correction falls back to the default
+            value (set at instance initialization).
+        **kwargs : dict, optional
+            Other arguments to pass to the `PointPattern` attribute.
+
+        Returns
+        -------
+        Series
+            Series containing values of the `PointPattern` attribute from each
+            pattern.
+
+        """
         if edge_correction is None:
             edge_correction = self._edge_correction
 
-        lvals = self.lframe(r, edge_correction=edge_correction)
-        return lvals.mean(axis=0, skipna=True)
+        return pandas.Series(
+            [getattr(pp, attr)(edge_correction=edge_correction, **kwargs)
+             for pp in self.patterns])
 
-    @memoize_method
-    def lstatistics(self, edge_correction=None):
+    def _pp_attr_test(self, attr, pattern, edge_correction=None, **kwargs):
+        """
+        Perform a statistical test on a PointPattern, based on the distribution
+        of a PointPattern attribute over the patterns in this collection.
+
+        Parameters
+        ----------
+        attr : string
+            Name of `PointPattern` attribute to use.
+        pattern : PointPattern
+            PointPattern to perform the test on.
+        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
+                               'plus'}, optional
+            String to select the edge handling to apply in computations. See
+            the documentation for `PointPattern` for details.
+            If not supplied, the edge correction falls back to the default
+            value (set at instance initialization).
+        **kwargs : dict, optional
+            Other arguments to pass to the `PointPattern` attribute.
+
+        Returns
+        -------
+        scalar
+            The p-value computed using the the selected attribute as the test
+            statistic for `pattern`, and its distribution over this collection
+            as the null distribution.
+
+        """
+        if edge_correction is None:
+            edge_correction = self._edge_correction
+
+        tsdist = self._pp_attr_series(attr, edge_correction=edge_correction,
+                                      **kwargs).dropna()
+        teststat = getattr(pattern, attr)(edge_correction=edge_correction,
+                                          **kwargs)
+        return 1.0 - 0.01 * percentileofscore(tsdist, teststat, kind='mean')
+
+    def lstatistics(self, rmin=None, rmax=None, edge_correction=None):
         """
         Compute the L test statistic for CSR for each pattern in the collection
 
@@ -1771,8 +2151,14 @@ class PointPatternCollection(AlmostImmutable):
 
         Parameters
         ----------
+        rmin : scalar
+            The minimum r value to use when computing the statistics. See the
+            documentation for `PointPattern.lstatistic`for details.
+        rmax : scalar
+            The maximum r value to use when computing the statistics. See the
+            documentation for `PointPattern.lstatistic`for details.
         edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
-                           'plus'}, optional
+                               'plus'}, optional
             String to select the edge handling to apply in computations. See
             the documentation for `PointPattern` for details.
             If not supplied, the edge correction falls back to the default
@@ -1785,13 +2171,10 @@ class PointPatternCollection(AlmostImmutable):
             collection.
 
         """
-        if edge_correction is None:
-            edge_correction = self._edge_correction
+        return self._pp_attr_series('lstatistic', rmin=rmin, rmax=rmax,
+                                    edge_correction=edge_correction)
 
-        return pandas.Series([pp.lstatistic(edge_correction=edge_correction)
-                              for pp in self.patterns])
-
-    def ltest(self, pattern, edge_correction=None):
+    def ltest(self, pattern, rmin=None, rmax=None, edge_correction=None):
         """
         Perform an L test for CSR on a PointPattern, based on the distribution
         of L test statictics from the patterns in this collection.
@@ -1800,8 +2183,14 @@ class PointPatternCollection(AlmostImmutable):
         ----------
         pattern : PointPattern
             PointPattern to perform the L test on.
+        rmin : scalar
+            The minimum r value to use when computing the statistics. See the
+            documentation for `PointPattern.lstatistic`for details.
+        rmax : scalar
+            The maximum r value to use when computing the statistics. See the
+            documentation for `PointPattern.lstatistic`for details.
         edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
-                           'plus'}, optional
+                               'plus'}, optional
             String to select the edge handling to apply in computations. See
             the documentation for `PointPattern` for details.
             If not supplied, the edge correction falls back to the default
@@ -1813,12 +2202,8 @@ class PointPatternCollection(AlmostImmutable):
             The p-value of the L test statistic for `pattern`.
 
         """
-        if edge_correction is None:
-            edge_correction = self._edge_correction
-
-        lstat = pattern.lstatistic(edge_correction=edge_correction)
-        ldist = self.lstatistics(edge_correction=edge_correction).dropna()
-        return 1.0 - 0.01 * percentileofscore(ldist, lstat, kind='mean')
+        return self._pp_attr_test('lstatistic', pattern, rmin=rmin, rmax=rmax,
+                                  edge_correction=edge_correction)
 
     @memoize_method
     def histogram(self, attribute, edge_correction=None, **kwargs):
@@ -1832,7 +2217,7 @@ class PointPatternCollection(AlmostImmutable):
             reflect the `PointPattern` attribute name for the corresponding
             statistic.
         edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
-                           'plus'}, optional
+                               'plus'}, optional
             String to select the edge handling to apply in computations. See
             the documentation for `PointPattern` for details.
             If not supplied, the edge correction falls back to the default
@@ -1872,7 +2257,7 @@ class PointPatternCollection(AlmostImmutable):
             Axes instance to add the envelope to. If None (default), the
             current Axes instance is used if any, or a new one created.
         edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
-                           'plus'}, optional
+                               'plus'}, optional
             String to select the edge handling to apply in computations. See
             the documentation for `PointPattern` for details.
             If not supplied, the edge correction falls back to the default
@@ -1918,7 +2303,7 @@ class PointPatternCollection(AlmostImmutable):
             Axes instance to add the mean to. If None (default), the current
             Axes instance is used if any, or a new one created.
         edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
-                           'plus'}, optional
+                               'plus'}, optional
             String to select the edge handling to apply in computations. See
             the documentation for `PointPattern` for details.
             If not supplied, the edge correction falls back to the default
@@ -1956,7 +2341,7 @@ class PointPatternCollection(AlmostImmutable):
             Axes instance to add the envelope to. If None (default), the
             current Axes instance is used if any, or a new one created.
         edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
-                           'plus'}, optional
+                               'plus'}, optional
             String to select the edge handling to apply in computations. See
             the documentation for `PointPattern` for details.
             If not supplied, the edge correction falls back to the default
@@ -2002,7 +2387,7 @@ class PointPatternCollection(AlmostImmutable):
             Axes instance to add the mean to. If None (default), the current
             Axes instance is used if any, or a new one created.
         edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
-                           'plus'}, optional
+                               'plus'}, optional
             String to select the edge handling to apply in computations. See
             the documentation for `PointPattern` for details.
             If not supplied, the edge correction falls back to the default
@@ -2029,6 +2414,102 @@ class PointPatternCollection(AlmostImmutable):
         h = axes.plot(rvals, lmean, **kwargs)
         return h
 
+    def plot_pair_corr_envelope(self, axes=None, bandwidth=None,
+                                edge_correction=None, low=0.025, high=0.975,
+                                alpha=0.25, **kwargs):
+        """
+        Plot an envelope of empirical pair correlation function values
+
+        Parameters
+        ----------
+        axes : Axes, optional
+            Axes instance to add the envelope to. If None (default), the
+            current Axes instance is used if any, or a new one created.
+        bandwidth : scalar
+            The bandwidth of the box kernel used to estimate the density of
+            points pairs at a given distance. See the documentation for
+            `PointPattern.pair_corr_function` for details.
+        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
+                               'plus'}, optional
+            String to select the edge handling to apply in computations. See
+            the documentation for `PointPattern` for details.
+            If not supplied, the edge correction falls back to the default
+            value (set at instance initialization).
+        low : scalar between 0.0 and `high`, optional
+            Percentile defining the lower edge of the envelope.
+        high : scalar between `low` and 1.0, optional
+            Percentile defining the higher edge of the envelope.
+        alpha : scalar between 0.0 and 1.0, optional
+            The opacity of the envelope fill.
+        **kwargs : dict, optional
+            Additional keyword arguments pass to `axes.fill_between`. Note in
+            particular the keywords 'edgecolor', 'facecolor' and 'label'.
+
+        Returns
+        -------
+        PolyCollection
+            The PolyCollection instance filling the envelope.
+
+        """
+        if axes is None:
+            axes = pyplot.gca()
+
+        if edge_correction is None:
+            edge_correction = self._edge_correction
+
+        rvals = numpy.linspace(0.0, self.rmax(edge_correction), RSAMPLES)
+        gvals_low = self.pair_corr_critical(low, rvals, bandwidth=bandwidth,
+                                            edge_correction=edge_correction)
+        gvals_high = self.pair_corr_critical(high, rvals, bandwidth=bandwidth,
+                                             edge_correction=edge_correction)
+
+        h = axes.fill_between(rvals, gvals_low, gvals_high, alpha=alpha,
+                              **kwargs)
+        return h
+
+    def plot_pair_corr_mean(self, axes=None, bandwidth=None,
+                            edge_correction=None, **kwargs):
+        """
+        Plot an the mean of the empirical pair correlation function values
+
+        Parameters
+        ----------
+        axes : Axes, optional
+            Axes instance to add the mean to. If None (default), the current
+            Axes instance is used if any, or a new one created.
+        bandwidth : scalar
+            The bandwidth of the box kernel used to estimate the density of
+            points pairs at a given distance. See the documentation for
+            `PointPattern.pair_corr_function` for details.
+        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
+                               'plus'}, optional
+            String to select the edge handling to apply in computations. See
+            the documentation for `PointPattern` for details.
+            If not supplied, the edge correction falls back to the default
+            value (set at instance initialization).
+        **kwargs : dict, optional
+            Additional keyword arguments pass to `axes.plot`. Note in
+            particular the keywords 'linestyle', 'color', and 'label'.
+
+        Returns
+        -------
+        list
+            List containing the Line2D of the plotted mean.
+
+        """
+        if axes is None:
+            axes = pyplot.gca()
+
+        if edge_correction is None:
+            edge_correction = self._edge_correction
+
+        rvals = numpy.linspace(0.0, self.rmax(edge_correction), RSAMPLES)
+        gmean = self.pair_corr_mean(rvals, bandwidth=bandwidth,
+                                    edge_correction=edge_correction)
+
+        h = axes.plot(rvals, gmean, **kwargs)
+        return h
+
     def plot_aggregate_kfunction(self, axes=None, edge_correction=None,
                                  linewidth=2.0, csr=False, csr_kw=None,
                                  **kwargs):
@@ -2043,7 +2524,7 @@ class PointPatternCollection(AlmostImmutable):
             (default), the current Axes instance is used if any, or a new one
             created.
         edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
-                           'plus'}, optional
+                               'plus'}, optional
             String to select the edge handling to apply in computations. See
             the documentation for `PointPattern` for details.
             If not supplied, the edge correction falls back to the default
@@ -2104,7 +2585,7 @@ class PointPatternCollection(AlmostImmutable):
             (default), the current Axes instance is used if any, or a new one
             created.
         edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
-                           'plus'}, optional
+                               'plus'}, optional
             String to select the edge handling to apply in computations. See
             the documentation for `PointPattern` for details.
             If not supplied, the edge correction falls back to the default
@@ -2164,7 +2645,7 @@ class PointPatternCollection(AlmostImmutable):
             Axes instance to add the histogram to. If None (default), the
             current Axes instance is used if any, or a new one created.
         edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
-                           'plus'}, optional
+                               'plus'}, optional
             String to select the edge handling to apply in computations. See
             the documentation for `PointPattern` for details.
             If not supplied, the edge correction falls back to the default

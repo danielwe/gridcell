@@ -2091,7 +2091,7 @@ class Module(CellCollection):
 
         Parameters
         ----------
-        nsims : integer
+        nsims : int
             The number of point patterns to generate.
         process : str {'binomial', 'poisson'}, optional
             String to select the kind of process to simulate.
@@ -2184,6 +2184,35 @@ class Module(CellCollection):
         phase_pattern = self.phase_pattern(keys=keys)
         return phase_pattern.plot_lfunction(axes=axes, **kwargs)
 
+    def plot_phase_pair_corr(self, axes=None, keys=None, **kwargs):
+        """
+        Plot the empirical pair correlation function for the grid phase point
+        pattern
+
+        Parameters
+        ----------
+        axes : Axes, optional
+            Axes instance to add the envelope to. If None (default), the
+            current Axes instance is used if any, or a new one created.
+        keys : sequence
+            Keys to select cells whose phase pattern provides the window and
+            intensity for the simulation. If None, all cells are included.
+        **kwargs : dict, optional
+            Additional keyword arguments pass to
+            `PointPattern.plot_pair_corr_function`. Note in particular the
+            keywords 'bandwidth', 'csr' and 'csr_kw'.
+
+        Returns
+        -------
+        list
+            List of handles to the Line2D instances added to the plot, in the
+            following order: empirical pair correlation function, CSR curve
+            (optional).
+
+        """
+        phase_pattern = self.phase_pattern(keys=keys)
+        return phase_pattern.plot_pair_corr_function(axes=axes, **kwargs)
+
     def plot_phase_kenvelope(self, nsims=100, process='binomial', axes=None,
                              keys=None, low=0.025, high=0.975, **kwargs):
         """
@@ -2216,8 +2245,8 @@ class Module(CellCollection):
                                             keys=keys)
         return sims.plot_kenvelope(axes=axes, low=low, high=high, **kwargs)
 
-    def plot_phase_kmean(self, nsims=100, process='binomial', axes=None, keys=None,
-                         **kwargs):
+    def plot_phase_kmean(self, nsims=100, process='binomial', axes=None,
+                         keys=None, **kwargs):
         """
         Plot the mean of empirical K-function values
 
@@ -2277,8 +2306,8 @@ class Module(CellCollection):
                                             keys=keys)
         return sims.plot_lenvelope(axes=axes, low=low, high=high, **kwargs)
 
-    def plot_phase_lmean(self, nsims=100, process='binomial', axes=None, keys=None,
-                         **kwargs):
+    def plot_phase_lmean(self, nsims=100, process='binomial', axes=None,
+                         keys=None, **kwargs):
         """
         Plot the mean of empirical L-function values
 
@@ -2305,3 +2334,80 @@ class Module(CellCollection):
         sims = self.simulate_phase_patterns(nsims=nsims, process=process,
                                             keys=keys)
         return sims.plot_lmean(axes=axes, **kwargs)
+
+    def plot_phase_pair_corr_envelope(self, nsims=100, process='binomial',
+                                      axes=None, keys=None, low=0.025,
+                                      high=0.975, **kwargs):
+        """
+        Plot an envelope of empirical pair correlation function values
+
+        The envelope is based on simulated patterns using
+        `Module.simulate_phase_patterns`.
+
+        Parameters
+        ----------
+        nsims : int, optional
+            The number of point patterns to generate.
+        process : str {'binomial', 'poisson'}, optional
+            String to select the kind of process to simulate.
+        axes : Axes, optional
+            Axes instance to add the envelope to. If None (default), the
+            current Axes instance is used if any, or a new one created.
+        keys : sequence
+            Keys to select cells whose phase pattern provides the window and
+            intensity for the simulation. If None, all cells are included.
+        low : scalar between 0.0 and `high`, optional
+            Percentile defining the lower edge of the envelope.
+        high : scalar between `low` and 1.0, optional
+            Percentile defining the higher edge of the envelope.
+        **kwargs : dict, optional
+            Additional keyword arguments pass to
+            `PointPatternCollection.plot_pair_corr_envelope`. Note in
+            particular the keywords 'bandwidth', 'edgecolor', 'facecolor' and
+            'label'.
+
+        Returns
+        -------
+        PolyCollection
+            The PolyCollection instance filling the envelope.
+
+        """
+        sims = self.simulate_phase_patterns(nsims=nsims, process=process,
+                                            keys=keys)
+        return sims.plot_pair_corr_envelope(axes=axes, low=low, high=high,
+                                            **kwargs)
+
+    def plot_phase_pair_corr_mean(self, nsims=100, process='binomial',
+                                  axes=None, keys=None, **kwargs):
+        """
+        Plot the mean of empirical pair correlation function values
+
+        The mean is based on simulated patterns using
+        `Module.simulate_phase_patterns`.
+
+        Parameters
+        ----------
+        nsims : int, optional
+            The number of point patterns to generate.
+        process : str {'binomial', 'poisson'}, optional
+            String to select the kind of process to simulate.
+        axes : Axes, optional
+            Axes instance to add the envelope to. If None (default), the
+            current Axes instance is used if any, or a new one created.
+        keys : sequence
+            Keys to select cells whose phase pattern provides the window and
+            intensity for the simulation. If None, all cells are included.
+        **kwargs : dict, optional
+            Additional keyword arguments pass to `axes.plot`. Note in
+            particular the keywords 'bandwidth', 'linestyle', 'color', and
+            'label'.
+
+        Returns
+        -------
+        list
+            List containing the Line2D of the plotted mean.
+
+        """
+        sims = self.simulate_phase_patterns(nsims=nsims, process=process,
+                                            keys=keys)
+        return sims.plot_pair_corr_mean(axes=axes, **kwargs)
