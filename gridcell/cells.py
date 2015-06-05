@@ -1556,6 +1556,8 @@ class CellCollection(AlmostImmutable, Mapping):
             'zscore': the rate maps are replaced with the correpsonding Z-score
                       maps: for each rate map, its mean is be subtracted and
                       the result is be divided by the standard deviation.
+            'integral': the integral of the rate maps over the environment will
+                        be normalized to 1.0
         'threshold': if not None, each firing rate will be transformed to
                      a binary variable with the value 1 in bins where the
                      normalized firing rate exceeds `threshold`, and
@@ -1580,6 +1582,9 @@ class CellCollection(AlmostImmutable, Mapping):
         elif normalize == 'zscore':
             def _norm(imap):
                 return (imap - imap.mean()) / imap.std()
+        elif normalize == 'integral':
+            def _norm(imap):
+                return imap / imap.integral()
         else:
             raise ValueError("unknown normalization: {}".format(normalize))
 

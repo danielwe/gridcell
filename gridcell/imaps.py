@@ -57,15 +57,19 @@ class BinnedSet(AlmostImmutable):
             edgearrs.append(earr)
             dims.append(earr.ndim)
 
-        d = dims[0]
-        equal = (dim == d for dim in dims)
-        if d == 0 and all(equal):
-            self.edges = (numpy.array(edgearrs),)
-        elif d == 1 and all(equal):
-            self.edges = tuple(edgearrs)
+        try:
+            d = dims[0]
+        except IndexError:
+            self.edges = ()
         else:
-            raise ValueError("'edges' must be sequence of one-dimensional "
-                             "array-like containers")
+            equal = (dim == d for dim in dims)
+            if d == 0 and all(equal):
+                self.edges = (numpy.array(edgearrs),)
+            elif d == 1 and all(equal):
+                self.edges = tuple(edgearrs)
+            else:
+                raise ValueError("'edges' must be sequence of one-dimensional "
+                                 "array-like containers")
 
         # Compute bin widths and check validity
         valid = True
@@ -716,22 +720,26 @@ class IntensityMap(AlmostImmutable):
             def bound_op(odata):
                 return op(sdata, odata)
 
-        sbset = self.bset
+        bset = self.bset
         try:
             obset = other.bset
         except AttributeError:
             # Apparently, other is not an IntensityMap
             new_data = bound_op(other)
         else:
-            if not (sbset == obset):
+            if not ((bset == obset) or
+                    bset.shape == () or
+                    obset.shape == ()):
                 raise ValueError("instances of {} must be defined over "
                                  "instances of {} that compare equal for "
                                  "binary operations to be defined"
                                  .format(self.__class__.__name__,
-                                         sbset.__class__.__name__))
+                                         bset.__class__.__name__))
             new_data = bound_op(other.data)
+            if bset.shape == ():
+                bset = obset
 
-        return self.__class__(new_data, sbset)
+        return self.__class__(new_data, bset)
 
     def __eq__(self, other):
         return self._inherit_binary_operation(other, '__eq__')
@@ -1006,6 +1014,45 @@ class IntensityMap(AlmostImmutable):
 
         """
         return numpy.ma.max(self.data)
+
+    @memoize_method
+    def integral(self, axis=None):
+        """
+        Find the integral of the intensity over the binned set, ignoring
+        missing values
+
+        Parameters
+        ----------
+        axis : None or int or tuple of ints, optional
+            Axis or axes along which the integral is performed. If None, the
+            integral is computed over all dimensions.
+
+        Returns
+        -------
+        IntensityMap
+            The marginal intensity map resulting from integrating the intensity
+            along the specified axes.
+
+        """
+        if axis is None:
+            new_data = numpy.ma.sum(self.data * self.bset.area)
+            remaining_edges = []
+        else:
+            try:
+                measure = numpy.prod([self.bset.binwidths[ax] for ax in axis],
+                                     axis=0)
+            except TypeError:
+                measure = self.bset.binwidths[axis]
+            new_data = numpy.ma.sum(self.data * measure, axis=axis)
+            remaining_axes = numpy.setdiff1d(range(self.ndim), axis)
+            remaining_edges = [self.bset.edges[ax] for ax in remaining_axes]
+
+        # This is kind of a hack that breaks good OO design, but is there
+        # a better solution?
+        if len(remaining_edges) == 2:
+            return IntensityMap2D(new_data, (remaining_edges,))
+        else:
+            return IntensityMap(new_data, (remaining_edges,))
 
     @property
     def ndim(self):
