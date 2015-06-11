@@ -1234,10 +1234,12 @@ class IntensityMap(AlmostImmutable):
                scipy.signal.correlate for details. Valid options:
                'full', 'valid', 'same'. Default is 'full'.
         :pearson: if True, the IntensityMap instances are normalized to mean
-                  0.0 and variance 1.0 before correlating. The result of the
-                    computation will then be the Pearson product-moment
-                    correlation coefficient between displaced intensity arrays,
-                    evaluated at each possible displacement.
+                  0.0 and variance 1.0 before correlating, and the result is
+                  divided by the maximum number of overlapping bins of the
+                  intensty maps. The result of the this computation is the
+                  Pearson product-moment correlation coefficient between
+                  displaced intensity arrays, evaluated at each possible
+                  displacement.
         :normalized: if True, the correlated IntensityMap is renormalized for
                      each bin to eliminate the influence of missing values and
                      values beyond the edges. Where only missing values would
@@ -1262,8 +1264,14 @@ class IntensityMap(AlmostImmutable):
             sdata = (sdata - self.mean()) / self.std()
             odata = (odata - other.mean()) / other.std()
 
-        def corrfunc(arr1, arr2):
-            return signal.correlate(arr1, arr2, mode=mode)
+            def corrfunc(arr1, arr2):
+                size = 1
+                for (s1, s2) in zip(numpy.shape(arr1), numpy.shape(arr2)):
+                    size *= min(s1, s2)
+                return signal.correlate(arr1, arr2, mode=mode) / size
+        else:
+            def corrfunc(arr1, arr2):
+                return signal.correlate(arr1, arr2, mode=mode)
 
         new_data = _safe_mmap(normalized, corrfunc, (sdata, odata))
 
