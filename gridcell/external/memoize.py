@@ -11,6 +11,13 @@ http://code.activestate.com/recipes/577452-a-memoize-decorator-for-instance-meth
 from __future__ import (absolute_import, division, print_function,
                         unicode_literals)
 from functools import partial, update_wrapper
+from inspect import getcallargs  # Python >= 2.7
+try:
+    # Python 3
+    from inspect import getfullargspec
+except ImportError:
+    # Python 2
+    from inspect import getargspec as getfullargspec
 
 
 class memoize_function(object):
@@ -78,10 +85,15 @@ class memoize_function(object):
 
     def __call__(self, *args, **kwargs):
         f = self._f
+        callargs = getcallargs(f, *args, **kwargs)
+        varkw = getfullargspec(f)[2]
         cache = getattr(self, self.cache_name)
 
         try:
-            key = (args, frozenset(kwargs.items()))
+            if varkw is not None:
+                kw = callargs[varkw]
+                callargs[varkw] = frozenset(kw.items())
+            key = frozenset(callargs.items())
             res = cache[key]
         except KeyError:
             cache[key] = res = f(*args, **kwargs)
@@ -185,7 +197,15 @@ class memoize_method(object):
 
     def __call__(self, *args, **kwargs):
         f = self._f
+        callargs = getcallargs(f, *args, **kwargs)
+        varkw = getfullargspec(f)[2]
         obj = args[0]
+
+        # Remove obj (the 'self' parameter) from callargs
+        for (key, value) in callargs.items():
+            if value is obj:
+                del callargs[key]
+                break
 
         try:
             cache = getattr(obj, self.cache_name)
@@ -194,7 +214,10 @@ class memoize_method(object):
             setattr(obj, self.cache_name, cache)
 
         try:
-            key = (f.__name__, args[1:], frozenset(kwargs.items()))
+            if varkw is not None:
+                kw = callargs[varkw]
+                callargs[varkw] = frozenset(kw.items())
+            key = (f.__name__, frozenset(callargs.items()))
             res = cache[key]
         except KeyError:
             cache[key] = res = f(*args, **kwargs)
