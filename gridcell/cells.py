@@ -458,7 +458,7 @@ class BaseCell(AlmostImmutable):
         """
         peaks = self.peaks(project=project, threshold=threshold)
         px, py = peaks[:, 0], peaks[:, 1]
-        radii = px * px + py * py
+        radii = numpy.sqrt(px * px + py * py)
         angles = numpy.mod(numpy.arctan2(py, px), 2 * numpy.pi)
         peaks_polar = numpy.column_stack((radii, angles))
         return peaks_polar
@@ -510,7 +510,8 @@ class BaseCell(AlmostImmutable):
             ellipse = self.ellipse(project=project, threshold=threshold)
             scale = numpy.sqrt(ellipse.a * ellipse.b)
         elif mode == 'arithmetic':
-            radii = self.peaks_polar(project=project, threshold=threshold)
+            radii = self.peaks_polar(project=project,
+                                     threshold=threshold)[:, 0]
             scale = numpy.mean(radii)
         else:
             raise ValueError("unknown mode {}".format(mode))
@@ -598,34 +599,55 @@ class BaseCell(AlmostImmutable):
                                           pearson=pearson,
                                           normalized=normalized)
 
-    def features(self, roll=0):
+    def features(self, roll=0, rweight=1.0):
         """
-        Compute a series of features of this cell
+        Compute an array of features of this cell
 
-        The purpose of the feature series is to embed the cell into
-        a high-dimensional space where the euclidean distance between cells
-        correspond to some concept of closeness. This is useful for clustering
-        cells into modules.
+        The purpose of the feature array is to embed the cell into
+        a high-dimensional space with dimensionless axes, where the Euclidean
+        distance between cells correspond to some concept of closeness. This is
+        useful for clustering cells into modules.
 
-        The present definition consists of the x and y coordinates of each of
-        the six inner peaks in the autocorrelogram, scaled by the factor log(r)
-        / r, where r = self.scale().
+        The present definition consists of the x and y coordinates of three
+        unique inner peaks in the autocorrelogram, divided by the grid scale
+        (parametrizing the orientation and shape of the grid), as well as the
+        logarithm of the grid scale (parametrizing the size of the grid). The
+        balance between the two is controlled by the parameter `rweight`.
 
-        :roll: quantities related to individual peaks are listed in
-               counterclockwise order in the feature array. The parameter
-               'roll' decides which peak to start at: self.peaks()[roll] is
-               used first, and self.peaks()[roll - 1] last (this can be thought
-               of as replacing self.peaks() with numpy.roll(self.peaks(), roll,
-               axis=0)).
-        :returns: one-dimensional array of features
+        Parameters
+        ----------
+        roll : integer, optional
+             Quantities related to individual peaks are listed in
+             counterclockwise order in the feature array. The parameter `roll`
+             decides which peaks to start and end with: the features from
+             `self.peaks()[roll]` are listed first, and those from
+             `self.peaks()[roll - 1]` last (equivalently, `self.peaks()` is
+             replaced with `numpy.roll(self.peaks(), roll, axis=0))`
+             internally.
+        rweight : scalar, optional
+            The scaling factor deciding the relative weight between
+            shape-related and size-related features. The size-related features
+            are multiplied by this number.
+
+        Returns
+        -------
+        ndarray
+            One-dimensional array containing the cell features.
 
         """
         scale = self.scale()
+        logscale = numpy.log(scale)
         peaks = numpy.roll(self.peaks(), roll, axis=0)
-        return peaks.ravel() * numpy.log(scale) / scale
+
+        # Make sure that the differences between all features are
+        # dimensionless, such that the distance is independent of units. Note
+        # that (log(r_2) - log(r_1)) ** 2 = log(r_2 / r_1) ** 2, which is
+        # dimensionless and thus OK, even though the dimension of log(r) is
+        # not well-defined in a strict sense.
+        return numpy.hstack((peaks[:3].ravel() / scale, rweight * logscale))
 
     @memoize_method
-    def distance(self, other):
+    def distance(self, other, features_kw=None):
         """
         Compute a distance between the grid patterns of grid cells
 
@@ -634,35 +656,49 @@ class BaseCell(AlmostImmutable):
         feature arrays of the cells, using the relative peak roll that
         minimizes this distance.
 
-        :other: Cell instance to measure distance to.
-        :returns: distance between cells, and the peak roll applied to this
-                  cell to obtain it. The peak roll  is defined such that
-                  numpy.roll(self.peaks, roll, axis=0) and other.peaks() give
-                  coordinates to the most closely corresponding peaks in self
-                  and other
+        Parameters
+        ----------
+        other : BaseCell
+            BaseCell instance to measure distance to.
+        features_kw : dict, optional
+            Keyword arguments to pass to `BaseCell.features`.
+
+        Returns
+        -------
+        scalar
+            Distance between `self` and `other`.
+        roll : integer
+            The relative peak roll applied to `self` to obtain the distance.
+            The peak roll is defined such that `numpy.roll(self.peaks(), roll,
+            axis=0)` and `other.peaks()` give coordinates to the most closely
+            corresponding peaks in `self` and `other`.
 
         """
         if self is other:
-            distance = 0.0
+            dist = 0.0
             roll = 0
-
         else:
-            ofeat = other.features(roll=0)
-            dfeat = self.features(roll=0) - ofeat
-            distance = numpy.sum(dfeat * dfeat)
+            if features_kw is None:
+                features_kw = {}
+
+            ofeat = other.features(roll=0, **features_kw)
+            dfeat = self.features(roll=0, **features_kw) - ofeat
+            dist_sq = numpy.sum(dfeat * dfeat)
             roll = 0
 
             # To make sure that the most closesly corresponding peaks are used,
             # the metric is computed as the minimum of three different relative
             # peak orderings.
             for r in (-1, 1):
-                dfeat = self.features(roll=r) - ofeat
-                dist = numpy.sum(dfeat * dfeat)
-                if dist < distance:
-                    distance = dist
+                dfeat = self.features(roll=r, **features_kw) - ofeat
+                d_sq = numpy.sum(dfeat * dfeat)
+                if d_sq < dist_sq:
+                    dist_sq = d_sq
                     roll = r
 
-        return distance, roll
+            dist = numpy.sqrt(dist_sq)
+
+        return dist, roll
 
     @memoize_method
     def phase(self, other):
@@ -1600,19 +1636,27 @@ class CellCollection(AlmostImmutable, Mapping):
                                        ignore_missing=True)
 
     @memoize_method
-    def distances(self, keys1=None, keys2=None):
+    def distances(self, keys1=None, keys2=None, features_kw=None):
         """
         Compute a distance matrix between cells
 
-        :keys1, keys2: sequences of cell keys to select cells to compute the
-                       distance matrix between. If None, all cells are
-                       included.
-        :returns: DataFrame containing the distance matrix, DataFrame
-                  containing the roll matrix. Both DataFrames are indexed along
-                  rows and columns by the cell keys (keys). The roll matrix is
-                  organized such that rollmatrix[key1][key2] gives the roll to
-                  apply to self[key2] to align it with self[key1] (see
-                  BaseCell.distance() for the full explanation of roll).
+        Parameters
+        ----------
+        keys1, keys2 : sequence, optional
+            Sequences of cell keys to select cells to compute the distance
+            matrix between. If `None`, all cells are included.
+        features_kw : dict, optional
+            Keyword arguments to pass to `BaseCell.features`.
+
+        Returns
+        -------
+        DataFrame
+            The distance matrix, indexed along rows and columns by the cell
+            keys.
+        DataFrame
+            Matrix of peak rolls, organized such that rollmatrix[key1][key2]
+            gives the roll to apply to self[key2] to align it with self[key1]
+            (see `BaseCell.distance` for the full explanation of peak roll).
 
         """
         keys1, cells1 = self.lookup(keys1)
@@ -1620,7 +1664,8 @@ class CellCollection(AlmostImmutable, Mapping):
 
         distdict, rolldict = {}, {}
         for (key1, cell1) in zip(keys1, cells1):
-            dist, roll = zip(*[cell1.distance(cell2) for cell2 in cells2])
+            dist, roll = zip(*[cell1.distance(cell2, features_kw=features_kw)
+                               for cell2 in cells2])
             distdict[key1] = pandas.Series(dist, index=keys2)
             rolldict[key1] = pandas.Series(roll, index=keys2)
 
@@ -1630,69 +1675,105 @@ class CellCollection(AlmostImmutable, Mapping):
         return distmatrix, rollmatrix
 
     @memoize_method
-    def features(self, keys=None):
+    def features(self, keys=None, features_kw=None):
         """
         Compute a feature array of the cells
 
-        The feature series comprising the array are computed with the roll
-        required for consistency.
+        The feature series comprising the array are computed with the peak roll
+        for each cell required for global consistency.
 
-        :keys: sequence of cell keys to select cells to compute the feature
-               array for. If None, all cells are included.
-        :returns: DataFrame containing the feature array. The DataFrame row
-                  indices are the cell keys, while the DataFrame columns
-                  contain the features.
+        Parameters
+        ----------
+        keys : sequence, optional
+            Sequence of cell keys to select cells to compute the feature array
+            for. If `None`, all cells are included.
+        features_kw : dict, optional
+            Keyword arguments to pass to `BaseCell.features`.
+
+        Returns
+        -------
+        DataFrame
+            Feature array. The DataFrame row indices are the cell keys, while
+            the DataFrame columns contain the features.
 
         """
         keys, cells = self.lookup(keys)
         refcell = cells[0]
 
+        if features_kw is None:
+            features_kw = {}
+
         featdict = {}
         for (key, cell) in zip(keys, cells):
             __, roll = cell.distance(refcell)
-            featdict[key] = cell.features(roll=roll)
+            featdict[key] = cell.features(roll=roll, **features_kw)
 
         features = pandas.DataFrame(featdict).transpose()
 
         return features
 
-    def dbscan(self, eps, min_samples, keys=None, mod_kw=None, **kwargs):
+    def dbscan(self, eps, min_samples, keys=None, features_kw=None,
+               mod_kw=None, **kwargs):
         """
-        Use the DBSCAN clustering algorithm to find modules in the collection
-        of cells
+        Use the DBSCAN clustering algorithm to find modules
 
-        'eps': maximum distance for points to be counted as neighbors
-        'min_samples': minimum number of neighbors for a point to be considered
-                       a core point
-        :keys: sequence of cell keys to select cells to search for modules
-               among. If None (default), all cells are included.
-        :mod_kw: dict of keyword arguments to pass to the Module constructor.
-        :kwargs: passed through to cluster.dbscan()
-        :returns: list of Module instances, and a CellCollection instance
-                  containing any outliers
+        Parameters
+        ----------
+        eps : scalar
+            Maximum distance for points to be counted as neighbors.
+        min_samples : integer
+            Minimum number of neighbors for a point to be considered a core
+            point.
+        keys : sequence, optional
+            Sequence of cell keys to select cells to search for modules among.
+            If `None`, all cells are included.
+        features_kw : dict, optional
+            Keyword arguments to pass to `BaseCell.features`.
+        mod_kw : dict, optional
+            Keyword arguments to pass to the `Module` constructor.
+        **kwargs : dict, optional
+            Keyword arguments passed on to `cluster.dbscan()`.
+
+        Returns
+        -------
+        list
+            List of `Module` instances containing the detected modules.
+        CellCollection
+            CellCollection containing any outlier cells.
 
         """
-        features = self.features(keys=keys)
+        features = self.features(keys=keys, features_kw=features_kw)
         keys, feature_arr = features.index, features.values
         labels = cluster.dbscan(feature_arr, eps=eps,
                                 min_samples=min_samples)[1]
 
         return self.modules_from_labels(keys, labels, mod_kw=mod_kw)
 
-    def mean_shift(self, keys=None, mod_kw=None, **kwargs):
+    def mean_shift(self, keys=None, features_kw=None, mod_kw=None, **kwargs):
         """
-        Use the mean shift clustering algorithm to find modules in the
-        collection of cells
+        Use the mean shift clustering algorithm to find modules
 
-        :keys: sequence of cell keys to select cells to search for modules
-               among. If None (default), all cells are included.
-        :mod_kw: dict of keyword arguments to pass to the Module constructor.
-        :kwargs: passed through to cluster.mean_shift()
-        :returns: list of Module instances, and a CellCollection instance
-                  containing any outliers
+        Parameters
+        ----------
+        keys : sequence, optional
+            Sequence of cell keys to select cells to search for modules among.
+            If `None`, all cells are included.
+        features_kw : dict, optional
+            Keyword arguments to pass to `BaseCell.features`.
+        mod_kw : dict, optional
+            Keyword arguments to pass to the `Module` constructor.
+        **kwargs : dict, optional
+            Keyword arguments passed on to `cluster.mean_shift()`.
+
+        Returns
+        -------
+        list
+            List of `Module` instances containing the detected modules.
+        CellCollection
+            CellCollection containing any outlier cells.
 
         """
-        features = self.features(keys=keys)
+        features = self.features(keys=keys, features_kw=features_kw)
         keys, feature_arr = features.index, features.values
 
         labels = cluster.mean_shift(feature_arr, cluster_all=False,
@@ -1700,21 +1781,34 @@ class CellCollection(AlmostImmutable, Mapping):
 
         return self.modules_from_labels(keys, labels, mod_kw=mod_kw)
 
-    def k_means(self, n_clusters, keys=None, mod_kw=None, **kwargs):
+    def k_means(self, n_clusters, keys=None, features_kw=None, mod_kw=None,
+                **kwargs):
         """
-        Use the K-means clustering algorithm to find modules in the collection
-        of cells
+        Use the K-means clustering algorithm to find modules
 
-        :n_clusters: the number of clusters (and thus modules) to form
-        :keys: sequence of cell keys to select cells to search for modules
-               among. If None (default), all cells are included.
-        :mod_kw: dict of keyword arguments to pass to the Module constructor.
-        :kwargs: passed through to cluster.k_means()
-        :returns: list of Module instances, and a CellCollection instance
-                   containing any outliers
+        Parameters
+        ----------
+        n_clusters : integer
+            The number of clusters (and thus modules) to form.
+        keys : sequence, optional
+            Sequence of cell keys to select cells to search for modules among.
+            If `None`, all cells are included.
+        features_kw : dict, optional
+            Keyword arguments to pass to `BaseCell.features`.
+        mod_kw : dict, optional
+            Keyword arguments to pass to the `Module` constructor.
+        **kwargs : dict, optional
+            Keyword arguments passed on to `cluster.k_means()`.
+
+        Returns
+        -------
+        list
+            List of `Module` instances containing the detected modules.
+        CellCollection
+            CellCollection containing any outlier cells.
 
         """
-        features = self.features(keys=keys)
+        features = self.features(keys=keys, features_kw=features_kw)
         keys, feature_arr = features.index, features.values
 
         labels = cluster.k_means(feature_arr, n_clusters, **kwargs)[1]
@@ -1943,8 +2037,9 @@ class CellCollection(AlmostImmutable, Mapping):
 
         tilt2, ecc = [], []
         for cell in cells:
-            tilt2.append(2 * cell.ellipse().tilt)
-            ecc.append(cell.ellipse().ecc)
+            ell = cell.ellipse()
+            tilt2.append(2 * ell.tilt)
+            ecc.append(ell.ecc)
 
         lines = axes.plot(tilt2, ecc, linestyle='None', marker='o', **kwargs)
 
