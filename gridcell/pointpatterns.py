@@ -463,7 +463,7 @@ class PointPattern(AlmostImmutable):
         },
         'finite': {
             'pmode': 'default',
-            'imode': 'standard',  #corrected,
+            'imode': 'standard',  # corrected,
         },
         'isotropic': {
             'pmode': 'default',
@@ -471,11 +471,11 @@ class PointPattern(AlmostImmutable):
         },
         'periodic': {
             'pmode': 'periodic',
-            'imode': 'standard',  #corrected,
+            'imode': 'standard',  # corrected,
         },
         'plus': {
             'pmode': 'plus',
-            'imode': 'standard',  #corrected,
+            'imode': 'standard',  # corrected,
         },
     }
 
@@ -487,7 +487,7 @@ class PointPattern(AlmostImmutable):
         # Avoid copying the window unless needed
         if not isinstance(window, Window):
             window = Window(window)
-        self.window = Window(window)
+        self.window = window
 
         self._edge_correction = edge_correction
 
