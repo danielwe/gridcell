@@ -419,12 +419,11 @@ class PointPattern(AlmostImmutable):
     Represent a planar point pattern and its associated window, and provide
     methods for analyzing its statistical properties
 
-
     Parameters
     ----------
     points : sequence or MultiPoint
         A sequence of coordinate tuples or any other valid MultiPoint
-        constructor argument, representing the points in the point pattern
+        constructor argument, representing the points in the point pattern.
     window : sequence or Polygon
         A sequence of coordinate tuples or any othr valid Polygon constructor
         argument, defining the set within which the point pattern is takes
@@ -481,13 +480,21 @@ class PointPattern(AlmostImmutable):
 
     def __init__(self, points, window, pluspoints=None,
                  edge_correction='stationary'):
-        self._points = geometry.MultiPoint(points)
-        self.pluspoints = geometry.MultiPoint(pluspoints)
-
         # Avoid copying the window unless needed
         if not isinstance(window, Window):
             window = Window(window)
         self.window = window
+
+        points = geometry.MultiPoint(points)
+        try:
+            self._points = self._wrap_into(window, points)
+        except ValueError:
+            raise ValueError("not all points in 'points' are contained inside "
+                             "'window', and automatic wrapping could not be "
+                             "carried out, since 'window' is not a simple "
+                             "plane-filling polygon")
+
+        self.pluspoints = geometry.MultiPoint(pluspoints)
 
         self._edge_correction = edge_correction
 
@@ -499,6 +506,52 @@ class PointPattern(AlmostImmutable):
 
     def __len__(self):
         return self._points.__len__()
+
+    @staticmethod
+    def _wrap_into(window, points):
+        """
+        Wrap a set of points into a plane-filling window
+
+        Parameters
+        ----------
+        window : Window
+            The window to wrap the points into. A `ValueError` is raised if
+            `window` is not a simple plane-filling polygon.
+        points : MultiPoint
+            The points to wrap.
+
+        Returns
+        -------
+        MultiPoint
+            New `MultiPoint` instance containing the wrapped representation of
+            all points in `points`.
+
+        """
+        if window.contains(points):
+            return points
+
+        lattice = window.lattice
+        lattice_r1 = numpy.roll(lattice, 1, axis=0)
+
+        def coeff_pairs():
+            i = 1
+            while True:
+                for l in range(i):
+                    yield (i - l, l)
+                i += 1
+
+        def wrap(point):
+            if window.contains(point):
+                return point
+            for (k, l) in coeff_pairs():
+                disp = k * lattice + l * lattice_r1
+                for d in disp:
+                    wrapped = affinity.translate(point, xoff=d[0], yoff=d[1])
+                    if window.contains(wrapped):
+                        return wrapped
+
+        new_points = [wrap(p) for p in points]
+        return geometry.MultiPoint(new_points)
 
     def _inherit_binary_operation(self, other, op):
         """
