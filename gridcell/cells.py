@@ -673,6 +673,7 @@ class BaseCell(AlmostImmutable):
             diff = numpy.mod(pi + numpy.roll(sangles, r) - oangles, pi_2) - pi
             d = numpy.abs(numpy.sum(diff))
             if d < delta:
+                delta = d
                 roll = r
         return roll
 
@@ -1788,8 +1789,8 @@ class CellCollection(AlmostImmutable, Mapping):
 
         return self.modules_from_labels(keys, labels, mod_kw=mod_kw)
 
-    def k_means(self, n_clusters, keys=None, features_kw=None, mod_kw=None,
-                **kwargs):
+    def k_means(self, n_clusters, n_runs=1, keys=None, features_kw=None,
+                mod_kw=None, **kwargs):
         """
         Use the K-means clustering algorithm to find modules
 
@@ -1797,6 +1798,10 @@ class CellCollection(AlmostImmutable, Mapping):
         ----------
         n_clusters : integer
             The number of clusters (and thus modules) to form.
+        n_runs : integer, optional
+            The number of times to run the K-means algorithm. Each run is
+            initialized with a new random state, and the run ending at
+            the lowest intertia criterion is used.
         keys : sequence, optional
             Sequence of cell keys to select cells to search for modules among.
             If `None`, all cells are included.
@@ -1818,7 +1823,13 @@ class CellCollection(AlmostImmutable, Mapping):
         features = self.features(keys=keys, features_kw=features_kw)
         keys, feature_arr = features.index, features.values
 
-        labels = cluster.k_means(feature_arr, n_clusters, **kwargs)[1]
+        __, labels, inertia = cluster.k_means(feature_arr, n_clusters,
+                                              **kwargs)
+        for __ in range(n_runs - 1):
+            __, lbls, inrt = cluster.k_means(feature_arr, n_clusters, **kwargs)
+            if inrt < inertia:
+                inertia = inrt
+                labels = lbls
 
         return self.modules_from_labels(keys, labels, mod_kw=mod_kw)
 
