@@ -494,6 +494,15 @@ class PointPattern(AlmostImmutable):
                              "carried out, since 'window' is not a simple "
                              "plane-filling polygon")
 
+        indices = range(len(self._points))
+        while indices:
+            i = indices.pop()
+            for j in indices:
+                if self._points[i] == self._points[j]:
+                    raise ValueError("{} does not support patterns with "
+                                     "multiple exactly equal points"
+                                     .format(self.__class__))
+
         self.pluspoints = geometry.MultiPoint(pluspoints)
 
         self._edge_correction = edge_correction

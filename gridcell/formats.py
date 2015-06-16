@@ -98,6 +98,7 @@ def pos_and_tetrode(posfile, cellfiles, led=0, range_=None, translate=False,
                 io.loadmat(cf, squeeze_me=True,
                            variable_names=['cellTS'])['cellTS']
                 for cf in cellfiles}
+    _remove_duplicates(spike_ts)
 
     return {'t': t, 'x': x, 'y': y, 'spike_ts': spike_ts, 'info': info}
 
@@ -156,6 +157,7 @@ def single_session(recfile, range_=None, translate=False, rotate=False):
             # In this case, _cell_label(key) will raise a ValueError, which is
             # silently ignored since these entries are of no interest anyway
             pass
+    _remove_duplicates(spike_ts)
 
     return {'t': t, 'x': x, 'y': y, 'spike_ts': spike_ts, 'info': info}
 
@@ -330,6 +332,7 @@ def find_sessions(positions, stimes, labels=None, range_=None, translate=False,
         x, y, info = _transform(x, y, range_=range_, translate=translate,
                                 rotate=rotate)
         spike_ts = {labels[i]: stimes[i] for i in ind}
+        _remove_duplicates(spike_ts)
         sessions.append({'t': t, 'x': x, 'y': y, 'spike_ts': spike_ts,
                          'info': info})
 
@@ -479,6 +482,26 @@ def _transform(x, y, range_=None, translate=False, rotate=False):
         info['scale_factor'] = scale_factor
 
     return x, y, info
+
+
+def _remove_duplicates(spike_ts):
+    """
+    Remove duplicate entries for the same cell from a dataset
+
+    Parameters
+    ----------
+    spike_ts : dict
+        Dict containing the spike times from a recording session. Duplicate
+        entries are removed in-place.
+
+    """
+    keys = spike_ts.keys()
+    while keys:
+        key1 = keys.pop(0)
+        for (i, key2) in enumerate(keys):
+            if numpy.all(spike_ts[key1] == spike_ts[key2]):
+                del spike_ts[key2]
+                del keys[i]
 
 
 def _square_tilt(x, y):
