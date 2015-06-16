@@ -617,13 +617,8 @@ class BaseCell(AlmostImmutable):
         Parameters
         ----------
         roll : integer, optional
-             Quantities related to individual peaks are listed in
-             counterclockwise order in the feature array. The parameter `roll`
-             decides which peaks to start and end with: the features from
-             `self.peaks()[roll]` are listed first, and those from
-             `self.peaks()[roll - 1]` last (equivalently, `self.peaks()` is
-             replaced with `numpy.roll(self.peaks(), roll, axis=0))`
-             internally.
+             Quantities related to individual peaks are listed in the order
+             given by `numpy.roll(self.peaks(), roll, axis=0)`.
         rweight : scalar, optional
             The scaling factor deciding the relative weight between
             shape-related and size-related features. The size-related features
@@ -647,14 +642,49 @@ class BaseCell(AlmostImmutable):
         return numpy.hstack((peaks[:3].ravel() / scale, rweight * logscale))
 
     @memoize_method
+    def roll(self, other):
+        """
+        Determine the peak roll necessary to align the peaks in this cell most
+        cloesly with the ones in `other`
+
+        Parameters
+        ----------
+        other : BaseCell
+            Cell to align this one with.
+
+        Returns
+        -------
+        roll : integer
+            The peak roll to apply to `self` to align it with `other`.
+            The peak roll is defined such that `numpy.roll(self.peaks(), roll,
+            axis=0)` and `other.peaks()` give coordinates to the most closely
+            corresponding peaks in `self` and `other`.
+
+        """
+        pi = numpy.pi
+        pi_2 = 2.0 * pi
+        sangles = self.peaks_polar()[:, 1]
+        oangles = other.peaks_polar()[:, 1]
+
+        roll = 0
+        diff = numpy.mod(pi + sangles - oangles, pi_2) - pi
+        delta = numpy.abs(numpy.sum(diff))
+        for r in (-1, 1):
+            diff = numpy.mod(pi + numpy.roll(sangles, r) - oangles, pi_2) - pi
+            d = numpy.abs(numpy.sum(diff))
+            if d < delta:
+                roll = r
+        return roll
+
+    @memoize_method
     def distance(self, other, features_kw=None):
         """
         Compute a distance between the grid patterns of grid cells
 
         This method defines a metric on the space of grid patterns from grid
         cells. The distance is defined as the Euclidean distance between the
-        feature arrays of the cells, using the relative peak roll that
-        minimizes this distance.
+        feature arrays of the cells, using the relative peak roll given by
+        `BaseCell.roll`.
 
         Parameters
         ----------
@@ -667,38 +697,21 @@ class BaseCell(AlmostImmutable):
         -------
         scalar
             Distance between `self` and `other`.
-        roll : integer
-            The relative peak roll applied to `self` to obtain the distance.
-            The peak roll is defined such that `numpy.roll(self.peaks(), roll,
-            axis=0)` and `other.peaks()` give coordinates to the most closely
-            corresponding peaks in `self` and `other`.
 
         """
         if self is other:
             dist = 0.0
-            roll = 0
         else:
             if features_kw is None:
                 features_kw = {}
 
+            roll = self.roll(other)
+
             ofeat = other.features(roll=0, **features_kw)
-            dfeat = self.features(roll=0, **features_kw) - ofeat
-            dist_sq = numpy.sum(dfeat * dfeat)
-            roll = 0
+            dfeat = self.features(roll=roll, **features_kw) - ofeat
+            dist = numpy.sqrt(numpy.sum(dfeat * dfeat))
 
-            # To make sure that the most closesly corresponding peaks are used,
-            # the metric is computed as the minimum of three different relative
-            # peak orderings.
-            for r in (-1, 1):
-                dfeat = self.features(roll=r, **features_kw) - ofeat
-                d_sq = numpy.sum(dfeat * dfeat)
-                if d_sq < dist_sq:
-                    dist_sq = d_sq
-                    roll = r
-
-            dist = numpy.sqrt(dist_sq)
-
-        return dist, roll
+        return dist
 
     @memoize_method
     def phase(self, other):
@@ -1461,7 +1474,7 @@ class CellCollection(AlmostImmutable, Mapping):
 
         Here, the attributes are assumed to be arrays with a value for each of
         the peaks in the inner ring, such that the arrays must be rolled into
-        maximal peak alignment before computing the mean (see Cell.distance()
+        maximal peak alignment before computing the mean (see BaseCell.roll()
         for explanation of roll).
 
         :attr: the Cell attribute to compute the mean over. Assumed to be
@@ -1477,7 +1490,7 @@ class CellCollection(AlmostImmutable, Mapping):
 
         attrsum = 0.0
         for cell in cells:
-            __, roll = cell.distance(refcell)
+            roll = cell.roll(refcell)
             attrsum += numpy.roll(getattr(cell, attr)(), roll, axis=0)
         ninv = 1.0 / len(cells)
         return ninv * attrsum
@@ -1653,26 +1666,20 @@ class CellCollection(AlmostImmutable, Mapping):
         DataFrame
             The distance matrix, indexed along rows and columns by the cell
             keys.
-        DataFrame
-            Matrix of peak rolls, organized such that rollmatrix[key1][key2]
-            gives the roll to apply to self[key2] to align it with self[key1]
-            (see `BaseCell.distance` for the full explanation of peak roll).
 
         """
         keys1, cells1 = self.lookup(keys1)
         keys2, cells2 = self.lookup(keys2)
 
-        distdict, rolldict = {}, {}
+        distdict = {}
         for (key1, cell1) in zip(keys1, cells1):
-            dist, roll = zip(*[cell1.distance(cell2, features_kw=features_kw)
-                               for cell2 in cells2])
-            distdict[key1] = pandas.Series(dist, index=keys2)
-            rolldict[key1] = pandas.Series(roll, index=keys2)
+            dists = [cell1.distance(cell2, features_kw=features_kw)
+                     for cell2 in cells2]
+            distdict[key1] = pandas.Series(dists, index=keys2)
 
         distmatrix = pandas.DataFrame(distdict).transpose()
-        rollmatrix = pandas.DataFrame(rolldict).transpose()
 
-        return distmatrix, rollmatrix
+        return distmatrix
 
     @memoize_method
     def features(self, keys=None, features_kw=None):
@@ -1705,7 +1712,7 @@ class CellCollection(AlmostImmutable, Mapping):
 
         featdict = {}
         for (key, cell) in zip(keys, cells):
-            __, roll = cell.distance(refcell)
+            roll = cell.roll(refcell)
             featdict[key] = cell.features(roll=roll, **features_kw)
 
         features = pandas.DataFrame(featdict).transpose()
@@ -1945,8 +1952,9 @@ class CellCollection(AlmostImmutable, Mapping):
 
         alpha, beta, gamma = [], [], []
         for cell in cells:
-            __, roll = cell.distance(refcell)
-            angles = numpy.rad2deg(numpy.roll(cell.peaks_polar()[:3, 1], roll))
+            roll = cell.roll(refcell)
+            angles = numpy.roll(cell.peaks_polar()[:, 1], roll)
+            angles = numpy.rad2deg(angles[:3])
             alpha.append(angles[0])
             beta.append(angles[1])
             gamma.append(angles[2])
