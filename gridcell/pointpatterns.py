@@ -563,11 +563,15 @@ class PointPattern(AlmostImmutable):
         other : shapely object
             The binary operation is applied to `self` and `other`. If `other`
             is also a `PointPattern` instance, an exception is raised if they
-            are not defined in `Window` instances that compare equal. If other
-            is not a `PointPattern` instance, the union of self._points with
-            the intersection of other and self.window is used as the points in
-            the PointPattern, while the union of self.pluspoints with the
-            difference of other and self.window is used as the pluspoints.
+            are not defined in `Window` instances that compare equal. If
+            `other` is not a `PointPattern` instance, the binary operation is
+            applied to `self._points` and `other`. The result of this operation
+            is returned directly, unless it is a `geometry.MultiPoint`
+            instance, in which case it is used to initialize a new
+            `PointPattern` instance in the same window as `self`. If applying
+            the binary operation to `self.pluspoints` and `other` also returns
+            a `geometry.MultiPoint` instance, this is used as the `pluspoints`
+            of the new `PointPattern`.
         op : string or callable
             Either a string naming the attribute of `self._points` that
             implements the binary operation, or a callable implementing the
@@ -586,8 +590,8 @@ class PointPattern(AlmostImmutable):
             bound_op = getattr(spoints, op)
             bound_op_plus = getattr(spluspoints, op)
         except TypeError:
-            def bound_op(opoints):
-                return op(spoints, opoints)
+            def bound_op(ogeom):
+                return op(spoints, ogeom)
 
             def bound_op_plus(opluspoints):
                 return op(spluspoints, opluspoints)
@@ -596,11 +600,20 @@ class PointPattern(AlmostImmutable):
         try:
             owindow = other.window
         except AttributeError:
-            # Apparently, other is not a PointPattern
-            opoints = other.intersection(swindow)
-            opluspoints = other.difference(opoints)
-            new_points = bound_op(opoints)
-            new_pluspoints = bound_op_plus(opluspoints)
+            # Apparently, other is not a PointPattern. Do the easiest thing.
+            new_geom = bound_op(other)
+            if isinstance(new_geom, geometry.MultiPoint):
+                new_pluspoints = bound_op_plus(other)
+                if isinstance(new_pluspoints, geometry.MultiPoint):
+                    return self.__class__(
+                        new_geom, swindow, pluspoints=new_pluspoints,
+                        edge_correction=self._edge_correction)
+                else:
+                    return self.__class__(
+                        new_geom, swindow, pluspoints=None,
+                        edge_correction=self._edge_correction)
+            else:
+                return new_geom
         else:
             if not (swindow == owindow):
                 raise ValueError("instances of {} must be defined over "
@@ -608,10 +621,11 @@ class PointPattern(AlmostImmutable):
                                  "binary operations to be defined"
                                  .format(self.__class__.__name__,
                                          swindow.__class__.__name__))
-            new_points = bound_op(other._points)
-            new_pluspoints = bound_op_plus(other.pluspoints)
 
-        return self.__class__(new_points, swindow, pluspoints=new_pluspoints)
+        new_points = bound_op(other._points)
+        new_pluspoints = bound_op_plus(other.pluspoints)
+        return self.__class__(new_points, swindow, pluspoints=new_pluspoints,
+                              edge_correction=self._edge_correction)
 
     def difference(self, other):
         return self._inherit_binary_operation(other, 'difference')
