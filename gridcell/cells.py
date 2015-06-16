@@ -599,7 +599,7 @@ class BaseCell(AlmostImmutable):
                                           pearson=pearson,
                                           normalized=normalized)
 
-    def features(self, roll=0, rweight=1.0):
+    def features(self, roll=0, sweight=1.0):
         """
         Compute an array of features of this cell
 
@@ -612,16 +612,16 @@ class BaseCell(AlmostImmutable):
         unique inner peaks in the autocorrelogram, divided by the grid scale
         (parametrizing the orientation and shape of the grid), as well as the
         logarithm of the grid scale (parametrizing the size of the grid). The
-        balance between the two is controlled by the parameter `rweight`.
+        balance between the two is controlled by the parameter `sweight`.
 
         Parameters
         ----------
         roll : integer, optional
              Quantities related to individual peaks are listed in the order
              given by `numpy.roll(self.peaks(), roll, axis=0)`.
-        rweight : scalar, optional
+        sweight : scalar, optional
             The scaling factor deciding the relative weight between
-            shape-related and size-related features. The size-related features
+            size-related and shape-related features. The shape-related features
             are multiplied by this number.
 
         Returns
@@ -639,7 +639,7 @@ class BaseCell(AlmostImmutable):
         # that (log(r_2) - log(r_1)) ** 2 = log(r_2 / r_1) ** 2, which is
         # dimensionless and thus OK, even though the dimension of log(r) is
         # not well-defined in a strict sense.
-        return numpy.hstack((peaks[:3].ravel() / scale, rweight * logscale))
+        return numpy.hstack((logscale, sweight * peaks[:3].ravel() / scale))
 
     @memoize_method
     def roll(self, other):
