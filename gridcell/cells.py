@@ -601,7 +601,7 @@ class BaseCell(AlmostImmutable):
 
     def features(self, roll=0, sweight=1.0):
         """
-        Compute an array of features of this cell
+        Compute a series of features of this cell
 
         The purpose of the feature array is to embed the cell into
         a high-dimensional space with dimensionless axes, where the Euclidean
@@ -626,20 +626,30 @@ class BaseCell(AlmostImmutable):
 
         Returns
         -------
-        ndarray
-            One-dimensional array containing the cell features.
+        Series
+            Series containing the cell features.
 
         """
         scale = self.scale()
         logscale = numpy.log(scale)
         peaks = numpy.roll(self.peaks(), roll, axis=0)
+        #angles = numpy.roll(self.peaks_polar()[:, 1], roll)[:3]
+        #ellipse = self.ellipse()
+        #ecc, tilt_2 = ellipse.ecc, 2.0 * ellipse.tilt
+        #ell_x, ell_y = ecc * numpy.cos(tilt_2), ecc * numpy.sin(tilt_2)
 
         # Make sure that the differences between all features are
         # dimensionless, such that the distance is independent of units. Note
         # that (log(r_2) - log(r_1)) ** 2 = log(r_2 / r_1) ** 2, which is
         # dimensionless and thus OK, even though the dimension of log(r) is
         # not well-defined in a strict sense.
-        return numpy.hstack((logscale, sweight * peaks[:3].ravel() / scale))
+        feats = numpy.hstack((logscale, sweight * peaks[:3].ravel() / scale))
+        index = ['log(r)', 'X_1', 'Y_1', 'X_2', 'Y_2', 'X_3', 'Y_3']
+        #feats = numpy.hstack((logscale,
+        #                      aweight * angles, eweight * ell_x,
+        #                      eweight * ell_y))
+        #index = ['log(r)', 'alpha', 'beta', 'gamma', 'ell_x', 'ell_y']
+        return pandas.Series(feats, index=index)
 
     @memoize_method
     def roll(self, other):
