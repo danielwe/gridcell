@@ -484,6 +484,7 @@ class BaseCell(AlmostImmutable):
         ellipse = Ellipse(fitpoints=peaks, f0=f0)
         return ellipse
 
+    @memoize_method
     def scale(self, mode='geometric', project=True, threshold=None):
         """
         Calculate the grid scale of the cell
@@ -599,6 +600,7 @@ class BaseCell(AlmostImmutable):
                                           pearson=pearson,
                                           normalized=normalized)
 
+    @memoize_method
     def features(self, roll=0, sweight=1.0):
         """
         Compute a series of features of this cell
@@ -646,9 +648,11 @@ class BaseCell(AlmostImmutable):
         feats = numpy.hstack((logscale, sweight * peaks[:3].ravel() / scale))
         index = ['log(r)', 'X_1', 'Y_1', 'X_2', 'Y_2', 'X_3', 'Y_3']
         #feats = numpy.hstack((logscale,
-        #                      aweight * angles, eweight * ell_x,
-        #                      eweight * ell_y))
-        #index = ['log(r)', 'alpha', 'beta', 'gamma', 'ell_x', 'ell_y']
+        #                      aweight * angles,
+        #                      eweight * ell_x, sweight * ell_y))
+        #index = ['log(r)',
+        #         'alpha', 'beta', 'gamma',
+        #         'ell_x', 'ell_y']
         return pandas.Series(feats, index=index)
 
     @memoize_method
@@ -687,7 +691,6 @@ class BaseCell(AlmostImmutable):
                 roll = r
         return roll
 
-    @memoize_method
     def distance(self, other, features_kw=None):
         """
         Compute a distance between the grid patterns of grid cells
@@ -1659,7 +1662,6 @@ class CellCollection(AlmostImmutable, Mapping):
                                         for cell in cells),
                                        ignore_missing=True)
 
-    @memoize_method
     def distances(self, keys1=None, keys2=None, features_kw=None):
         """
         Compute a distance matrix between cells
@@ -1692,7 +1694,6 @@ class CellCollection(AlmostImmutable, Mapping):
 
         return distmatrix
 
-    @memoize_method
     def features(self, keys=None, features_kw=None):
         """
         Compute a feature array of the cells
