@@ -747,32 +747,39 @@ class BaseCell(AlmostImmutable):
         """
         Plot the spatial firing rate map of this cell
 
-        The firing rate can be added to an existing plot via the optional
-        'axes' argument.
+        This method is basically a wrapper around `self.firing_rate.plot`.
 
-        This method is just a wrapper around self.firing_rate.plot().
+        Parameters
+        ----------
+        axes : Axes, optional
+            Axes instance to add the firing rate to. If None (default), the
+            current Axes instance is used if any, or a new one created.
+        cax : Axes, optional
+            Axes instance to add the colorbar to. If None (default), matplotlib
+            automatically makes space for a colorbar on the right-hand side of
+            the plot.
+        cmap : Colormap or registered colormap name, optional
+            Colormap to use for the plot. If None (default), the default
+            colormap from rcParams is used.
+            ..note:: The default map might be 'jet', and this is something you
+            certainly DON'T WANT to use! If you're clueless, try 'YlGnBu_r' or
+            'gray'.
+        cbar_kw : dict, optional
+            Keyword arguments to pass to `pyplot.colorbar`.
+        **kwargs : dict, optional
+            Additional keyword arguments pass to `IntensityMap2D.plot`.
 
-        :axes: Axes instance to add the intensity map to. If None (default),
-               a new Figure is created (this method never plots to the current
-               Figure or Axes). In the latter case, equal aspect ration will be
-               enforced on the newly created Axes instance.
-        :cax: Axes instance to plot the colorbar into. If None (default),
-              matplotlib automatically makes space for a colorbar on the
-              right-hand side of the plot.
-        :cmap: colormap to use for the plot. All valid matplotlib colormap
-               arguments can be used. If None (default), the default colormap
-               from rcParams is used (BEWARE: the default map might be 'jet',
-               and this is something you certainly DON'T WANT to use! If you're
-               clueless, try "YlGnBu_r" or "gray").
-        :cbar_kw: dict of keyword arguments to pass to the pyplot.colorbar()
-                  function. Default: None (empty dict)
-        :kwargs: additional keyword arguments passed on to axes.pcolormesh()
-        :returns: the axes instance containing the plot, and the colorbar
-                  instance
+        Returns
+        -------
+        Axes
+            The axes instance containing the plot
+        Colorbar
+            The created `Colorbar` instance
 
         """
-        axes, cbar = self.firing_rate.plot(axes=axes, cax=cax, cmap=cmap,
-                                           cbar_kw=cbar_kw, **kwargs)
+        axes, cbar = self.firing_rate.plot(axes=axes, cax=cax, vmin=0.0,
+                                           cmap=cmap, cbar_kw=cbar_kw,
+                                           **kwargs)
         return axes, cbar
 
     def plot_autocorrelogram(self, axes=None, cax=None, threshold=False,
