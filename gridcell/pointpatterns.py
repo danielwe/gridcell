@@ -1565,26 +1565,29 @@ class PointPatternCollection(AlmostImmutable):
         if process == 'poisson':
             nlist = numpy.random.poisson(nmean, nsims)
         elif process == 'binomial':
-            nlist = numpy.empty((nsims,))
-            nlist.fill(nmean)
+            nlist = numpy.empty((nsims,), dtype=numpy.int_)
+            nlist.fill(round(nmean))
         else:
             raise ValueError("unknown point process: {}".format(process))
 
         patterns = []
         for n in nlist:
-            # We know we need to draw at least n points, so do this right away
-            draw = numpy.column_stack(
-                (numpy.random.uniform(low=xmin, high=xmax, size=(n,)),
-                 numpy.random.uniform(low=ymin, high=ymax, size=(n,))))
-            points = geometry.MultiPoint(draw).intersection(window)
+            points = geometry.MultiPoint(None)
+            left = n
+            while left > 0:
+                draw = numpy.column_stack(
+                    (numpy.random.uniform(low=xmin, high=xmax, size=(left,)),
+                     numpy.random.uniform(low=ymin, high=ymax, size=(left,))))
+                new_points = geometry.MultiPoint(draw).intersection(window)
+                points = points.union(new_points)
+                try:
+                    new_l = len(new_points)
+                except TypeError:
+                    new_l = len(geometry.MultiPoint((new_points,)))
+                left -= new_l
 
-            # Iterate until we have enough
-            while len(points) < n:
-                newpoint = geometry.Point(
-                    (numpy.random.uniform(low=xmin, high=xmax),
-                     numpy.random.uniform(low=ymin, high=ymax)))
-                if window.contains(newpoint):
-                    points = points.union(newpoint)
+            if isinstance(points, geometry.Point):
+                points = geometry.MultiPoint((points,))
 
             pp = PointPattern(points, window, edge_correction=edge_correction)
             patterns.append(pp)
