@@ -1165,12 +1165,15 @@ class PointPattern(AlmostImmutable):
         ----------
         rmin : scalar
             The minimum r value to use when computing the statistic. If None,
-            the value :math:`0.2 / \sqrt(\lambda)`, is used, where
+            the value :math:`1.05 / (rmax * \lambda)`, is used, where
             :math:`\lambda` is the standard intensity estimate for the process.
         rmax : scalar
             The maximum r value to use when computing the statistic. If None,
-            the radius of the largest inscribed circle in the window of the
-            point pattern is used.
+            the maximum r value is taken as the minimum of the following two
+            alternatives:
+            - the radius of the largest inscribed circle in the window of the
+              point pattern,
+            - the maximum relevant interpoint distance in the point pattern.
         edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
                                'plus'}, optional
             String to select the edge handling to apply in computations. See
@@ -1181,19 +1184,20 @@ class PointPattern(AlmostImmutable):
         Returns
         -------
         scalar
-            the L test statistic
+            The L test statistic.
 
         """
         if edge_correction is None:
             edge_correction = self._edge_correction
 
-        if rmin is None:
-            rmin = 0.2 / numpy.sqrt(self.intensity())
-
         r_absolute_max = self.rmax(self.window, edge_correction)
         if rmax is None:
             rmax = self.window.inscribed_circle['radius']
         rmax = min(rmax, r_absolute_max)
+
+        if rmin is None:
+            #rmin = 0.2 / numpy.sqrt(self.intensity())
+            rmin = 1.05 / (rmax * self.intensity())
 
         # The largest deviation between L(r) and r is bound to be at a vertical
         # step. We go manual instead of using self.lfunction, in order to get
