@@ -1904,6 +1904,69 @@ class PointPatternCollection(AlmostImmutable):
                                            **kwargs)
         return attr_frame.mean(axis=0, skipna=True)
 
+    def _pp_attr_r_var(self, attr, r, edge_correction=None, **kwargs):
+        """
+        Compute the variance of some PointPattern attribute
+
+        Parameters
+        ----------
+        attr : string
+            name of `pointpattern` attribute to use.
+        r : array-like
+            Array of values at which to evaluate the variance.
+        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
+                               'plus'}, optional
+            String to select the edge handling to apply in computations. See
+            the documentation for `PointPattern` for details.
+            If not supplied, the edge correction falls back to the default
+            value (set at instance initialization).
+
+        Returns
+        -------
+        array
+            Variance of the `PointPattern` attribute evaluated at `r`.
+
+        """
+        if edge_correction is None:
+            edge_correction = self._edge_correction
+
+        attr_frame = self._pp_attr_r_frame(attr, r,
+                                           edge_correction=edge_correction,
+                                           **kwargs)
+        return attr_frame.var(axis=0, skipna=True)
+
+    def _pp_attr_r_std(self, attr, r, edge_correction=None, **kwargs):
+        """
+        Compute the standard deviation of some PointPattern attribute
+
+        Parameters
+        ----------
+        attr : string
+            name of `pointpattern` attribute to use.
+        r : array-like
+            Array of values at which to evaluate the standard deviation.
+        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
+                               'plus'}, optional
+            String to select the edge handling to apply in computations. See
+            the documentation for `PointPattern` for details.
+            If not supplied, the edge correction falls back to the default
+            value (set at instance initialization).
+
+        Returns
+        -------
+        array
+            Standard deviation of the `PointPattern` attribute evaluated at
+            `r`.
+
+        """
+        if edge_correction is None:
+            edge_correction = self._edge_correction
+
+        attr_frame = self._pp_attr_r_frame(attr, r,
+                                           edge_correction=edge_correction,
+                                           **kwargs)
+        return attr_frame.std(axis=0, skipna=True)
+
     def kframe(self, r, edge_correction=None):
         """
         Compute a DataFrame containing values of the empirical K-functions of
@@ -1981,6 +2044,57 @@ class PointPatternCollection(AlmostImmutable):
         """
         return self._pp_attr_r_mean('kfunction', r,
                                     edge_correction=edge_correction)
+
+    def kvar(self, r, edge_correction=None):
+        """
+        Compute the variance of the empirical K-functions of the patterns
+
+        Parameters
+        ----------
+        r : array-like
+            Array of values at which to evaluate the variance of the empirical
+            K-functions.
+        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
+                               'plus'}, optional
+            String to select the edge handling to apply in computations. See
+            the documentation for `PointPattern` for details.
+            If not supplied, the edge correction falls back to the default
+            value (set at instance initialization).
+
+        Returns
+        -------
+        array
+            Variance of the empirical K-functions evaluated at `r`.
+
+        """
+        return self._pp_attr_r_var('kfunction', r,
+                                   edge_correction=edge_correction)
+
+    def kstd(self, r, edge_correction=None):
+        """
+        Compute the standard devation of the empirical K-functions of the
+        patterns
+
+        Parameters
+        ----------
+        r : array-like
+            Array of values at which to evaluate the standard deviation of the
+            empirical K-functions.
+        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
+                               'plus'}, optional
+            String to select the edge handling to apply in computations. See
+            the documentation for `PointPattern` for details.
+            If not supplied, the edge correction falls back to the default
+            value (set at instance initialization).
+
+        Returns
+        -------
+        array
+            Standard deviation of the empirical K-functions evaluated at `r`.
+
+        """
+        return self._pp_attr_r_std('kfunction', r,
+                                   edge_correction=edge_correction)
 
     def lframe(self, r, edge_correction=None):
         """
@@ -2060,6 +2174,57 @@ class PointPatternCollection(AlmostImmutable):
         """
         return self._pp_attr_r_mean('lfunction', r,
                                     edge_correction=edge_correction)
+
+    def lvar(self, r, edge_correction=None):
+        """
+        Compute the variance of the empirical L-functions of the patterns
+
+        Parameters
+        ----------
+        r : array-like
+            Array of values at which to evaluate the mean values of the
+            empirical L-functions.
+        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
+                               'plus'}, optional
+            String to select the edge handling to apply in computations. See
+            the documentation for `PointPattern` for details.
+            If not supplied, the edge correction falls back to the default
+            value (set at instance initialization).
+
+        Returns
+        -------
+        array
+            Variance of the empirical L-functions evaluated at `r`.
+
+        """
+        return self._pp_attr_r_var('lfunction', r,
+                                   edge_correction=edge_correction)
+
+    def lstd(self, r, edge_correction=None):
+        """
+        Compute the standard deviation of the empirical L-functions of the
+        patterns
+
+        Parameters
+        ----------
+        r : array-like
+            Array of values at which to evaluate the mean values of the
+            empirical L-functions.
+        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
+                               'plus'}, optional
+            String to select the edge handling to apply in computations. See
+            the documentation for `PointPattern` for details.
+            If not supplied, the edge correction falls back to the default
+            value (set at instance initialization).
+
+        Returns
+        -------
+        array
+            Standard deviation of the empirical L-functions evaluated at `r`.
+
+        """
+        return self._pp_attr_r_std('lfunction', r,
+                                   edge_correction=edge_correction)
 
     def pair_corr_frame(self, r, bandwidth=None, edge_correction=None):
         """
