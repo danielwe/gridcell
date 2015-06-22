@@ -278,6 +278,14 @@ class BinnedSet(AlmostImmutable):
             numpy.meshgrid(*self.binwidths, indexing='ij'), axis=0)
 
     @property
+    def total_area(self):
+        """
+        The total area (in general, volume) of the BinnedSet
+
+        """
+        return numpy.prod([r[1] - r[0] for r in self.range_])
+
+    @property
     @memoize_method
     def regular(self):
         """
@@ -940,19 +948,25 @@ class IntensityMap(AlmostImmutable):
         """
         Compute the mean intensity of the instance, ignoring missing values
 
+        The contribution each bin is correctly weighted by the area (volume) of
+        the bin.
+
         Returns
         -------
         scalar
             The mean intensity.
 
         """
-        return numpy.ma.mean(self.data)
+        return self.integral() / self.indicator.integral()
 
     @memoize_method
     def std(self, ddof=0):
         """
         Compute the standard deviation of the intensity of the instance,
         ignoring missing values
+
+        The contribution each bin is correctly weighted by the area (volume) of
+        the bin.
 
         Parameters
         ----------
@@ -966,7 +980,7 @@ class IntensityMap(AlmostImmutable):
             The standard deviation of the intensity.
 
         """
-        return numpy.ma.std(self.data, ddof=ddof)
+        return numpy.sqrt(self.var(ddof=ddof))
 
     @memoize_method
     def var(self, ddof=0):
@@ -974,12 +988,15 @@ class IntensityMap(AlmostImmutable):
         Compute the variance of the intensity of the instance, ignoring missing
         values
 
+        The contribution each bin is correctly weighted by the area (volume) of
+        the bin.
+
         Parameters
         ----------
         ddof : int, optional
             Delta degrees of freedom: the divisor used in calculating the
             variance is `N - ddof`, where `N` is the number of bins with values
-            present. See the documentation for `numpy.nanvar` for details.
+            present. See the documentation for `numpy.var` for details.
 
         Returns
         -------
@@ -987,7 +1004,11 @@ class IntensityMap(AlmostImmutable):
             The variance of the intensity.
 
         """
-        return numpy.ma.var(self.data, ddof=ddof)
+        mean = self.mean()
+        dev = self - mean
+        square = dev * dev
+        n = self.count()
+        return n * square.integral() / ((n - ddof) * self.indicator.integral())
 
     @memoize_method
     def min(self):
@@ -1029,23 +1050,24 @@ class IntensityMap(AlmostImmutable):
 
         Returns
         -------
-        IntensityMap
-            The marginal intensity map resulting from integrating the intensity
-            along the specified axes.
+        scalar or IntensityMap
+            If axis is None, the value of the integral of the intensity over
+            the bset is returned. Otherwise, the marginal intensity map
+            resulting from integrating the intensity along the specified axes
+            is returned.
 
         """
         if axis is None:
-            new_data = numpy.ma.sum(self.data * self.bset.area)
-            remaining_edges = []
-        else:
-            try:
-                measure = numpy.prod([self.bset.binwidths[ax] for ax in axis],
-                                     axis=0)
-            except TypeError:
-                measure = self.bset.binwidths[axis]
-            new_data = numpy.ma.sum(self.data * measure, axis=axis)
-            remaining_axes = numpy.setdiff1d(range(self.ndim), axis)
-            remaining_edges = [self.bset.edges[ax] for ax in remaining_axes]
+            return numpy.ma.sum(self.data * self.bset.area)
+
+        try:
+            measure = numpy.prod([self.bset.binwidths[ax] for ax in axis],
+                                 axis=0)
+        except TypeError:
+            measure = self.bset.binwidths[axis]
+        new_data = numpy.ma.sum(self.data * measure, axis=axis)
+        remaining_axes = numpy.setdiff1d(range(self.ndim), axis)
+        remaining_edges = [self.bset.edges[ax] for ax in remaining_axes]
 
         # This is kind of a hack that breaks good OO design, but is there
         # a better solution?
@@ -1053,6 +1075,26 @@ class IntensityMap(AlmostImmutable):
             return IntensityMap2D(new_data, (remaining_edges,))
         else:
             return IntensityMap(new_data, (remaining_edges,))
+
+    @property
+    @memoize_method
+    def mask(self):
+        """
+        A boolean IntensityMap instance with value True in all bins where this
+        instance has missing values
+
+        """
+        return self.__class__(self.data.mask, self.bset)
+
+    @property
+    @memoize_method
+    def indicator(self):
+        """
+        An integer IntensityMap instance with value 0 in all bins where this
+        instance has missing values, and 1 otherwise
+
+        """
+        return (~self.mask).astype(numpy.int_)
 
     @property
     def ndim(self):
@@ -1069,6 +1111,14 @@ class IntensityMap(AlmostImmutable):
 
         """
         return self.data.shape
+
+    @property
+    def size(self):
+        """
+        The total number of elements in the IntensityMap instance
+
+        """
+        return self.data.size
 
     @property
     def dtype(self):
@@ -1096,6 +1146,24 @@ class IntensityMap(AlmostImmutable):
         """
         return numpy.ma.filled(self.data.astype(numpy.float_),
                                fill_value=numpy.nan)
+
+    def count(self, axis=None):
+        """
+        Count the number of non-missing elements along the given axis
+
+        Parameters
+        ----------
+        axis : integer, optional
+            Axis along which to count non-missing elements
+
+        Returns
+        -------
+        integer or ndarray
+            If axis is None, the total count of non-missing elements.
+            Otherwise, an array with counts along the given axis is returned.
+
+        """
+        return self.data.count(axis=axis)
 
     @memoize_method
     def filled(self, fill_value):
@@ -1350,8 +1418,11 @@ class IntensityMap(AlmostImmutable):
             raise ValueError("no peaks found, try lowering 'threshold'")
 
         index = range(1, n + 1)
-        peak_list = measurements.center_of_mass(self.unmasked_data,
-                                                labels=labels, index=index)
+        # Weight the the value in each cell by the size of its bin to get more
+        # precise peak positions
+        weighted_data = self.unmasked_data * self.bset.area
+        peak_list = measurements.center_of_mass(weighted_data, labels=labels,
+                                                index=index)
 
         labeled_areas = [numpy.sum(self.bset.area * (labels == i))
                          for i in index]
