@@ -10,6 +10,7 @@ http://code.activestate.com/recipes/577452-a-memoize-decorator-for-instance-meth
 
 from __future__ import (absolute_import, division, print_function,
                         unicode_literals)
+from collections import Mapping
 from functools import partial, update_wrapper
 from inspect import getcallargs  # Python >= 2.7
 try:
@@ -92,8 +93,8 @@ class memoize_function(object):
         try:
             if varkw is not None:
                 kw = callargs[varkw]
-                callargs[varkw] = frozenset(kw.items())
-            key = frozenset(callargs.items())
+                callargs[varkw] = _HashableDict(kw)
+            key = _HashableDict(callargs)
             res = cache[key]
         except KeyError:
             cache[key] = res = f(*args, **kwargs)
@@ -216,8 +217,8 @@ class memoize_method(object):
         try:
             if varkw is not None:
                 kw = callargs[varkw]
-                callargs[varkw] = frozenset(kw.items())
-            key = (f.__name__, frozenset(callargs.items()))
+                callargs[varkw] = _HashableDict(kw)
+            key = (f.__name__, _HashableDict(callargs))
             res = cache[key]
         except KeyError:
             cache[key] = res = f(*args, **kwargs)
@@ -255,3 +256,55 @@ class memoize_method(object):
             pass
         else:
             cache.clear()
+
+
+class _HashableDict(Mapping):
+    """
+    An immutable, hashable mapping type. The hash is computed based from both
+    keys and values.
+
+    Inspired by Raymond Hettinger's contribution at
+    http://stackoverflow.com/questions/1151658/python-hashable-dicts
+
+    Parameters
+    ----------
+    *args, **kwargs
+        Any argument list that can initialize a regular dict with only hashable
+        entries.
+
+    """
+    # Copyright (c) 2015 Daniel Wennberg
+    #
+    # Permission is hereby granted, free of charge, to any person obtaining
+    # a copy of this software and associated documentation files (the
+    # "Software"), to deal in the Software without restriction, including
+    # without limitation the rights to use, copy, modify, merge, publish,
+    # distribute, sublicense, and/or sell copies of the Software, and to permit
+    # persons to whom the Software is furnished to do so, subject to the
+    # following conditions:
+    #
+    # The above copyright notice and this permission notice shall be included
+    # in all copies or substantial portions of the Software.
+    #
+    # THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+    # OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+    # MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
+    # NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+    # DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+    # OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+    # USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+    def __init__(self, *args, **kwargs):
+        self._dict = dict(*args, **kwargs)
+
+    def __getitem__(self, key):
+        return self._dict.__getitem__(key)
+
+    def __iter__(self):
+        return self._dict.__iter__()
+
+    def __len__(self):
+        return self._dict.__len__()
+
+    def __hash__(self):
+        return hash((frozenset(self._dict), frozenset(self._dict.values())))
