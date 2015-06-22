@@ -1164,16 +1164,11 @@ class PointPattern(AlmostImmutable):
         Parameters
         ----------
         rmin : scalar
-            The minimum r value to use when computing the statistic. If None,
-            the value :math:`1.05 / (rmax * \lambda)`, is used, where
-            :math:`\lambda` is the standard intensity estimate for the process.
-        rmax : scalar
-            The maximum r value to use when computing the statistic. If None,
-            the maximum r value is taken as the minimum of the following two
-            alternatives:
-            - the radius of the largest inscribed circle in the window of the
-              point pattern,
-            - the maximum relevant interpoint distance in the point pattern.
+            The minimum r value to consider when computing the statistic. If
+            None, the value is set by `PointPattern.lstatistic_interval`.
+        rmin : scalar
+            The maximum r value to consider when computing the statistic. If
+            None, the value is set by `PointPattern.lstatistic_interval`.
         edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
                                'plus'}, optional
             String to select the edge handling to apply in computations. See
@@ -1190,20 +1185,18 @@ class PointPattern(AlmostImmutable):
         if edge_correction is None:
             edge_correction = self._edge_correction
 
-        r_absolute_max = self.rmax(self.window, edge_correction)
-        if rmax is None:
-            rmax = self.window.inscribed_circle['radius']
-        rmax = min(rmax, r_absolute_max)
-
+        interval = self.lstatistic_interval(edge_correction=edge_correction)
         if rmin is None:
-            #rmin = 0.2 / numpy.sqrt(self.intensity())
-            rmin = 1.05 / (rmax * self.intensity())
+            rmin = interval[0]
+        if rmax is None:
+            rmax = interval[1]
 
         # The largest deviation between L(r) and r is bound to be at a vertical
         # step. We go manual instead of using self.lfunction, in order to get
         # it as exactly and cheaply as possible.
+        rend = self.rmax(self.window, edge_correction)
         rsteps, weights = self._estimator_base(edge_correction=edge_correction)
-        rsteps = numpy.hstack((0.0, rsteps, r_absolute_max))
+        rsteps = numpy.hstack((0.0, rsteps, rend))
         valid = numpy.logical_and(rsteps > rmin, rsteps < rmax)
         rsteps = rsteps[valid]
         weights = numpy.hstack((0.0, weights, numpy.nan))
@@ -1222,6 +1215,48 @@ class PointPattern(AlmostImmutable):
         # Compute the offset and return the maximum
         offset = numpy.hstack((lvals_high - rsteps, lvals_low - rsteps))
         return numpy.nanmax(numpy.abs(offset))
+
+    def lstatistic_interval(self, edge_correction=None):
+        """
+        Compute the default interval over which to evaluate the L test
+        statistic
+
+        The interval is defined as [rmin, rmax] with
+        :math:`rmin = 1.05 / (rmax * \lambda)`, where :math:`\lambda` is the
+        standard intensity estimate for the process, and rmax is the minimum of
+        the following two alternatives:
+        - the radius of the largest inscribed circle in the window of the point
+          pattern, as computed by `Window.inscribed_circle`,
+        - the maximum relevant interpoint distance in the point pattern, as
+          computed by `PointPattern.rmax`.
+
+        Parameters
+        ----------
+        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
+                               'plus'}, optional
+            String to select the edge handling to apply in computations. See
+            the documentation for `PointPattern` for details.
+            If not supplied, the edge correction falls back to the default
+            value (set at instance initialization).
+
+        Returns
+        -------
+        rmin : scalar
+            The minimum end of the L test statistic interval
+        rmax : scalar
+            The maximum end of the L test statistic interval
+
+        """
+        if edge_correction is None:
+            edge_correction = self._edge_correction
+        rmax_absolute = self.rmax(self.window, edge_correction)
+        rmax_standard = self.window.inscribed_circle['radius']
+        rmax = min(rmax_standard, rmax_absolute)
+
+        #rmin = 0.2 / numpy.sqrt(self.intensity())
+        rmin = 1.05 / (rmax * self.intensity())
+
+        return rmin, rmax
 
     def pair_corr_function(self, r, bandwidth=None, edge_correction=None):
         """
