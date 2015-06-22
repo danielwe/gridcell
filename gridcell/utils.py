@@ -256,61 +256,114 @@ def edge_regions(arr):
     return mask
 
 
-def my_pearson_corr(in1, in2):
+def pearson_correlogram(in1, in2, mode='full'):
     """
-    Compute the Pearson correlation of two arrays at all possible displacements
+    Compute the Pearson correlation coefficients of two arrays at all
+    displacements.
 
-    Normalization of the arrays is performed separately at each displacement,
-    subtracting the mean and dividing by the standard deviation of the
-    overlapping values only.
+    Z-score normalization of the overlapping parts of the arrays is performed
+    separately at each displacement. Each entry in the resulting array is thus
+    in the interval `[-1.0, 1.0]`.
 
-    This is probably not useful for anything, but the code has been written and
-    shouldn't be removed without closer consideration.
+    Masked arrays are supported, and the treatment is fully automatic.
 
-    :in1: first array to correlate.
-    :in2: second array to correlate.
+    Parameters
+    ----------
+    in1, in2 : array-like, with the same number of dimensions
+        Arrays to correlate.
+    mode : {'full', 'valid', 'same'}, optional
+        String indicating the size of the output. See `scipy.signal.convolve`
+        for details.
+
+    Returns
+    -------
+    ndarray
+        Correlogram with Pearson correlation coefficients
 
     """
-    #n = in1.ndim
-    #if in2.ndim != n:
-    #    raise ValueError("input arrays must have the same number of "
-    #                     "dimensions.")
+    masked = False
+    if isinstance(in1, numpy.ma.MaskedArray):
+        mask1 = numpy.ma.getmaskarray(in1)
+        in1 = numpy.ma.getdata(in1)
+        masked = True
+    else:
+        in1 = numpy.array(in1)
+        mask1 = numpy.zeros_like(in1, dtype=numpy.bool_)
 
-    shape1, shape2 = in1.shape, in2.shape
+    if isinstance(in2, numpy.ma.MaskedArray):
+        mask2 = numpy.ma.getmaskarray(in2)
+        in2 = numpy.ma.getdata(in2)
+        masked = True
+    else:
+        in2 = numpy.array(in2)
+        mask2 = numpy.zeros_like(in2, dtype=numpy.bool_)
 
-    ## Normalize
-    #in1 = (in1 - in1.mean()) / in1.std()
-    #in2 = (in2 - in2.mean()) / in2.std()
+    ndim = in1.ndim
+    if in2.ndim != ndim:
+        raise ValueError("input arrays must have the same number of "
+                         "dimensions")
 
-    corr = numpy.zeros([s1 + s2 - 1 for (s1, s2) in zip(shape1, shape2)])
+    shape1, shape2 = numpy.array(in1.shape), numpy.array(in2.shape)
 
-    it = numpy.nditer(corr, flags=['multi_index'], op_flags=['writeonly'])
-    while not it.finished:
+    if mode == 'full':
+        corrshape = tuple(shape1 + shape2 - 1)
+        offset = 1 - shape2
+    elif mode == 'valid':
+        corrshape = tuple(numpy.abs(shape1 - shape2) + 1)
+        offset = numpy.zeros((ndim,), dtype=numpy.int_)
+    elif mode == 'same':
+        corrshape = tuple(shape1)
+        offset = (1 - shape2) // 2
+    else:
+        raise ValueError("unknown mode {}".format(mode))
+
+    if masked:
+        corr = numpy.ma.zeros(corrshape)
+        missing = numpy.ma.masked
+    else:
+        corr = numpy.zeros(corrshape)
+        missing = numpy.nan
+
+    # Bind functions used in the loop to local names
+    maximum, minimum, column_stack, logical_or, sqrt, newaxis, slice_ = (
+        numpy.maximum, numpy.minimum, numpy.column_stack, numpy.logical_or,
+        numpy.sqrt, numpy.newaxis, slice)
+    dims = range(ndim)
+    for ind in numpy.ndindex(corrshape):
         # Compute displacement
-        disp = [1 - s2 + i for (s2, i) in zip(shape2, it.multi_index)]
+        disp = offset + ind
 
         # Extract overlap
-        sl1, sl2 = [], []
-        for (d, s1, s2) in zip(disp, shape1, shape2):
-            sl1.append(slice(max(0, d), min(s1, s2 + d)))
-            sl2.append(slice(max(0, -d), min(s1, s2 - d)))
-        c1 = in1[sl1]
-        c2 = in2[sl2]
+        start = maximum(disp, 0)
+        stop = minimum(disp + shape2, shape1)
+        range1 = column_stack((start, stop))
+        range2 = range1 - disp[:, newaxis]
+        sl1, sl2 = (), ()
+        for i in dims:
+            sl1 += (slice_(*range1[i]),)
+            sl2 += (slice_(*range2[i]),)
 
-        # Subtract mean
-        c1 = c1 - c1.mean()
-        c2 = c2 - c2.mean()
+        # Only consider valid overlapping values
+        valid = ~logical_or(mask1[sl1], mask2[sl2])
 
-        if not (numpy.allclose(c1, 0.0) or numpy.allclose(c2, 0.0)):
-            ## Normalize
-            #c1 = c1 / c1.std()
-            #c2 = c2 / c2.std()
+        c1 = in1[sl1][valid]
+        c2 = in2[sl2][valid]
+        n = c1.size
 
-            # Compute correlation
-            #it[0] = numpy.sum(c1 * c2) / c1.size
-            it[0] = numpy.sum(c1 * c2) / (numpy.sqrt(numpy.sum(c1 * c1))
-                                          * numpy.sqrt(numpy.sum(c2 * c2)))
+        if n == 0:
+            # Nothing to see here here (avoid division by zero)
+            corr[ind] = missing
+            continue
 
-        it.iternext()
+        ninv = 1.0 / n
+        c1 = c1 - ninv * c1.sum()  # Much faster than using -= and c1.mean()
+        c2 = c2 - ninv * c2.sum()
+
+        denom_sq = (c1 * c1).sum() * (c2 * c2).sum()
+        if denom_sq == 0.0:
+            corr[ind] = missing
+        else:
+            num = (c1 * c2).sum()
+            corr[ind] = num / sqrt(denom_sq)
 
     return corr

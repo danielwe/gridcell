@@ -321,7 +321,7 @@ class BaseCell(AlmostImmutable):
         self.range_ = firing_rate.range_
         self.threshold = threshold
 
-    def autocorrelate(self, mode='full', pearson=True, normalized=True):
+    def autocorrelate(self, mode='full', pearson=True, normalized=False):
         """
         Compute the autocorrelogram of the smoothed firing rate
 
@@ -572,7 +572,7 @@ class BaseCell(AlmostImmutable):
 
         return IntensityMap2D(ffarr, acorr.bset)
 
-    def correlate(self, other, mode='full', pearson=True, normalized=True):
+    def correlate(self, other, mode='full', pearson=True, normalized=False):
         """
         Compute the cross-correlaogram of another cell's firing rate to this
 

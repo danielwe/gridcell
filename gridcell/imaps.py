@@ -28,7 +28,7 @@ from scipy.ndimage import filters, measurements
 from skimage import feature  # , exposure
 from matplotlib import pyplot
 
-from .utils import AlmostImmutable, sensibly_divide
+from .utils import AlmostImmutable, sensibly_divide, pearson_correlogram
 from .external.memoize import memoize_method
 from .ndfit import fit_ndgaussian
 
@@ -1226,29 +1226,38 @@ class IntensityMap(AlmostImmutable):
         """
         Compute the cross-correlogram of this and another IntensityMap instance
 
-        :other: another IntensityMap instance. May also be a numpy array of
-                appropriate dimensionality. In the latter case, the array will
-                be centered over the origin and given bin widths that are
-                compatible with this instance (if possible).
-        :mode: string indicating the size of the output. See
-               scipy.signal.correlate for details. Valid options:
-               'full', 'valid', 'same'. Default is 'full'.
-        :pearson: if True, the IntensityMap instances are normalized to mean
-                  0.0 and variance 1.0 before correlating, and the result is
-                  divided by the maximum number of overlapping bins of the
-                  intensty maps. The result of the this computation is the
-                  Pearson product-moment correlation coefficient between
-                  displaced intensity arrays, evaluated at each possible
-                  displacement.
-        :normalized: if True, the correlated IntensityMap is renormalized for
-                     each bin to eliminate the influence of missing values and
-                     values beyond the edges. Where only missing values would
-                     have contributed, the resulting value is missing. If
-                     False, values beyond the boundary are interpreted as 0.0,
-                     and the presence of missing values will raise
-                     a ValueError.
-        :returns: new IntensityMap instance representing the cross-correlogram
-                  of this and the other instance
+        Parameters
+        ----------
+        other : IntensityMap or array-like
+            Intensity map to correlate with. If given as an array-like type,
+            the array will be centered over the origin and given bin widths
+            that are compatible with this IntensityMap (if possible).
+        mode : {'full', 'valid', 'same'}, optional
+            String indicating the size of the output. See
+            `scipy.signal.convolve` for details.
+        pearson : bool, optional
+            If True, each entry in the result is the Pearson correlation
+            coefficient between the overlapping parts of the IntensityMap
+            instances at the corresponding displacement. See
+            `utils.pearson_correlogram` for details. If False, the result
+            contains plain cross-correlations.
+        normalized : bool, optional
+            If True, the correlated IntensityMap is renormalized for each bin
+            to eliminate the influence of missing values and values beyond the
+            edges. Where only missing values would have contributed, the
+            resulting value is missing. If False, values beyond the boundary
+            are interpreted as 0.0, and the presence of missing values will
+            raise a ValueError.
+            ..note:: Not applicable if `pearson == True` -- the Pearson
+            correlation coefficient is by definition normalized (albeit in
+            a slightly different way), and can handle missing values
+            gracefully.
+
+        Returns
+        -------
+        IntensityMap
+            IntensityMap instance representing the cross-correlogram of this
+            and the other instance.
 
         """
         sdata = self.data
@@ -1261,19 +1270,21 @@ class IntensityMap(AlmostImmutable):
         new_bset = self.bset.correlate(other.bset, mode=mode)
 
         if pearson:
-            sdata = (sdata - self.mean()) / self.std()
-            odata = (odata - other.mean()) / other.std()
+            new_data = pearson_correlogram(sdata, odata, mode=mode)
 
-            def corrfunc(arr1, arr2):
-                size = 1
-                for (s1, s2) in zip(numpy.shape(arr1), numpy.shape(arr2)):
-                    size *= min(s1, s2)
-                return signal.correlate(arr1, arr2, mode=mode) / size
+            # Remove the outer frame of nonsense
+            n = self.ndim
+            sl_all = slice(None)
+            sl_firstlast = (0, -1)
+            for axis in range(n):
+                s = [sl_all] * n
+                s[axis] = sl_firstlast
+                new_data[s] = numpy.ma.masked
         else:
             def corrfunc(arr1, arr2):
                 return signal.correlate(arr1, arr2, mode=mode)
 
-        new_data = _safe_mmap(normalized, corrfunc, (sdata, odata))
+            new_data = _safe_mmap(normalized, corrfunc, (sdata, odata))
 
         return self.__class__(new_data, new_bset)
 
