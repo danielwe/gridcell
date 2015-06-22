@@ -601,7 +601,7 @@ class BaseCell(AlmostImmutable):
                                           normalized=normalized)
 
     @memoize_method
-    def features(self, roll=0, sweight=1.0):
+    def features(self, roll=0, rweight=1.0, extra=False):
         """
         Compute a series of features of this cell
 
@@ -621,38 +621,45 @@ class BaseCell(AlmostImmutable):
         roll : integer, optional
              Quantities related to individual peaks are listed in the order
              given by `numpy.roll(self.peaks(), roll, axis=0)`.
-        sweight : scalar, optional
+        rweight : scalar, optional
             The scaling factor deciding the relative weight between
-            size-related and shape-related features. The shape-related features
+            size-related and shape-related features. The size-related features
             are multiplied by this number.
+        extra : bool, optional
+            If True, the feature series is extended to also include the scale
+            (no logarithm taken), polar coordinates for the peaks, as well as
+            both cartesian and polar coordinates for the ellipse parameters.
 
         Returns
         -------
         Series
-            Series containing the cell features.
+            Series containing the cell features. The keys are appropriately
+            Latex-formatted strings..
 
         """
         scale = self.scale()
         logscale = numpy.log(scale)
         peaks = numpy.roll(self.peaks(), roll, axis=0)
-        #angles = numpy.roll(self.peaks_polar()[:, 1], roll)[:3]
-        #ellipse = self.ellipse()
-        #ecc, tilt_2 = ellipse.ecc, 2.0 * ellipse.tilt
-        #ell_x, ell_y = ecc * numpy.cos(tilt_2), ecc * numpy.sin(tilt_2)
 
         # Make sure that the differences between all features are
         # dimensionless, such that the distance is independent of units. Note
         # that (log(r_2) - log(r_1)) ** 2 = log(r_2 / r_1) ** 2, which is
         # dimensionless and thus OK, even though the dimension of log(r) is
         # not well-defined in a strict sense.
-        feats = numpy.hstack((logscale, sweight * peaks[:3].ravel() / scale))
-        index = ['log(r)', 'X_1', 'Y_1', 'X_2', 'Y_2', 'X_3', 'Y_3']
-        #feats = numpy.hstack((logscale,
-        #                      aweight * angles,
-        #                      eweight * ell_x, sweight * ell_y))
-        #index = ['log(r)',
-        #         'alpha', 'beta', 'gamma',
-        #         'ell_x', 'ell_y']
+        feats = numpy.hstack((rweight * logscale, peaks[:3].ravel() / scale))
+        featlabels = ('logscale', 'x1', 'y1', 'x2', 'y2', 'x3', 'y3')
+        if extra:
+            polar = numpy.roll(self.peaks_polar(), roll, axis=0)
+            polar[:, 0] /= scale
+            ellipse = self.ellipse()
+            ecc, tilt_2 = ellipse.ecc, 2.0 * ellipse.tilt
+            x_ell = ecc * numpy.cos(tilt_2)
+            y_ell = ecc * numpy.sin(tilt_2)
+            feats = numpy.hstack((feats, scale, polar[:3].ravel(), x_ell,
+                                  y_ell, ecc, tilt_2))
+            featlabels += ('scale', 'r1', 'alpha1', 'r2', 'alpha2', 'r3',
+                           'alpha3', 'xell', 'yell', 'ecc', 'tilt_2')
+        index = [features_index[label] for label in featlabels]
         return pandas.Series(feats, index=index)
 
     @memoize_method
@@ -691,7 +698,7 @@ class BaseCell(AlmostImmutable):
                 roll = r
         return roll
 
-    def distance(self, other, features_kw=None):
+    def distance(self, other, **kwargs):
         """
         Compute a distance between the grid patterns of grid cells
 
@@ -704,7 +711,7 @@ class BaseCell(AlmostImmutable):
         ----------
         other : BaseCell
             BaseCell instance to measure distance to.
-        features_kw : dict, optional
+        kwargs : dict, optional
             Keyword arguments to pass to `BaseCell.features`.
 
         Returns
@@ -716,13 +723,10 @@ class BaseCell(AlmostImmutable):
         if self is other:
             dist = 0.0
         else:
-            if features_kw is None:
-                features_kw = {}
-
             roll = self.roll(other)
 
-            ofeat = other.features(roll=0, **features_kw)
-            dfeat = self.features(roll=roll, **features_kw) - ofeat
+            ofeat = other.features(roll=0, **kwargs)
+            dfeat = self.features(roll=roll, **kwargs) - ofeat
             dist = numpy.sqrt(numpy.sum(dfeat * dfeat))
 
         return dist
@@ -1516,17 +1520,6 @@ class CellCollection(AlmostImmutable, Mapping):
         ninv = 1.0 / len(cells)
         return ninv * attrsum
 
-    def mean_scale(self, keys=None):
-        """
-        Compute the mean scale of cells in the collection
-
-        :keys: sequence of cell keys to select cells to compute the mean scale
-               from. If None, all cells are included.
-        :returns: the mean scale
-
-        """
-        return self._mean_attribute('scale', keys=keys)
-
     def mean_firing_field(self, keys=None):
         """
         Compute the mean firing field of cells in the collection
@@ -1561,50 +1554,6 @@ class CellCollection(AlmostImmutable, Mapping):
 
         """
         return self._mean_peak_attribute('peaks_polar', keys=keys)
-
-    def mean_ellpars(self, mode='direct', keys=None):
-        """
-        Compute the mean tilt and eccentricity of the ellipses fitted to the
-        inner six peaks of cells in the collection
-
-        :mode: string to select how to compute the means. Possible values:
-            'direct': the returned tilt is the mean of the tilts from each
-                      cell, and the returned eccentricity is the mean of the
-                      eccentricities from each cell
-            'euclidean': the parameters are mapped into the plane using (ecc,
-                         2 * tilt) as polar coordinates (r, theta), and the
-                         mean of the corresponding cartesian coordinates is
-                         computed, before converting back to the mean
-                         eccentricity and tilt
-        :keys: sequence of cell keys to select cells to compute the mean
-               ellipse parameters from. If None, all cells are included.
-        :returns: mean tilt, mean eccentricity
-
-        """
-        __, cells = self.lookup(keys)
-        ninv = 1.0 / len(cells)
-        if mode == 'direct':
-            tiltsum, eccsum = 0.0, 0.0
-            for cell in cells:
-                ell = cell.ellipse()
-                tiltsum += ell.tilt
-                eccsum += ell.ecc
-            mean_tilt, mean_ecc = ninv * tiltsum, ninv * eccsum
-        elif mode == 'euclidean':
-            xsum, ysum = 0.0, 0.0
-            for cell in cells:
-                ell = cell.ellipse()
-                tilt2, ecc = 2.0 * ell.tilt, ell.ecc
-                x, y = ecc * numpy.cos(tilt2), ecc * numpy.sin(tilt2)
-                xsum += x
-                ysum += y
-            xmean, ymean = ninv * xsum, ninv * ysum
-            mean_tilt = .5 * numpy.arctan2(ymean, xmean)
-            mean_ecc = numpy.sqrt(xmean * xmean + ymean * ymean)
-        else:
-            raise ValueError("unknown mode: {}".format(mode))
-
-        return mean_tilt, mean_ecc
 
     @memoize_method
     def stacked_firing_rate(self, keys=None, normalize=None, threshold=None):
@@ -1664,7 +1613,8 @@ class CellCollection(AlmostImmutable, Mapping):
                                         for cell in cells),
                                        ignore_missing=True)
 
-    def distances(self, keys1=None, keys2=None, features_kw=None):
+    @memoize_method
+    def distances(self, keys1=None, keys2=None, **kwargs):
         """
         Compute a distance matrix between cells
 
@@ -1673,7 +1623,7 @@ class CellCollection(AlmostImmutable, Mapping):
         keys1, keys2 : sequence, optional
             Sequences of cell keys to select cells to compute the distance
             matrix between. If `None`, all cells are included.
-        features_kw : dict, optional
+        kwargs : dict, optional
             Keyword arguments to pass to `BaseCell.features`.
 
         Returns
@@ -1688,7 +1638,7 @@ class CellCollection(AlmostImmutable, Mapping):
 
         distdict = {}
         for (key1, cell1) in zip(keys1, cells1):
-            dists = [cell1.distance(cell2, features_kw=features_kw)
+            dists = [cell1.distance(cell2, **kwargs)
                      for cell2 in cells2]
             distdict[key1] = pandas.Series(dists, index=keys2)
 
@@ -1696,7 +1646,8 @@ class CellCollection(AlmostImmutable, Mapping):
 
         return distmatrix
 
-    def features(self, keys=None, features_kw=None):
+    @memoize_method
+    def features(self, keys=None, **kwargs):
         """
         Compute a feature array of the cells
 
@@ -1708,26 +1659,24 @@ class CellCollection(AlmostImmutable, Mapping):
         keys : sequence, optional
             Sequence of cell keys to select cells to compute the feature array
             for. If `None`, all cells are included.
-        features_kw : dict, optional
+        kwargs : dict, optional
             Keyword arguments to pass to `BaseCell.features`.
 
         Returns
         -------
         DataFrame
             Feature array. The DataFrame row indices are the cell keys, while
-            the DataFrame columns contain the features.
+            the DataFrame columns contain the features and are labelled by
+            appropriate Latex-formatted strings.
 
         """
         keys, cells = self.lookup(keys)
         refcell = cells[0]
 
-        if features_kw is None:
-            features_kw = {}
-
         featdict = {}
         for (key, cell) in zip(keys, cells):
             roll = cell.roll(refcell)
-            featdict[key] = cell.features(roll=roll, **features_kw)
+            featdict[key] = cell.features(roll=roll, **kwargs)
 
         features = pandas.DataFrame(featdict).transpose()
 
@@ -1764,7 +1713,7 @@ class CellCollection(AlmostImmutable, Mapping):
             CellCollection containing any outlier cells.
 
         """
-        features = self.features(keys=keys, features_kw=features_kw)
+        features = self.features(keys=keys, **features_kw)
         keys, feature_arr = features.index, features.values
         labels = cluster.dbscan(feature_arr, eps=eps,
                                 min_samples=min_samples, **kwargs)[1]
@@ -1799,7 +1748,7 @@ class CellCollection(AlmostImmutable, Mapping):
             CellCollection containing any outlier cells.
 
         """
-        features = self.features(keys=keys, features_kw=features_kw)
+        features = self.features(keys=keys, **features_kw)
         keys, feature_arr = features.index, features.values
 
         labels = cluster.mean_shift(feature_arr, cluster_all=False,
@@ -1842,7 +1791,7 @@ class CellCollection(AlmostImmutable, Mapping):
             CellCollection containing any outlier cells.
 
         """
-        features = self.features(keys=keys, features_kw=features_kw)
+        features = self.features(keys=keys, **features_kw)
         keys, feature_arr = features.index, features.values
 
         __, labels, inertia = cluster.k_means(feature_arr, n_clusters,
@@ -1934,25 +1883,25 @@ class CellCollection(AlmostImmutable, Mapping):
         if mean_kw is None:
             mean_kw = {}
 
-        keys, cells = self.lookup(keys)
-        scales = [cell.scale() for cell in cells]
+        features = self.features(keys=keys, extra=True)
+        scales = features[features_index['scale']]
 
         # Start plotting from the current right end of the plot
         xlim = axes.get_xlim()
         right = xlim[1]
-        xlocs = numpy.arange(right, right + len(cells))
+        xlocs = numpy.arange(right, right + len(scales))
 
         lines = axes.plot(xlocs, scales, linestyle='None', marker=marker,
                           **kwargs)
 
         if mean:
             mscale = numpy.empty_like(xlocs)
-            mscale.fill(self.mean_scale(keys=keys))
+            mscale.fill(scales.mean())
             lines += axes.plot(xlocs, mscale, linewidth=0.5, color='0.50',
                                **mean_kw)
 
         # Add ticklabels and rotate
-        add_ticks(axes.xaxis, xlocs, keys)
+        add_ticks(axes.xaxis, xlocs, scales.index)
         pyplot.xticks(axes=axes, rotation='vertical')
 
         # Set limits so the plot is ready for another round
@@ -1991,25 +1940,15 @@ class CellCollection(AlmostImmutable, Mapping):
         if axes is None:
             axes = pyplot.gca()
 
-        if mean_kw is None:
-            mean_kw = {}
-
-        keys, cells = self.lookup(keys)
-        refcell = cells[0]
-
-        alpha, beta, gamma = [], [], []
-        for cell in cells:
-            roll = cell.roll(refcell)
-            angles = numpy.roll(cell.peaks_polar()[:, 1], roll)
-            angles = numpy.rad2deg(angles[:3])
-            alpha.append(angles[0])
-            beta.append(angles[1])
-            gamma.append(angles[2])
+        features = self.features(keys=keys, extra=True)
+        index = [features_index[label]
+                 for label in ('alpha1', 'alpha2', 'alpha3')]
+        angles = numpy.rad2deg(features[index])
 
         # Start plotting from the current right end of the plot
         xlim = axes.get_xlim()
         right = xlim[1]
-        xlocs = numpy.arange(right, right + len(cells))
+        xlocs = numpy.arange(right, right + len(angles))
 
         # Create a threefold tile of xlocs separated by a nan. This is a trick
         # to stack three lines on top of each other as part of the same Line2D
@@ -2017,29 +1956,33 @@ class CellCollection(AlmostImmutable, Mapping):
         # next.
         xlocs_nan = numpy.hstack((xlocs, numpy.nan))
         xlocs3 = numpy.tile(xlocs_nan, 3)
-        abg = numpy.hstack((alpha, numpy.nan,
-                            beta, numpy.nan,
-                            gamma, numpy.nan))
+        angles_flat = numpy.hstack((angles[index[0]], numpy.nan,
+                                    angles[index[1]], numpy.nan,
+                                    angles[index[2]], numpy.nan))
 
         # Plot the angles
-        lines = axes.plot(xlocs3, abg, linestyle='None', marker=marker,
+        lines = axes.plot(xlocs3, angles_flat, linestyle='None', marker=marker,
                           **kwargs)
 
         if mean:
-            malpha, mbeta, mgamma = numpy.rad2deg(
-                self.mean_peaks_polar(keys=keys)[:3, 1])
-            ma = numpy.empty_like(xlocs)
-            mb = numpy.empty_like(xlocs)
-            mg = numpy.empty_like(xlocs)
-            ma.fill(malpha)
-            mb.fill(mbeta)
-            mg.fill(mgamma)
-            mabg = numpy.hstack((ma, numpy.nan, mb, numpy.nan, mg, numpy.nan))
-            lines += axes.plot(xlocs3, mabg, linewidth=0.5, color='0.50',
-                               **mean_kw)
+            if mean_kw is None:
+                mean_kw = {}
+
+            mangles = angles.mean()
+            ma1 = numpy.empty_like(xlocs)
+            ma2 = numpy.empty_like(xlocs)
+            ma3 = numpy.empty_like(xlocs)
+            ma1.fill(mangles[index[0]])
+            ma2.fill(mangles[index[1]])
+            ma3.fill(mangles[index[2]])
+            mangles_flat = numpy.hstack((ma1, numpy.nan,
+                                         ma2, numpy.nan,
+                                         ma3, numpy.nan))
+            lines += axes.plot(xlocs3, mangles_flat, linewidth=0.5,
+                               color='0.50', **mean_kw)
 
         # Add ticklabels and rotate
-        add_ticks(axes.xaxis, xlocs, keys)
+        add_ticks(axes.xaxis, xlocs, angles.index)
         pyplot.xticks(axes=axes, rotation='vertical')
 
         # Set limits so the plot is ready for another round
@@ -2057,54 +2000,74 @@ class CellCollection(AlmostImmutable, Mapping):
 
         The parameters are visualized in a polar plot with eccentricity as the
         radius and twice the ellipse tilt as the angle. The tilt is doubled
-        because ellipse tilts are degenerate modulo pi radians.
+        because ellipse tilts are equivalent modulo pi radians, whereas polar
+        coordinates are equivalent modulo 2 * pi radians.
 
-        The ellipse parameters can be added to an existing plot via the
-        optional 'axes' argument.
+        Parameters
+        ----------
+        axes: Axes, optional
+            Axes instance to add the ellipse parameters to. If None (default),
+            the current Axes instance is used if any, or a new one created.
+        keys : sequence, optional
+            Sequence of cell keys to select cells to plot ellipse parameters
+            for. If None, all cells are included.
+        marker : valid matplotlib marker specification.
+            Marker to use plot the ellipse parameters as.
+        mean : {None, 'direct', 'euclidean'}, optional
+            String to select the mean to plot. If None, no mean is plotted.
 
-        :axes: Axes instance to add the ellipse parameters to. If None
-               (default), the current Axes instance is used if any, or a new
-               one created.
-        :keys: sequence of cell keys to select cells to plot ellipse parameters
-               for. If None (default), all cells are included.
-        :marker: a valid matplotlib marker specification. Defaults to 'o'.
-        :mean: select the kind of mean of ellipse parameters to add to the
-               plot. Possible values:
-            :direct: the arithmetic means of the eccentricity and tilt is used
-                     for the mean point
-            :euclidean: the mean cartesian coordinates of the ellipse parameter
-                        points in the plane is used for the mean point
-            :None: no mean point is plotted
-               By default, a gray (color == 0.5) marker of type 'o' is used,
-               but this can be overridden using the parameter mean_kw.
-        :mean_kw: dict of keyword arguments to pass to the axes.plot() method
-                  used to plot the mean ellipse. Default: None (empty dict)
-        :kwargs: additional keyword arguments passed on to the axes.plot()
-                 method. Note in particular the keywords 'markersize', 'color'
-                 and 'label'.
-        :returns: a list of the plotted Line2D instances
+            ``direct ``
+                The returned double tilt is the mean of the double tilts from
+                each cell, and the returned eccentricity is the mean of the
+                eccentricities from each cell.
+            ``euclidean``
+                The parameters eccentricity and double tilt are interpreted as
+                planar polar coordinates, and the mean is computed in the
+                corresponding cartesian coordinates.
+        mean_kw : dict, optional
+            Keyword arguments to pass to `axes.plot` when plotting the mean
+            parameters.
+        kwargs : dict, optional
+            Additional keyword arguments to to pass to `axes.plot`.  Note in
+            particular the keywords 'markersize', 'color' and 'label'.
+
+        Returns
+        -------
+        list
+            List containing the plotted Line2D instances.
 
         """
         if axes is None:
             axes = pyplot.gca(projection='polar')
 
-        __, cells = self.lookup(keys)
+        features = self.features(keys=keys, extra=True)
+        index = [features_index[label] for label in ('ecc', 'tilt_2')]
+        ellpars = features[index]
 
-        tilt2, ecc = [], []
-        for cell in cells:
-            ell = cell.ellipse()
-            tilt2.append(2 * ell.tilt)
-            ecc.append(ell.ecc)
-
-        lines = axes.plot(tilt2, ecc, linestyle='None', marker='o', **kwargs)
+        lines = axes.plot(ellpars[index[1]], ellpars[index[0]],
+                          linestyle='None', marker='o', **kwargs)
 
         if mean is not None:
             if mean_kw is None:
                 mean_kw = {}
+            if mean == 'direct':
+                mean_ellpars = ellpars.mean()
+                mean_tilt_2 = mean_ellpars[index[1]]
+                mean_ecc = mean_ellpars[index[0]]
+            elif mean == 'euclidean':
+                index = [features_index[label] for label in ('xell', 'yell')]
+                cartesian_ellpars = features[index]
+                mean_cartesian_ellpars = cartesian_ellpars.mean()
+                mean_xell = mean_cartesian_ellpars[index[0]]
+                mean_yell = mean_cartesian_ellpars[index[1]]
+                mean_tilt_2 = numpy.arctan2(mean_yell, mean_xell)
+                mean_ecc = numpy.sqrt(mean_xell * mean_xell +
+                                      mean_yell * mean_yell)
+            else:
+                raise ValueError("unknown mean: {}".format(mean))
 
-            mtilt, mecc = self.mean_ellpars(mode=mean, keys=keys)
-            lines += axes.plot(2.0 * mtilt, mecc, linestyle='None', marker='o',
-                               color='0.50', **mean_kw)
+            lines += axes.plot(mean_tilt_2, mean_ecc, linestyle='None',
+                               marker='o', color='0.50', **mean_kw)
 
         axes.set_ylim((0.0, 1.0))
 
@@ -2561,3 +2524,25 @@ class Module(CellCollection):
         sims = self.simulate_phase_patterns(nsims=nsims, process=process,
                                             keys=keys)
         return sims.plot_pair_corr_mean(axes=axes, **kwargs)
+
+
+features_index = {
+    'logscale': r"$\log{r}$",
+    'x1': r"$X_1$",
+    'y1': r"$Y_1$",
+    'x2': r"$X_2$",
+    'y2': r"$Y_2$",
+    'x3': r"$X_3$",
+    'y3': r"$Y_3$",
+    'scale': r"$r$",
+    'r1': r"$R_1$",
+    'alpha1': r"$\alpha_1$",
+    'r2': r"$R_2$",
+    'alpha2': r"$\alpha_2$",
+    'r3': r"$R_3$",
+    'alpha3': r"$\alpha_3$",
+    'xell': r"$X_\mathrm{ellipse}$",
+    'yell': r"$Y_\mathrm{ellipse}$",
+    'ecc': r"$\epsilon_\mathrm{ellipse}$",
+    'tilt_2': r"$2 \theta_\mathrm{ellipse}$",
+    }
