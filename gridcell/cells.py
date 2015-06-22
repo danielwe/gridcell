@@ -1034,7 +1034,7 @@ class BaseCell(AlmostImmutable):
         return axes, cbar
 
 
-class IdealGridCell(BaseCell):
+class TemplateGridCell(BaseCell):
     """
     Represent an idealized grid cell defined only using the lattice vectors and
     the firing field covariance matrix. Can for example be used to represent
@@ -1044,7 +1044,7 @@ class IdealGridCell(BaseCell):
 
     def __init__(self, peaks, firing_field, bset, threshold):
         """
-        Initialize the IdealGridCell instance
+        Initialize the TemplateGridCell instance
 
         :peaks: array-like of shape (6, 2), containing the six primary lattice
                 vectors of the grid (equivalent to the coordinates of the six
@@ -1751,7 +1751,8 @@ class CellCollection(AlmostImmutable, Mapping):
         features_kw : dict, optional
             Keyword arguments to pass to `BaseCell.features`.
         mod_kw : dict, optional
-            Keyword arguments to pass to the `Module` constructor.
+            Keyword arguments to pass to the factory method
+            `CellCollection.modules_from_labels`.
         **kwargs : dict, optional
             Keyword arguments passed on to `cluster.dbscan()`.
 
@@ -1766,9 +1767,12 @@ class CellCollection(AlmostImmutable, Mapping):
         features = self.features(keys=keys, features_kw=features_kw)
         keys, feature_arr = features.index, features.values
         labels = cluster.dbscan(feature_arr, eps=eps,
-                                min_samples=min_samples)[1]
+                                min_samples=min_samples, **kwargs)[1]
 
-        return self.modules_from_labels(keys, labels, mod_kw=mod_kw)
+        if mod_kw is None:
+            mod_kw = {}
+
+        return self.modules_from_labels(keys, labels, **mod_kw)
 
     def mean_shift(self, keys=None, features_kw=None, mod_kw=None, **kwargs):
         """
@@ -1782,7 +1786,8 @@ class CellCollection(AlmostImmutable, Mapping):
         features_kw : dict, optional
             Keyword arguments to pass to `BaseCell.features`.
         mod_kw : dict, optional
-            Keyword arguments to pass to the `Module` constructor.
+            Keyword arguments to pass to the factory method
+            `CellCollection.modules_from_labels`.
         **kwargs : dict, optional
             Keyword arguments passed on to `cluster.mean_shift()`.
 
@@ -1800,7 +1805,10 @@ class CellCollection(AlmostImmutable, Mapping):
         labels = cluster.mean_shift(feature_arr, cluster_all=False,
                                     **kwargs)[1]
 
-        return self.modules_from_labels(keys, labels, mod_kw=mod_kw)
+        if mod_kw is None:
+            mod_kw = {}
+
+        return self.modules_from_labels(keys, labels, **mod_kw)
 
     def k_means(self, n_clusters, n_runs=1, keys=None, features_kw=None,
                 mod_kw=None, **kwargs):
@@ -1821,7 +1829,8 @@ class CellCollection(AlmostImmutable, Mapping):
         features_kw : dict, optional
             Keyword arguments to pass to `BaseCell.features`.
         mod_kw : dict, optional
-            Keyword arguments to pass to the `Module` constructor.
+            Keyword arguments to pass to the factory method
+            `CellCollection.modules_from_labels`.
         **kwargs : dict, optional
             Keyword arguments passed on to `cluster.k_means()`.
 
@@ -1844,39 +1853,53 @@ class CellCollection(AlmostImmutable, Mapping):
                 inertia = inrt
                 labels = lbls
 
-        return self.modules_from_labels(keys, labels, mod_kw=mod_kw)
+        if mod_kw is None:
+            mod_kw = {}
 
-    def modules_from_labels(self, keys, labels, mod_kw=None):
+        return self.modules_from_labels(keys, labels, **mod_kw)
+
+    def modules_from_labels(self, keys, labels, min_length=4, **kwargs):
         """
         Use a list of keys and corresponding labels to instantiate Module
         instances
 
-        :keys: sequence of cell keys that have been grouped into modules
-        :labels: sequence of labels corresponding to the cells given by 'keys';
-                 cells with the same label are grouped into the same module.
-                 The label -1 denotes outliers.
+        Parameters
+        ----------
+        keys : sequence
+            Sequence of cell keys to create modules from.
+        labels : sequence
+            Sequence of labels corresponding to the `keys`.
+            All cells with the same label become a module. The special label
+            `-1` denotes outliers.
+        min_length : integer, optional
+            The minimum number of cells in a module. Tentative modules with
+            fewer cells than this are merged into the outliers.
+        kwargs : dict, optional
+            Keyword arguments passed to the `Module` constructor.
         :mod_kw: dict of keyword arguments to pass to the Module constructor.
         :returns: sequence of module instances, sorted by mean grid scale;
                   Cellcollection instance containing any outliers.
 
         """
-        if mod_kw is None:
-            mod_kw = {}
-
-        modules_ = {}
+        tentative_modules_ = {}
         outliers_ = {}
         for (key, label) in zip(keys, labels):
             if label == -1:
                 outliers_[key] = self[key]
             else:
                 try:
-                    modules_[label][key] = self[key]
+                    tentative_modules_[label][key] = self[key]
                 except KeyError:
-                    modules_[label] = {key: self[key]}
-
+                    tentative_modules_[label] = {key: self[key]}
+        modules_ = []
+        for mod in tentative_modules_.values():
+            if len(mod) < min_length:
+                outliers_.update(mod)
+            else:
+                modules_.append(mod)
         outliers = CellCollection(outliers_)
-        modules = [Module(mod, **mod_kw) for mod in modules_.values()]
-        modules.sort(key=(lambda mod: mod.mean_scale()))
+        modules = [Module(mod, **kwargs) for mod in modules_]
+        modules.sort(key=(lambda mod: mod.template.scale()))
 
         return modules, outliers
 
@@ -2142,8 +2165,8 @@ class Module(CellCollection):
 
         :cells: a mapping of cell labels to Cell instances belonging to
                 a single module.
-        :threshold: peak threshold for the IdealGridCell instance constructed
-                    by the module.
+        :threshold: peak threshold for the TemplateGridCell instance
+                    constructed by the module.
         :kwargs: passed through to the CellCollection constructor
 
         """
@@ -2156,17 +2179,17 @@ class Module(CellCollection):
             new_bset = new_bset.correlate(bset, mode='full')
 
         # Construct the ideal cell and save it to the instance
-        self.idealcell = IdealGridCell(self.mean_peaks(),
-                                       self.mean_firing_field(), new_bset,
-                                       threshold=threshold)
+        self.template = TemplateGridCell(self.mean_peaks(),
+                                         self.mean_firing_field(),
+                                         new_bset, threshold=threshold)
 
     @memoize_method
     def phases(self, keys=None):
         """
         Compute the grid phase of cells in the module.
 
-        The phase is defined with respect to the IdealGridCell instance
-        belonging to the module (self.idealcell).
+        The phase is defined with respect to the TemplateGridCell instance
+        belonging to the module (self.template).
 
         :keys: sequence of cell keys to select cells to compute the phase for.
                If None, all cells are included.
@@ -2174,7 +2197,7 @@ class Module(CellCollection):
 
         """
         keys, cells = self.lookup(keys)
-        phases = {key: cell.phase(self.idealcell)
+        phases = {key: cell.phase(self.template)
                   for (key, cell) in zip(keys, cells)}
 
         return phases
@@ -2202,7 +2225,7 @@ class Module(CellCollection):
 
         """
         phases = self.phases(keys=keys).values()
-        peak_pattern = numpy.vstack(((0.0, 0.0), self.idealcell.peaks()))
+        peak_pattern = numpy.vstack(((0.0, 0.0), self.template.peaks()))
         window = spatial.Voronoi(peak_pattern).vertices
         angles = numpy.arctan2(window[:, 1], window[:, 0])
         sort_ind = numpy.argsort(angles)
