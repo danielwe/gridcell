@@ -377,8 +377,7 @@ class Window(geometry.Polygon):
         """
         return patches.Polygon(self.boundary, **kwargs)
 
-    def plot(self, axes=None, linewidth=2.0, color='0.5', fill=False,
-             **kwargs):
+    def plot(self, axes=None, linewidth=2.0, fill=False, **kwargs):
         """
         Plot the window
 
@@ -390,8 +389,6 @@ class Window(geometry.Polygon):
                a new one created.
         :linewidth: the linewidth to use for the window boundary. Defaults to
                     2.0.
-        :color: a valid matplotlib color specification to use for the window.
-                Defaults to '0.5', a moderately heavy gray.
         :fill: if True, plot a filled window. If False (default), only plot the
                boundary.
         :kwargs: additional keyword arguments passed on to the
@@ -407,8 +404,7 @@ class Window(geometry.Polygon):
             axes.set(xlim=(cent.x - diag, cent.x + diag),
                      ylim=(cent.y - diag, cent.y + diag))
 
-        wpatch = self.patch(linewidth=linewidth, color=color, fill=fill,
-                            **kwargs)
+        wpatch = self.patch(linewidth=linewidth, fill=fill, **kwargs)
         wpatch = axes.add_patch(wpatch)
 
         return wpatch
@@ -652,21 +648,24 @@ class PointPattern(AlmostImmutable):
     @memoize_method
     def periodic_extension(self):
         """
-        Compute the periodic extension of this point pattern assuming the
-        periodic boundary conditions implied by self.window
+        Compute the periodic extension of this point pattern
 
-        The first two levels of periodic copies of the pattern is computed,
-        provided the Window instance associated with the pattern is a simple
-        plane-filling polygon.
+        The extension is made by assuming that periodic boundary conditions
+        hold across the boundaries of the window associated with the pattern.
 
-        :returns: MultiPoint instance containing the points in the periodic
-                  extension. The points from the pattern itself are not
-                  included
+        The first three levels of periodic copies is computed.
+
+        Returns
+        -------
+        MultiPoint
+            MultiPoint instance containing the points comprising the periodic
+            extension. Note that the points from the pattern itself are not
+            included.
 
         """
         lattice = self.window.lattice
         lattice_r1 = numpy.roll(lattice, 1, axis=0)
-        dvecs = numpy.vstack((lattice, lattice + lattice_r1))
+        dvecs = numpy.vstack((lattice, lattice + lattice_r1, 2.0 * lattice))
         periodic_points = ops.cascaded_union(
             [affinity.translate(self.points(), xoff=dvec[0], yoff=dvec[1])
              for dvec in dvecs])

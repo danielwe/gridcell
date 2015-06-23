@@ -182,30 +182,37 @@ class Position(AlmostImmutable):
 
         return IntensityMap2D(hist, (xedges, yedges))
 
-    def plot_path(self, axes=None, linewidth=0.5, color='0.5', **kwargs):
+    def plot_path(self, axes=None, linewidth=0.5, color='0.5', alpha=0.5,
+                  **kwargs):
         """
         Plot the path through the valid positions
 
-        The path can be added to an existing plot via the optional 'axes'
-        argument.
+        Parameters
+        ----------
+        axes : Axes, optional
+            Axes instance to add the path to. If None (default), the current
+            Axes instance is used if any, or a new one created.
+        linewidth : scalar, optional
+            The width of the plotted path.
+        color : valid Matplotlib color specification
+            The color to use for the path.
+        alpha : scalar in [0.0, 1.0], optional
+            The opacity of the path.
+        kwargs : dict, optional
+            Additional keyword arguments passed to `axes.plot`. Note in
+            particular the keywords 'linestyle' and 'label'.
 
-        :axes: Axes instance to add the path to. If None (default), the current
-               Axes instance with equal aspect ratio is used if any, or a new
-               one created.
-        :linewidth: number giving the width of the plotted path. Defaults: 0.5
-        :color: a valid matplotlib color specification giving the color to plot
-                the path with. Defaults to '0.5', a moderate gray.
-        :kwargs: additional keyword arguments passed on to axes.plot() for
-                 specifying line properties. Note especially the keywords
-                 'linestyle' and 'label'.
-        :returns: the plotted Line2D instance
+        Returns
+        -------
+        list
+            List containing the plotted Line2D instance.
 
         """
         if axes is None:
             axes = pyplot.gca(aspect='equal')
 
         h = axes.plot(self.x, self.y, linewidth=linewidth, color=color,
-                      **kwargs)
+                      alpha=alpha, **kwargs)
         return h
 
     def plot_samples(self, axes=None, marker='.', s=1.0, color=None,
@@ -931,7 +938,7 @@ class BaseCell(AlmostImmutable):
         return h
 
     def plot_correlogram(self, other, axes=None, cax=None, threshold=False,
-                         peaks=False, ellipse=False, cmap=None, cbar_kw=None,
+                         cpeak=False, ellipse=False, cmap=None, cbar_kw=None,
                          **kwargs):
         """
         Plot the cross-correlogram of the firing rate of another cell and this
@@ -950,11 +957,11 @@ class BaseCell(AlmostImmutable):
               right-hand side of the plot.
         :threshold: if True, mask values smaller than self.threshold from the
                     plot. Default is False.
-        :peaks: if True, add the most central peak and the six peaks closest to
-                it to the plot, using some (hopefully) sensible plotting
-                defaults. If more control is required, call
-                self.detect_central_peaks() on self.correlogram(other) to get
-                the peaks, and add them to the plot manually.
+        :cpeak: if True, add the most central peak to the plot, using some
+                (hopefully) sensible plotting defaults. If more control is
+                required, call self.detect_central_peaks() on
+                self.correlogram(other) to get peaks, and add them to the plot
+                manually.
         :ellipse: if True, add an ellipse fitted through the six peaks closest
                   to the center peak to the plot, using some (hopefully)
                   sensible plotting defaults. If more control is required, call
@@ -983,11 +990,14 @@ class BaseCell(AlmostImmutable):
         axes, cbar = corr.plot(axes=axes, cax=cax, threshold=thres_val,
                                vmin=-1.0, vmax=1.0, cmap=cmap, cbar_kw=cbar_kw,
                                **kwargs)
-        if peaks or ellipse:
+        if cpeak or ellipse:
             pks, __ = self.detect_central_peaks(corr, self.threshold)
-            if peaks:
-                axes.plot(pks[:, 0], pks[:, 1], linestyle='None', marker='o',
-                          color='black', **kwargs)
+            if cpeak:
+                axes.plot(pks[0, 0], pks[0, 1], linestyle='None', marker='o',
+                          color='black')
+                # Add a cross for comparison
+                axes.axvline(0.0, linestyle='dashed', color='0.5', alpha=0.5)
+                axes.axhline(0.0, linestyle='dashed', color='0.5', alpha=0.5)
             if ellipse:
                 ell = Ellipse(fitpoints=pks)
                 ell.plot(axes=axes, majaxis=True, linewidth=2.0, color='red')
@@ -1295,7 +1305,7 @@ class Cell(BaseCell):
 
         return firing_rate
 
-    def plot_spikes(self, axes=None, path=False, marker='o', alpha=0.5,
+    def plot_spikes(self, axes=None, path=False, marker='o', alpha=0.25,
                     zorder=10, **kwargs):
         """
         Plot the spatial location of the recorded spikes
