@@ -1302,6 +1302,37 @@ class PointPattern(AlmostImmutable):
         lambda2 = self.squared_intensity(mode=imode, r=r)
         return sensibly_divide(num, lambda2)
 
+    @memoize_method
+    def simulate(self, nsims=100, process='binomial', edge_correction=None):
+        """
+        Simulate a number of point processes in the same window, and of the
+        same intensity, as this pattern
+
+        Parameters
+        ----------
+        nsims : int
+            The number of point patterns to generate.
+        process : str {'binomial', 'poisson'}, optional
+            String to select the kind of process to simulate.
+        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
+                               'plus'}, optional
+            String to select the default edge handling for the simulated
+            patterns. See the `PointPattern`class documentation for details.
+            If not supplied, the default edge correction for this pattern is
+            used.
+
+        Returns
+        -------
+        PointPatternCollection
+            Collection of the simulated patterns.
+
+        """
+        if edge_correction is None:
+            edge_correction = self._edge_correction
+        return PointPatternCollection.from_simulation(
+            nsims, self.window, self.intensity(), process=process,
+            edge_correction=edge_correction)
+
     def plot_kfunction(self, axes=None, edge_correction=None, linewidth=2.0,
                        csr=False, csr_kw=None, **kwargs):
         """
