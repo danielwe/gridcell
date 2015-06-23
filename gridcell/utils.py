@@ -441,3 +441,71 @@ def plot_kde(data, data2=None, *args, **kwargs):
 
     kwargs.update({'bw': bw})
     return seaborn.kdeplot(data, data2=data2, *args, **kwargs)
+
+
+def module_keys(modules, outliers):
+    """
+    Compute an invariant representation of a clustering of cells into modules
+
+    This function makes it easy to check if two clusterings of cells into
+    modules are equal: just compare the output of this function by equality.
+
+    Parameters
+    ----------
+    modules, outliers
+        The output from any of the clustering methods in `CellCollection`.
+
+    Returns
+    -------
+    modkeys : set
+        Set containing a frozenset with cell keys for each module
+    outkeys : set
+        Set containing the outlier cell keys.
+
+    """
+    modkeys = set([frozenset(mod.keys()) for mod in modules])
+    outkeys = set(outliers.keys())
+    return modkeys, outkeys
+
+
+def check_stable(n_calls, function, *args, **kwargs):
+    """
+    Check that the output of a function is stable over a number of calls
+
+    Useful e.g. for checking if the output of non-deterministic clustering
+    algorithms is self-consistent.
+
+    Parameters
+    ----------
+    n_calls : integer
+        Number of times to call `function`.
+    function : callable
+        Function to investigate.
+    args : sequence, optional
+        Argument list to pass to function.
+    kwargs : dict, optional
+        Keyword arguments to pass to function.
+
+    Returns
+    -------
+    bool
+        True if the return value from `function` was equal for every call,
+        False otherwise.
+
+    Examples
+    --------
+    >>> # cells is a CellCollection instance. The stability of cells.k_means
+    >>> # over 10 calls with n_clusters=4 and n_runs=10 is assessed.
+    >>> def k_means_keys(*a, **k):
+    >>>     return module_keys(*cells.k_means(*a, **k)
+    >>> check_stable(10, k_means_keys, n_clusters=4, n_runs=10)
+    True
+
+    """
+    out = function(*args, **kwargs)
+    for __ in range(1, n_calls):
+        old_out = out
+        out = function(*args, **kwargs)
+        if not (out == old_out):
+            return False
+    return True
