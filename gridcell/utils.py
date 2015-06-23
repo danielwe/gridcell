@@ -24,6 +24,9 @@ from __future__ import (absolute_import, division, print_function,
 import numpy
 from scipy import stats
 from scipy.ndimage import measurements
+from sklearn.neighbors import KernelDensity
+from sklearn.grid_search import GridSearchCV
+import seaborn
 from matplotlib import pyplot
 
 
@@ -367,3 +370,74 @@ def pearson_correlogram(in1, in2, mode='full'):
             corr[ind] = num / sqrt(denom_sq)
 
     return corr
+
+
+def kde_bw(data, n_bw=100, cv=5):
+    """
+    Estimate the optimal KDE bandwith for a single-variable dataset using cross
+    validation
+
+    To estimate individual bandwidths for each feature in a multivariate
+    dataset, apply this function to each single-feature subset separately.
+
+    Parameters
+    ----------
+    data : array-like, shape (n_data, n_features)
+        The dataset.
+    n_bw : integer, optional
+        Number of bandwidths to try out. Increasing this number increases the
+        accuracy of the best bandwidth estimate, but also increases the
+        computational demands of the function.
+    cv : integer, optional
+        Number of folds to use for cross validation.
+
+    Returns
+    -------
+    scalar
+        Estimated optimal bandwidth.
+
+    """
+    n, std = len(data), numpy.std(data)
+    # Use the silverman rule times 1.1 as the maximal candidate bandwidth, an
+    # one tenth of this as the minimal
+    silverman = (0.75 * n) ** (-0.2)
+    max_bw = 1.1 * silverman * std
+    grid = GridSearchCV(
+        KernelDensity(),
+        {'bandwidth': numpy.linspace(0.1 * max_bw, max_bw, n_bw)},
+        cv=cv)
+    grid.fit(data)
+    return grid.best_params_['bandwidth']
+
+
+def plot_kde(data, data2=None, *args, **kwargs):
+    """
+    Plot a kernel density estimate of univariate or bivariate data
+
+    This is a wrapper around `seaborn.kdeplot`, using `kde_bw` to estimate
+    optimal bandwidth separately for each feature. The call signature is the
+    same as `seaborn.kdeplot`.
+
+    Parameters
+    ----------
+    data, data2, *args, **kwargs
+        See the documentation for `seaborn.kdeplot`.
+
+    Returns
+    -------
+        See the documentation for `seaborn.kdeplot`.
+
+    """
+    data_ = numpy.asarray(data)
+    if data2 is not None:
+        data2_ = numpy.asarray(data2)
+        data_ = numpy.column_stack((data, data2_))
+        bw = (kde_bw(data_[:, 0][:, numpy.newaxis]),
+              kde_bw(data_[:, 1][:, numpy.newaxis]))
+    else:
+        if data_.ndim == 1:
+            data_ = data[:, numpy.newaxis]
+        bw = kde_bw(data_)
+
+    kwargs.update({'bw': bw})
+    return seaborn.kdeplot(data, data2=data2, *args, **kwargs)
