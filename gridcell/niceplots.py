@@ -51,15 +51,21 @@ def pos_and_spikes(cell, alpha_path=0.5, alpha_spikes=0.25, length_unit='cm',
 
     """
     if palette is None:
-        artists = cell.pos.plot_path(alpha=alpha_path)
         palette = (None, None)
+
+    if palette[0] is None:
+        artists = cell.pos.plot_path(alpha=alpha_path)
     else:
         artists = cell.pos.plot_path(alpha=alpha_path, color=palette[0])
 
     range_ = cell.range_
     axes = artists[0].get_axes()
-    artists += cell.plot_spikes(axes=axes, alpha=alpha_spikes,
-                                color=palette[1])
+    if palette[1] is None:
+        artists += cell.plot_spikes(axes=axes, alpha=alpha_spikes)
+    else:
+        artists += cell.plot_spikes(axes=axes, alpha=alpha_spikes,
+                                    color=palette[1])
+
     axes.set(xlim=range_[0], ylim=range_[1],
              xticks=range_[0], yticks=range_[1])
     axes.set(xlabel=r"$x \ / \ \mathrm{{{}}}$".format(length_unit),
@@ -89,7 +95,9 @@ def firing_rate(cell, cmap='YlGnBu_r', length_unit='cm', rate_unit='Hz'):
         `BaseCell.plot_firing_rate`.
 
     """
-    axes, cbar = cell.plot_firing_rate(cmap=cmap, edgecolor='face')
+    axes, cbar = cell.plot_firing_rate(cmap=cmap,
+                                       edgecolor='face',
+                                       )
 
     cbar.solids.set(edgecolor='face')
     cbar.set_label(r"$f \ / \ \mathrm{{{}}}$".format(rate_unit))
@@ -133,7 +141,9 @@ def template_firing_rate(module, cmap='YlGnBu_r', length_unit='cm', box=True,
 
     """
     cell = module.template
-    axes, cbar = cell.plot_firing_rate(cmap=cmap, edgecolor='face')
+    axes, cbar = cell.plot_firing_rate(cmap=cmap,
+                                       edgecolor='face'
+                                       )
 
     cbar.solids.set(edgecolor='face')
     cbar.set_label(r"$f \ / \ f_\mathrm{{max}}$")
@@ -185,7 +195,9 @@ def stacked_firing_rate(sfiring_rate, cmap='YlGnBu_r', length_unit='cm'):
 
     """
     vmin = min(0.0, sfiring_rate.min())
-    axes, cbar = sfiring_rate.plot(cmap=cmap, vmin=vmin, edgecolor='face')
+    axes, cbar = sfiring_rate.plot(cmap=cmap, vmin=vmin,
+                                   edgecolor='face'
+                                   )
 
     cbar.solids.set(edgecolor='face')
     cbar.set_ticks([0.0])
@@ -198,8 +210,8 @@ def stacked_firing_rate(sfiring_rate, cmap='YlGnBu_r', length_unit='cm'):
     return axes, cbar
 
 
-def acorr(cell, cmap='coolwarm', length_unit='cm', peaks=True, ellipse=True,
-          palette=None):
+def acorr(cell, cmap='coolwarm', length_unit='cm', threshold=False, peaks=True,
+          ellipse=True, palette=None):
     """
     Convenience function to plot nice firing rate autocorrelograms
 
@@ -211,6 +223,8 @@ def acorr(cell, cmap='coolwarm', length_unit='cm', peaks=True, ellipse=True,
         Colormap to use for the plot.
     length_unit : string, optional
         The length unit to add to the axis labels.
+    threshold : bool, optional
+        If True, only plot values above the peak detection threshold.
     peaks : bool, optional
         If True, the inner ring of peaks are plotted with markers.
     ellipse : bool, optional
@@ -225,19 +239,21 @@ def acorr(cell, cmap='coolwarm', length_unit='cm', peaks=True, ellipse=True,
         `BaseCell.plot_autocorrelogram`.
 
     """
-    axes, cbar = cell.plot_autocorrelogram(cmap=cmap, edgecolor='face',
+    axes, cbar = cell.plot_autocorrelogram(cmap=cmap,
+                                           edgecolor='face',
+                                           threshold=threshold,
                                            cbar_kw={'ticks': [-1, 0, 1]})
 
     if palette is None:
         palette = (None, None)
 
     if peaks:
-        cell.plot_peaks(axes=axes, color=palette[0])
+        cell.plot_peaks(axes=axes, markersize=8, color=palette[0])
     if ellipse:
         cell.plot_ellipse(axes=axes, color=palette[1])
 
     cbar.solids.set(edgecolor='face')
-    cbar.set_label(r"$\rho$")
+    cbar.set_label(r"$r$")
 
     range_ = cell.range_
     axes.set(xticks=range_[0], yticks=range_[1])
@@ -315,8 +331,8 @@ def phase_pattern(module, periodic=True, length_unit='cm', palette=None):
     range_ = module.values()[0].range_
     axes = artists[0].get_axes()
     axes.set(xticks=range_[0], yticks=range_[1])
-    axes.set(xlabel=r"$x \ / \ \mathrm{{{}}}$".format(length_unit),
-             ylabel=r"$y \ / \ \mathrm{{{}}}$".format(length_unit))
+    axes.set(xlabel=r"$\delta_x \ / \ \mathrm{{{}}}$".format(length_unit),
+             ylabel=r"$\delta_y \ / \ \mathrm{{{}}}$".format(length_unit))
     return artists
 
 
