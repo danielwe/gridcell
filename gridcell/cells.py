@@ -2031,17 +2031,10 @@ class CellCollection(AlmostImmutable, Mapping):
             for. If None, all cells are included.
         marker : valid matplotlib marker specification.
             Marker to use plot the ellipse parameters as.
-        mean : {None, 'direct', 'euclidean'}, optional
-            String to select the mean to plot. If None, no mean is plotted.
-
-            ``direct ``
-                The returned double tilt is the mean of the double tilts from
-                each cell, and the returned eccentricity is the mean of the
-                eccentricities from each cell.
-            ``euclidean``
-                The parameters eccentricity and double tilt are interpreted as
-                planar polar coordinates, and the mean is computed in the
-                corresponding cartesian coordinates.
+        mean : bool, optional
+            If True, add a point showing the mean of the ellipse parameters.
+            The mean is computed in the cartesian coordinate representation of
+            the ellpars as they are plotted by this method.
         mean_kw : dict, optional
             Keyword arguments to pass to `axes.plot` when plotting the mean
             parameters.
@@ -2065,29 +2058,76 @@ class CellCollection(AlmostImmutable, Mapping):
         lines = axes.plot(ellpars[index[1]], ellpars[index[0]],
                           linestyle='None', marker='o', **kwargs)
 
-        if mean is not None:
+        if mean:
             if mean_kw is None:
                 mean_kw = {}
-            if mean == 'direct':
-                mean_ellpars = ellpars.mean()
-                mean_tilt_2 = mean_ellpars[index[1]]
-                mean_ecc = mean_ellpars[index[0]]
-            elif mean == 'euclidean':
-                index = [features_index[label] for label in ('xell', 'yell')]
-                cartesian_ellpars = features[index]
-                mean_cartesian_ellpars = cartesian_ellpars.mean()
-                mean_xell = mean_cartesian_ellpars[index[0]]
-                mean_yell = mean_cartesian_ellpars[index[1]]
-                mean_tilt_2 = numpy.arctan2(mean_yell, mean_xell)
-                mean_ecc = numpy.sqrt(mean_xell * mean_xell +
-                                      mean_yell * mean_yell)
-            else:
-                raise ValueError("unknown mean: {}".format(mean))
+            index = [features_index[label] for label in ('xell', 'yell')]
+            cartesian_ellpars = features[index]
+            mean_cartesian_ellpars = cartesian_ellpars.mean()
+            mean_xell = mean_cartesian_ellpars[index[0]]
+            mean_yell = mean_cartesian_ellpars[index[1]]
+            mean_tilt_2 = numpy.arctan2(mean_yell, mean_xell)
+            mean_ecc = numpy.sqrt(mean_xell * mean_xell +
+                                  mean_yell * mean_yell)
 
             lines += axes.plot(mean_tilt_2, mean_ecc, linestyle='None',
                                marker='o', color='0.50', **mean_kw)
 
         axes.set_ylim((0.0, 1.0))
+
+        return lines
+
+    def plot_peaks(self, axes=None, keys=None, marker='o', mean=False,
+                   mean_kw=None, **kwargs):
+        """
+        Plot the peak locations for cells in the cell collection
+
+        Parameters
+        ----------
+        axes: Axes, optional
+            Axes instance to add the peaks to. If None (default), the current
+            Axes instance is used if any, or a new one created.
+        keys : sequence, optional
+            Sequence of cell keys to select cells to plot peaks for. If None,
+            all cells are included.
+        marker : valid matplotlib marker specification.
+            Marker to use plot the ellipse parameters as.
+        mean : bool, optional
+            If True, add points showing the means of the plotted peaks.
+        mean_kw : dict, optional
+            Keyword arguments to pass to `axes.plot` when plotting the mean
+            parameters.
+        kwargs : dict, optional
+            Additional keyword arguments to to pass to `axes.plot`.  Note in
+            particular the keywords 'markersize', 'color' and 'label'.
+
+        Returns
+        -------
+        list
+            List containing the plotted Line2D instances.
+
+        """
+        if axes is None:
+            axes = pyplot.gca(projection='polar')
+
+        peaks = numpy.vstack([cell.peaks_polar() for cell in self.values()])
+
+        lines = axes.plot(peaks[:, 1], peaks[:, 0], linestyle='None',
+                          marker='o', **kwargs)
+
+        if mean:
+            if mean_kw is None:
+                mean_kw = {}
+            mean_peaks = numpy.mean([cell.peaks() for cell in self.values()],
+                                    axis=0)
+            mean_peakx = mean_peaks[:, 0]
+            mean_peaky = mean_peaks[:, 1]
+            mean_beta = numpy.arctan2(mean_peaky, mean_peakx)
+            mean_l_al = numpy.sqrt(mean_peakx * mean_peakx +
+                                   mean_peaky * mean_peaky)
+
+            lines += axes.plot(mean_beta, mean_l_al, linestyle='None',
+                               marker='o', color='0.50', **mean_kw)
 
         return lines
 
