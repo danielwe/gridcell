@@ -1269,8 +1269,8 @@ class PointPattern(AlmostImmutable):
         bandwidth : scalar
             The bandwidth of the box kernel used to estimate the density of
             points pairs at a given distance. If None, the bandwidth is
-            automatically chose as :math:`0.2 / \sqrt(\lambda)`, where
-            :math:`\lambda` is the standard intensity estimate for the process.
+            set to :math:`0.2 / \sqrt(\lambda)`, where :math:`\lambda` is the
+            standard intensity estimate for the process.
         edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
                                'plus'}, optional
             String to select the edge handling to apply in computations. See
