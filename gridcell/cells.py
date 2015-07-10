@@ -1722,6 +1722,9 @@ class CellCollection(AlmostImmutable, Mapping):
             CellCollection containing any outlier cells.
 
         """
+        if features_kw is None:
+            features_kw = {}
+
         features = self.features(keys=keys, **features_kw)
         keys, feature_arr = features.index, features.values
         labels = cluster.dbscan(feature_arr, eps=eps,
@@ -1757,6 +1760,9 @@ class CellCollection(AlmostImmutable, Mapping):
             CellCollection containing any outlier cells.
 
         """
+        if features_kw is None:
+            features_kw = {}
+
         features = self.features(keys=keys, **features_kw)
         keys, feature_arr = features.index, features.values
 
@@ -1800,6 +1806,9 @@ class CellCollection(AlmostImmutable, Mapping):
             CellCollection containing any outlier cells.
 
         """
+        if features_kw is None:
+            features_kw = {}
+
         features = self.features(keys=keys, **features_kw)
         keys, feature_arr = features.index, features.values
 
