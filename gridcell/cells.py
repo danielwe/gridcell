@@ -608,7 +608,7 @@ class BaseCell(AlmostImmutable):
                                           normalized=normalized)
 
     @memoize_method
-    def features(self, roll=0, rweight=1.0, extra=False):
+    def features(self, roll=0, lweight=1.0, extra=False):
         """
         Compute a series of features of this cell
 
@@ -628,7 +628,7 @@ class BaseCell(AlmostImmutable):
         roll : integer, optional
              Quantities related to individual peaks are listed in the order
              given by `numpy.roll(self.peaks(), roll, axis=0)`.
-        rweight : scalar, optional
+        lweight : scalar, optional
             The scaling factor deciding the relative weight between
             size-related and shape-related features. The size-related features
             are multiplied by this number.
@@ -650,11 +650,11 @@ class BaseCell(AlmostImmutable):
 
         # Make sure that the differences between all features are
         # dimensionless, such that the distance is independent of units. Note
-        # that (log(r_2) - log(r_1)) ** 2 = log(r_2 / r_1) ** 2, which is
-        # dimensionless and thus OK, even though the dimension of log(r) is
+        # that (log(l_2) - log(l_1)) ** 2 = log(l_2 / l_1) ** 2, which is
+        # dimensionless and thus OK, even though the dimension of log(l) is
         # not well-defined in a strict sense.
-        feats = numpy.hstack((rweight * logscale, peaks[:3].ravel() / scale))
-        featlabels = ('logscale', 'x1', 'y1', 'x2', 'y2', 'x3', 'y3')
+        feats = numpy.hstack((lweight * logscale, peaks[:3].ravel() / scale))
+        featlabels = ('log_l', 'ax1', 'ay1', 'ax2', 'ay2', 'ax3', 'ay3')
         if extra:
             polar = numpy.roll(self.peaks_polar(), roll, axis=0)
             polar[:, 0] /= scale
@@ -664,8 +664,8 @@ class BaseCell(AlmostImmutable):
             y_ell = ecc * numpy.sin(tilt_2)
             feats = numpy.hstack((feats, scale, polar[:3].ravel(), x_ell,
                                   y_ell, ecc, tilt_2))
-            featlabels += ('scale', 'r1', 'alpha1', 'r2', 'alpha2', 'r3',
-                           'alpha3', 'xell', 'yell', 'ecc', 'tilt_2')
+            featlabels += ('l', 'al1', 'beta1', 'al2', 'beta2', 'al3',
+                           'beta3', 'xell', 'yell', 'epsilon', '2theta')
         index = [features_index[label] for label in featlabels]
         return pandas.Series(feats, index=index)
 
@@ -1893,7 +1893,7 @@ class CellCollection(AlmostImmutable, Mapping):
             mean_kw = {}
 
         features = self.features(keys=keys, extra=True)
-        scales = features[features_index['scale']]
+        scales = features[features_index['l']]
 
         # Start plotting from the current right end of the plot
         xlim = axes.get_xlim()
@@ -1951,7 +1951,7 @@ class CellCollection(AlmostImmutable, Mapping):
 
         features = self.features(keys=keys, extra=True)
         index = [features_index[label]
-                 for label in ('alpha1', 'alpha2', 'alpha3')]
+                 for label in ('beta1', 'beta2', 'beta3')]
         angles = numpy.rad2deg(features[index])
 
         # Start plotting from the current right end of the plot
@@ -2050,7 +2050,7 @@ class CellCollection(AlmostImmutable, Mapping):
             axes = pyplot.gca(projection='polar')
 
         features = self.features(keys=keys, extra=True)
-        index = [features_index[label] for label in ('ecc', 'tilt_2')]
+        index = [features_index[label] for label in ('epsilon', '2theta')]
         ellpars = features[index]
 
         lines = axes.plot(ellpars[index[1]], ellpars[index[0]],
@@ -2229,22 +2229,22 @@ class Module(CellCollection):
                                           **kwargs)
 
 features_index = {
-    'logscale': r"$\log{r}$",
-    'x1': r"$X_1$",
-    'y1': r"$Y_1$",
-    'x2': r"$X_2$",
-    'y2': r"$Y_2$",
-    'x3': r"$X_3$",
-    'y3': r"$Y_3$",
-    'scale': r"$r$",
-    'r1': r"$R_1$",
-    'alpha1': r"$\alpha_1$",
-    'r2': r"$R_2$",
-    'alpha2': r"$\alpha_2$",
-    'r3': r"$R_3$",
-    'alpha3': r"$\alpha_3$",
-    'xell': r"$X_\mathrm{ellipse}$",
-    'yell': r"$Y_\mathrm{ellipse}$",
-    'ecc': r"$\epsilon_\mathrm{ellipse}$",
-    'tilt_2': r"$2 \theta_\mathrm{ellipse}$",
+    'log_l': r"$\log{l}$",
+    'ax1': r"$a_{x,1} / l$",
+    'ay1': r"$a_{y,1} / l$",
+    'ax2': r"$a_{x,2} / l$",
+    'ay2': r"$a_{y,2} / l$",
+    'ax3': r"$a_{x,3} / l$",
+    'ay3': r"$a_{y,3} / l$",
+    'l': r"$l$",
+    'al1': r"$l_1 / l$",
+    'beta1': r"$\beta_1$",
+    'al2': r"$l_2 / l$",
+    'beta2': r"$\beta_2$",
+    'al3': r"$l_3 / l$",
+    'beta3': r"$\beta_3$",
+    'xell': r"$\epsilon \cos 2 \theta$",
+    'yell': r"$\epsilon \sin 2 \theta$",
+    'epsilon': r"$\epsilon$",
+    '2theta': r"$2 \theta$",
     }
