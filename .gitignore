@@ -1,5 +1,8 @@
 .ipynb_checkpoints
-flekken*.ipynb
-ivan*.ipynb
+import_data.ipynb
+cells.ipynb
+module.ipynb
+misc-plots.ipynb
+plot_conf.py
 *.pyc
 testnotebooks
