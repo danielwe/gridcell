@@ -1042,8 +1042,7 @@ class BaseCell(AlmostImmutable):
             thres_val = None
 
         axes, cbar = ffield.plot(axes=axes, cax=cax, threshold=thres_val,
-                                 vmin=-1.0, vmax=1.0, cmap=cmap,
-                                 cbar_kw=cbar_kw, **kwargs)
+                                 cmap=cmap, cbar_kw=cbar_kw, **kwargs)
 
         return axes, cbar
 
