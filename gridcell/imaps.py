@@ -29,7 +29,7 @@ from skimage import feature  # , exposure
 from matplotlib import pyplot
 
 from .utils import AlmostImmutable, sensibly_divide, pearson_correlogram
-from .external.memoize import memoize_method
+from .memoize.memoize import memoize_method
 from .ndfit import fit_ndgaussian
 
 

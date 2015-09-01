@@ -1,0 +1,4 @@
+[submodule "gridcell/memoize"]
+	path = gridcell/memoize
+	url = https://github.com/danielwe/memoize.git
+    branch = master

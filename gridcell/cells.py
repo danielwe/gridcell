@@ -36,7 +36,7 @@ from .utils import AlmostImmutable, gaussian, add_ticks, sensibly_divide
 from .shapes import Ellipse
 from .imaps import IntensityMap2D
 from .pointpatterns import PointPattern
-from .external.memoize import memoize_function, memoize_method
+from .memoize.memoize import memoize_function, memoize_method
 
 
 class Position(AlmostImmutable):
@@ -2296,4 +2296,4 @@ features_index = {
     'yell': r"$\epsilon \sin 2 \theta$",
     'epsilon': r"$\epsilon$",
     '2theta': r"$2 \theta$",
-    }
+}

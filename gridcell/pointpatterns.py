@@ -29,7 +29,7 @@ from shapely import geometry, affinity, ops, speedups
 from matplotlib import pyplot, patches
 
 from .utils import AlmostImmutable, sensibly_divide
-from .external.memoize import memoize_method
+from .memoize.memoize import memoize_method
 
 if speedups.available:
     speedups.enable()
