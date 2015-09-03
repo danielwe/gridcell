@@ -436,7 +436,7 @@ def plot_kde(data, data2=None, *args, **kwargs):
               kde_bw(data_[:, 1][:, numpy.newaxis]))
     else:
         if data_.ndim == 1:
-            data_ = data[:, numpy.newaxis]
+            data_ = data_[:, numpy.newaxis]
         bw = kde_bw(data_)
 
     kwargs.update({'bw': bw})
@@ -497,7 +497,7 @@ def check_stable(n_calls, function, *args, **kwargs):
     >>> # cells is a CellCollection instance. The stability of cells.k_means
     >>> # over 10 calls with n_clusters=4 and n_runs=10 is assessed.
     >>> def k_means_keys(*a, **k):
-    >>>     return module_keys(*cells.k_means(*a, **k)
+    >>>     return module_keys(*cells.k_means(*a, **k))
     >>> check_stable(10, k_means_keys, n_clusters=4, n_runs=10)
     True
 

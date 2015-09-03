@@ -35,7 +35,7 @@ from collections import Mapping
 from .utils import AlmostImmutable, gaussian, add_ticks, sensibly_divide
 from .shapes import Ellipse
 from .imaps import IntensityMap2D
-from .pointpatterns import PointPattern
+from .pointpatterns import PointPattern, Window
 from .memoize.memoize import memoize_function, memoize_method
 
 
@@ -1457,6 +1457,9 @@ class CellCollection(AlmostImmutable, Mapping):
             t, x, y, spike_ts = (session[skey]
                                  for skey in ('t', 'x', 'y', 'spike_ts'))
             pos = Position(t, x, y, **kwargs)
+            # NOTE: currently, BinnedSet2D's are created via Position, such
+            # that we initialize separate (but equal) BinnedSet2D's for each
+            # session.
             cells = {str(sskey) + '-' + str(ckey):
                      Cell(spike_t, pos, bins, range_,
                           threshold=thresholds[sskey][ckey], **kwargs)
@@ -1801,7 +1804,7 @@ class CellCollection(AlmostImmutable, Mapping):
         Returns
         -------
         list
-            List of `Module` instances containing the detected modules.
+            List of `module` instances containing the detected modules.
         CellCollection
             CellCollection containing any outlier cells.
 
@@ -2180,7 +2183,7 @@ class Module(CellCollection):
 
     """
 
-    def __init__(self, cells, threshold=0.25, **kwargs):
+    def __init__(self, cells, threshold=0.20, **kwargs):
         """
         Initialize the Module instance
 
@@ -2193,16 +2196,24 @@ class Module(CellCollection):
         """
         CellCollection.__init__(self, cells, **kwargs)
 
-        # Compute a large BinnedSet2D for the ideal cell
-        bset = self.values()[0].firing_rate.bset
+        # Compute a large BinnedSet2D for the template cell
+        bset = next(iter(self.values())).firing_rate.bset
         new_bset = bset
         for __ in range(3):
             new_bset = new_bset.correlate(bset, mode='full')
 
-        # Construct the ideal cell and save it to the instance
+        # Construct the template cell
         self.template = TemplateGridCell(self.mean_peaks(),
                                          self.mean_firing_field(),
                                          new_bset, threshold=threshold)
+
+        # Compute the window of possible phases
+        peak_pattern = numpy.vstack(((0.0, 0.0), self.template.peaks()))
+        window = spatial.Voronoi(peak_pattern).vertices
+        angles = numpy.arctan2(window[:, 1], window[:, 0])
+        sort_ind = numpy.argsort(angles)
+        window = window[sort_ind]
+        self.window = Window(window)
 
     @memoize_method
     def phases(self, keys=None):
@@ -2245,13 +2256,9 @@ class Module(CellCollection):
             PointPattern instance representning the phases.
 
         """
-        phases = self.phases(keys=keys).values()
-        peak_pattern = numpy.vstack(((0.0, 0.0), self.template.peaks()))
-        window = spatial.Voronoi(peak_pattern).vertices
-        angles = numpy.arctan2(window[:, 1], window[:, 0])
-        sort_ind = numpy.argsort(angles)
-        window = window[sort_ind]
-        return PointPattern(phases, window, edge_correction=edge_correction)
+        phases = tuple(self.phases(keys=keys).values())
+        return PointPattern(phases, self.window,
+                            edge_correction=edge_correction)
 
     def plot_phases(self, axes=None, keys=None, periodic=False, **kwargs):
         """

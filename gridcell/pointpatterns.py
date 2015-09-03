@@ -113,7 +113,7 @@ class Window(geometry.Polygon):
         The length of the longest diagonal across the polygon
 
         """
-        bpoints = list(geometry.MultiPoint(self.boundary)[:-1])
+        bpoints = list(geometry.MultiPoint(self.boundary.coords[:-1]))
         dmax = 0.0
         while bpoints:
             p1 = bpoints.pop()
@@ -490,7 +490,7 @@ class PointPattern(AlmostImmutable):
                              "carried out, since 'window' is not a simple "
                              "plane-filling polygon")
 
-        indices = range(len(self._points))
+        indices = list(range(len(self._points)))
         while indices:
             i = indices.pop()
             for j in indices:

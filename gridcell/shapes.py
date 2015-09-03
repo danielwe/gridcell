@@ -194,7 +194,7 @@ class Ellipse(object):
             + f0 ** 2 * F = 0
 
         """
-        px, py = numpy.asarray(zip(*fitpoints))
+        px, py = numpy.asarray(fitpoints).transpose()
         px2, py2 = px * px, py * py
         pxy = px * py
 

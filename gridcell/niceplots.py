@@ -150,7 +150,7 @@ def template_firing_rate(module, cmap='YlGnBu_r', length_unit='cm', box=True,
     cbar.locator = ticker.MaxNLocator(nbins=2)
     cbar.update_ticks()
 
-    range_ = module.values()[0].range_
+    range_ = next(iter(module.values())).range_
     axes.set(xticks=range_[0], yticks=range_[1])
     axes.set(xlabel=r"$x \ / \ \mathrm{{{}}}$".format(length_unit),
              ylabel=r"$y \ / \ \mathrm{{{}}}$".format(length_unit))
@@ -167,9 +167,8 @@ def template_firing_rate(module, cmap='YlGnBu_r', length_unit='cm', box=True,
                                  linewidth=2.0)
         axes.add_patch(rect)
     if window:
-        pattern = module.phase_pattern()
-        windowpatch = pattern.window.patch(fill=False, color=palette[1],
-                                           linewidth=2.0)
+        windowpatch = module.window.patch(fill=False, color=palette[1],
+                                          linewidth=2.0)
         axes.add_patch(windowpatch)
 
     return axes, cbar
@@ -328,7 +327,7 @@ def phase_pattern(module, periodic=True, length_unit='cm', palette=None):
                                  periodic_kw={'color': palette[2]},
                                  color=palette[1])
 
-    range_ = module.values()[0].range_
+    range_ = next(iter(module.values())).range_
     axes = artists[0].get_axes()
     axes.set(xticks=range_[0], yticks=range_[1])
     axes.set(xlabel=r"$\delta_x \ / \ \mathrm{{{}}}$".format(length_unit),

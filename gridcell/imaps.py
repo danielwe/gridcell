@@ -156,24 +156,6 @@ class BinnedSet(AlmostImmutable):
 
         return cls.from_center_binwidth_shape(cls, center, binwidth, shape)
 
-    def __eq__(self, other):
-        """
-        Define equality as the equality of all bin edge arrays
-
-        :other: another BinnedSet instance
-        :returns: True if equal, otherwise False
-
-        """
-        if other is self:
-            return True
-
-        sedges, oedges = self.edges, other.edges
-        return ((len(sedges) == len(oedges)) and
-                all(numpy.all(se == oe) for (se, oe) in zip(sedges, oedges)))
-
-    def __ne__(self, other):
-        return not self.__eq__(other)
-
     def __add__(self, vector):
         """
         Define addition of a BinnedSet with a sequence of numbers as
@@ -324,6 +306,18 @@ class BinnedSet(AlmostImmutable):
                       all(numpy.allclose(sw[0], ow[0]) for (sw, ow) in
                           zip(self.binwidths, other.binwidths)))
         return compatible
+
+    def equals(self, other):
+        """
+        Define equality as the exact equality of all bin edge arrays
+
+        :other: another BinnedSet instance
+        :returns: True if equal, otherwise False
+
+        """
+        sedges, oedges = self.edges, other.edges
+        return ((len(sedges) == len(oedges)) and
+                all(numpy.all(se == oe) for (se, oe) in zip(sedges, oedges)))
 
     @memoize_method
     def translated(self, vector):
@@ -653,8 +647,8 @@ class IntensityMap(AlmostImmutable):
     """
 
     def __init__(self, data, bset, **kwargs):
-        self.data = numpy.ma.array(data, mask=numpy.isnan(data),
-                                   keep_mask=True, copy=True, **kwargs)
+        self._data = numpy.ma.array(data, mask=numpy.isnan(data),
+                                    keep_mask=True, copy=True, **kwargs)
 
         if not isinstance(bset, BinnedSet):
             bset = BinnedSet(*bset)
@@ -735,7 +729,7 @@ class IntensityMap(AlmostImmutable):
             # Apparently, other is not an IntensityMap
             new_data = bound_op(other)
         else:
-            if not ((bset == obset) or
+            if not ((bset.equals(obset)) or
                     bset.shape == () or
                     obset.shape == ()):
                 raise ValueError("instances of {} must be defined over "
@@ -748,12 +742,6 @@ class IntensityMap(AlmostImmutable):
                 bset = obset
 
         return self.__class__(new_data, bset)
-
-    def __eq__(self, other):
-        return self._inherit_binary_operation(other, '__eq__')
-
-    def __ne__(self, other):
-        return self._inherit_binary_operation(other, '__ne__')
 
     def __lt__(self, other):
         return self._inherit_binary_operation(other, '__lt__')
@@ -917,15 +905,15 @@ class IntensityMap(AlmostImmutable):
 
         """
         maps = iter(maps)  # We accept iterators/generators
-        ref_map = maps.next()
+        ref_map = next(maps)
         ref_bset = ref_map.bset
 
         data = ref_map.data
         new_data = numpy.ma.filled(data, fill_value=0.0)
         num_valid = (~numpy.ma.getmaskarray(data)).astype(numpy.int_)
         length = 0  # Since iterators have no len(), we must sum it up manually
-        for map_ in maps:  # No [1:]: the first element was consumed by .next()
-            if not (map_.bset == ref_bset):
+        for map_ in maps:  # No [1:]: the first element was consumed by next()
+            if not (map_.bset.equals(ref_bset)):
                 raise ValueError("instances of {} must be defined over "
                                  "instances of {} that compare equal for "
                                  "the mean to be defined"
@@ -1135,6 +1123,10 @@ class IntensityMap(AlmostImmutable):
 
         """
         return self.bset.range_
+
+    @property
+    def data(self):
+        return self._data
 
     @property
     @memoize_method

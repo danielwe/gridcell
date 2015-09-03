@@ -495,7 +495,7 @@ def _remove_duplicates(spike_ts):
         entries are removed in-place.
 
     """
-    keys = spike_ts.keys()
+    keys = list(spike_ts.keys())
     while keys:
         key1 = keys.pop(0)
         for (i, key2) in enumerate(keys):
