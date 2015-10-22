@@ -21,7 +21,7 @@ plots of gridcell stuff
 
 from __future__ import (absolute_import, division, print_function,
                         unicode_literals)
-import seaborn
+from .utils import distplot
 from matplotlib import pyplot, patches, ticker
 
 
@@ -53,12 +53,12 @@ def pos_and_spikes(cell, alpha_path=0.5, alpha_spikes=0.25, length_unit='cm',
     if palette is None:
         palette = (None, None)
 
+    pos = cell.position
     if palette[0] is None:
-        artists = cell.pos.plot_path(alpha=alpha_path)
+        artists = pos.plot_path(alpha=alpha_path)
     else:
-        artists = cell.pos.plot_path(alpha=alpha_path, color=palette[0])
+        artists = pos.plot_path(alpha=alpha_path, color=palette[0])
 
-    range_ = cell.range_
     axes = artists[0].get_axes()
     if palette[1] is None:
         artists += cell.plot_spikes(axes=axes, alpha=alpha_spikes)
@@ -66,6 +66,7 @@ def pos_and_spikes(cell, alpha_path=0.5, alpha_spikes=0.25, length_unit='cm',
         artists += cell.plot_spikes(axes=axes, alpha=alpha_spikes,
                                     color=palette[1])
 
+    range_ = cell.params['range_']
     axes.set(xlim=range_[0], ylim=range_[1],
              xticks=range_[0], yticks=range_[1])
     axes.set(xlabel=r"$x \ / \ \mathrm{{{}}}$".format(length_unit),
@@ -74,7 +75,7 @@ def pos_and_spikes(cell, alpha_path=0.5, alpha_spikes=0.25, length_unit='cm',
     return artists
 
 
-def firing_rate(cell, cmap='YlGnBu_r', length_unit='cm', rate_unit='Hz'):
+def ratemap(cell, cmap='YlGnBu_r', length_unit='cm', rate_unit='Hz'):
     """
     Convenience function to plot nice firing rate maps
 
@@ -91,28 +92,27 @@ def firing_rate(cell, cmap='YlGnBu_r', length_unit='cm', rate_unit='Hz'):
 
     Returns
     -------
-        The return signature is equivalent to that of
-        `BaseCell.plot_firing_rate`.
+    See `BaseCell.plot_ratemap`.
 
     """
-    axes, cbar = cell.plot_firing_rate(cmap=cmap,
-                                       edgecolor='face',
-                                       )
+    axes, cbar = cell.plot_ratemap(cmap=cmap,
+                                   edgecolor='face',
+                                   )
 
     cbar.solids.set(edgecolor='face')
     cbar.set_label(r"$f \ / \ \mathrm{{{}}}$".format(rate_unit))
     cbar.locator = ticker.MaxNLocator(nbins=2)
     cbar.update_ticks()
 
-    range_ = cell.range_
+    range_ = cell.params['range_']
     axes.set(xticks=range_[0], yticks=range_[1])
     axes.set(xlabel=r"$x \ / \ \mathrm{{{}}}$".format(length_unit),
              ylabel=r"$y \ / \ \mathrm{{{}}}$".format(length_unit))
     return axes, cbar
 
 
-def template_firing_rate(module, cmap='YlGnBu_r', length_unit='cm', box=True,
-                         window=False, palette=None):
+def template_ratemap(module, cmap='YlGnBu_r', length_unit='cm', box=True,
+                     window_type=None, palette=None):
     """
     Convenience function to plot nice template cell firing rate maps
 
@@ -127,30 +127,31 @@ def template_firing_rate(module, cmap='YlGnBu_r', length_unit='cm', box=True,
     box : bool, optional
         If True, a box representning the environment where the true recordings
         were done is added to the plot.
-    window : bool, optional
-        If True, a polygon representning the window of possible phases is added
-        to the plot.
+    window_type : None or string, optional
+        If not None, a polygon representning the window of possible phases is
+        added to the plot. The value of this variable is passed to
+        `Module.window` as the keyword `window_type`. See this method for
+        possible values.
     palette : sequence, optional
         Color palette to use for the box and window: the first color is used
         for the box, the second for the window.
 
     Returns
     -------
-        The return signature is equivalent to that of
-        `BaseCell.plot_firing_rate`.
+    See `TemplateGridCell.plot_ratemap`
 
     """
-    cell = module.template
-    axes, cbar = cell.plot_firing_rate(cmap=cmap,
-                                       edgecolor='face'
-                                       )
+    cell = module.template()
+    axes, cbar = cell.plot_ratemap(cmap=cmap,
+                                   edgecolor='face'
+                                   )
 
     cbar.solids.set(edgecolor='face')
     cbar.set_label(r"$f \ / \ f_\mathrm{{max}}$")
     cbar.locator = ticker.MaxNLocator(nbins=2)
     cbar.update_ticks()
 
-    range_ = next(iter(module.values())).range_
+    range_ = next(iter(module)).params['range_']
     axes.set(xticks=range_[0], yticks=range_[1])
     axes.set(xlabel=r"$x \ / \ \mathrm{{{}}}$".format(length_unit),
              ylabel=r"$y \ / \ \mathrm{{{}}}$".format(length_unit))
@@ -166,21 +167,21 @@ def template_firing_rate(module, cmap='YlGnBu_r', length_unit='cm', box=True,
                                  fill=False, color=palette[0],
                                  linewidth=2.0)
         axes.add_patch(rect)
-    if window:
-        windowpatch = module.window.patch(fill=False, color=palette[1],
-                                          linewidth=2.0)
+    if window_type is not None:
+        windowpatch = module.window(window_type=window_type).patch(
+            fill=False, color=palette[1], linewidth=2.0)
         axes.add_patch(windowpatch)
 
     return axes, cbar
 
 
-def stacked_firing_rate(sfiring_rate, cmap='YlGnBu_r', length_unit='cm'):
+def imap(imap, vmin=None, vmax=None, cmap='YlGnBu_r', length_unit='cm'):
     """
-    Convenience function to plot nice stacked cell firing rate maps
+    Convenience base function to plot any IntensityMap2D instance
 
     Parameters
     ----------
-    sfiring_rate : IntensityMap2D
+    ratemap : IntensityMap2D
         Stacked firing rate to plot
     cmap : Colormap or registered colormap name, optional
         Colormap to use for the plot.
@@ -189,19 +190,14 @@ def stacked_firing_rate(sfiring_rate, cmap='YlGnBu_r', length_unit='cm'):
 
     Returns
     -------
-        The return signature is equivalent to that of
-        `IntensityMap2D.plot`.
+    See `IntensityMap2D.plot`.
 
     """
-    vmin = min(0.0, sfiring_rate.min())
-    axes, cbar = sfiring_rate.plot(cmap=cmap, vmin=vmin,
-                                   edgecolor='face'
-                                   )
+    axes, cbar = imap.plot(cmap=cmap, vmin=vmin, vmax=vmax, edgecolor='face')
 
     cbar.solids.set(edgecolor='face')
-    cbar.set_ticks([0.0])
 
-    range_ = sfiring_rate.range_
+    range_ = imap.range_
     axes.set(xticks=range_[0], yticks=range_[1])
     axes.set(xlabel=r"$x \ / \ \mathrm{{{}}}$".format(length_unit),
              ylabel=r"$y \ / \ \mathrm{{{}}}$".format(length_unit))
@@ -209,8 +205,8 @@ def stacked_firing_rate(sfiring_rate, cmap='YlGnBu_r', length_unit='cm'):
     return axes, cbar
 
 
-def acorr(cell, cmap='coolwarm', length_unit='cm', threshold=False, peaks=True,
-          ellipse=True, palette=None):
+def acorr(cell, cmap='coolwarm', length_unit='cm', threshold=False,
+          grid_peaks=False, grid_ellipse=False, palette=None):
     """
     Convenience function to plot nice firing rate autocorrelograms
 
@@ -223,45 +219,44 @@ def acorr(cell, cmap='coolwarm', length_unit='cm', threshold=False, peaks=True,
     length_unit : string, optional
         The length unit to add to the axis labels.
     threshold : bool, optional
-        If True, only plot values above the peak detection threshold.
-    peaks : bool, optional
+        See `BaseCell.plot_acorr`.
+    grid_peaks : bool, optional
         If True, the inner ring of peaks are plotted with markers.
-    ellipse : bool, optional
+    grid_ellipse : bool, optional
         If True, the ellipse through the inner ring of peaks is drawn.
     palette : sequence, optional
-        Color palette to use for peaks and ellipse: the first color is used for
-        peak markers, the second for the ellipse.
+        Color palette to use for grid peaks and ellipse: the first color is
+        used for peak markers, the second for the ellipse.
 
     Returns
     -------
-        The return signature is equivalent to that of
-        `BaseCell.plot_autocorrelogram`.
+    See `BaseCell.plot_acorr`.
 
     """
-    axes, cbar = cell.plot_autocorrelogram(cmap=cmap,
-                                           edgecolor='face',
-                                           threshold=threshold,
-                                           cbar_kw={'ticks': [-1, 0, 1]})
+    axes, cbar = cell.plot_acorr(cmap=cmap,
+                                 edgecolor='face',
+                                 threshold=threshold,
+                                 cbar_kw={'ticks': [-1, 0, 1]})
 
     if palette is None:
         palette = (None, None)
 
-    if peaks:
-        cell.plot_peaks(axes=axes, markersize=8, color=palette[0])
-    if ellipse:
-        cell.plot_ellipse(axes=axes, color=palette[1])
+    if grid_peaks:
+        cell.plot_grid_peaks(axes=axes, markersize=8, color=palette[0])
+    if grid_ellipse:
+        cell.plot_grid_ellipse(axes=axes, color=palette[1])
 
     cbar.solids.set(edgecolor='face')
     cbar.set_label(r"$r$")
 
-    range_ = cell.range_
+    range_ = cell.params['range_']
     axes.set(xticks=range_[0], yticks=range_[1])
     axes.set(xlabel=r"$x \ / \ \mathrm{{{}}}$".format(length_unit),
              ylabel=r"$y \ / \ \mathrm{{{}}}$".format(length_unit))
     return axes, cbar
 
 
-def ccorr(cell1, cell2, cmap='coolwarm', length_unit='cm', cpeak=True):
+def corr(cell1, cell2, cmap='coolwarm', length_unit='cm', center_peak=False):
     """
     Convenience function to plot nice firing rate cross-correlograms
 
@@ -273,30 +268,30 @@ def ccorr(cell1, cell2, cmap='coolwarm', length_unit='cm', cpeak=True):
         Colormap to use for the plot.
     length_unit : string, optional
         The length unit to add to the axis labels.
-    cpeak : bool, optional
-        If True, the peak closest to the center is plotted with a marker.
+    center_peak : bool, optional
+        If True, the peak closest to the center is marked.
 
     Returns
     -------
-        The return signature is equivalent to that of
-        `BaseCell.plot_correlogram`.
+    See `BaseCell.plot_corr`.
 
     """
-    axes, cbar = cell1.plot_correlogram(cell2, cmap=cmap, cpeak=cpeak,
-                                        edgecolor='face',
-                                        cbar_kw={'ticks': [-1, 0, 1]})
+    axes, cbar = cell1.plot_corr(cell2, cmap=cmap, center_peak=center_peak,
+                                 edgecolor='face',
+                                 cbar_kw={'ticks': [-1, 0, 1]})
 
     cbar.solids.set(edgecolor='face')
     cbar.set_label(r"$\rho$")
 
-    range_ = cell1.range_
+    range_ = cell1.params['range_']
     axes.set(xticks=range_[0], yticks=range_[1])
     axes.set(xlabel=r"$x \ / \ \mathrm{{{}}}$".format(length_unit),
              ylabel=r"$y \ / \ \mathrm{{{}}}$".format(length_unit))
     return axes, cbar
 
 
-def phase_pattern(module, periodic=True, length_unit='cm', palette=None):
+def phase_pattern(module, window_type='voronoi', project_phases=False,
+                  periodic_levels=4, length_unit='cm', palette=None):
     """
     Convenience function to plot nice phase patterns
 
@@ -304,10 +299,17 @@ def phase_pattern(module, periodic=True, length_unit='cm', palette=None):
     ----------
     module : Module
         Module to plot phase pattern from.
+    window_type : string, optional
+        The type of window to use. See `Module.window_vertices` for possible
+        values.
+    project_phases : bool, optional
+        If True, the phases are projected to a regular hexagonal grid.
+    periodic_levels : bool, optional
+        Add this many levels of periodic extension of the phase pattern to the
+        plot.
     length_unit : string, optional
-        The length unit to add to the axis labels.
-    periodic : bool, optional
-        If True, the periodic extension is included in the plot.
+        The length unit to add to the axis labels. This is ignored if
+        project_phases is True.
     palette : sequence, optional
         Color palette to use for the artists: the first color is used for the
         window, the second for the points in the pattern, and the third for the
@@ -315,23 +317,95 @@ def phase_pattern(module, periodic=True, length_unit='cm', palette=None):
 
     Returns
     -------
-        The return signature is equivalent to that of
-        `Module.plot_phases`.
+    See `Module.plot_phases`.
 
     """
     if palette is None:
         palette = (None,) * 3
 
-    artists = module.plot_phases(window=True, periodic=periodic,
-                                 window_kw={'color': palette[0]},
-                                 periodic_kw={'color': palette[2]},
-                                 color=palette[1])
+    phase_pattern = module.phase_pattern(window_type=window_type,
+                                         project_phases=project_phases)
+    artists = phase_pattern.plot_pattern(window=True,
+                                         periodic_levels=periodic_levels,
+                                         window_kw={'color': palette[0]},
+                                         periodic_kw={'color': palette[2]},
+                                         color=palette[1])
 
-    range_ = next(iter(module.values())).range_
     axes = artists[0].get_axes()
+    if project_phases:
+        range_ = ((-1.0, 1.0), (-1.0, 1.0))
+        axes.set(xlabel=r"$\delta_x$",
+                 ylabel=r"$\delta_y$")
+    else:
+        range_ = next(iter(module)).params['range_']
+        axes.set(xlabel=r"$\delta_x \ / \ \mathrm{{{}}}$".format(length_unit),
+                 ylabel=r"$\delta_y \ / \ \mathrm{{{}}}$".format(length_unit))
     axes.set(xticks=range_[0], yticks=range_[1])
-    axes.set(xlabel=r"$\delta_x \ / \ \mathrm{{{}}}$".format(length_unit),
-             ylabel=r"$\delta_y \ / \ \mathrm{{{}}}$".format(length_unit))
+    return artists
+
+
+def pairwise_phase_pattern(module, window_type='voronoi', from_absolute=True,
+                           project_phases=False, full_window=False,
+                           sign='regular', length_unit='cm',
+                           palette=None):
+    """
+    Convenience function to plot nice pairwise phase patterns
+
+    Parameters
+    ----------
+    module : Module
+        Module to plot phase pattern from.
+    window_type : string, optional
+        The type of window to use. See `Module.window_vertices` for possible
+        values.
+    from_absolute : bool, optional
+        If True, the pairwise phases are computed from the absolute phases. If
+        False, they are computed directly from each pair of cells.
+    project_phases : bool, optional
+        If True, the phases are projected to a regular hexagonal grid.
+    full_window : bool, optional
+        If True, the full window used for absolute phases is also used for
+        relative phases.
+    sign : string, optional
+        Flag to select how to resolve the sin ambiguity when `full_window ==
+        True`.
+    length_unit : string, optional
+        The length unit to add to the axis labels. This is ignored if
+        project_phases is True.
+    palette : sequence, optional
+        Color palette to use for the artists: the first color is used for the
+        window, the second for the points in the pattern, and the third for the
+        periodic extension (if any).
+
+    Returns
+    -------
+    See `Module.plot_phases`.
+
+    """
+    if palette is None:
+        palette = (None,) * 3
+
+    phase_pattern = module.pairwise_phase_pattern(
+        window_type=window_type,
+        from_absolute=from_absolute,
+        project_phases=project_phases,
+        full_window=full_window,
+        sign=sign)
+    artists = phase_pattern.plot_pattern(window=True,
+                                         window_kw={'color': palette[0]},
+                                         periodic_kw={'color': palette[2]},
+                                         color=palette[1])
+
+    axes = artists[0].get_axes()
+    if project_phases:
+        range_ = ((-1.0, 1.0), (-1.0, 1.0))
+        axes.set(xlabel=r"$\delta_x$",
+                 ylabel=r"$\delta_y$")
+    else:
+        range_ = next(iter(module)).params['range_']
+        axes.set(xlabel=r"$\delta_x \ / \ \mathrm{{{}}}$".format(length_unit),
+                 ylabel=r"$\delta_y \ / \ \mathrm{{{}}}$".format(length_unit))
+    axes.set(xticks=range_[0], yticks=range_[1])
     return artists
 
 
@@ -500,7 +574,8 @@ def pair_corr(pattern, nsims=1000, length_unit='cm', csr=True, interval=False,
     return artists
 
 
-def ldistplot(pattern, nsims=1000, length_unit='cm', palette=None):
+def ldistplot(pattern, nsims=1000, weight_function=None, length_unit='cm',
+              palette=None):
     """
     Convenience function to plot nice L statistic distribution plots
 
@@ -508,6 +583,8 @@ def ldistplot(pattern, nsims=1000, length_unit='cm', palette=None):
     ----------
     pattern : PointPattern
         Point pattern to plot a the L statistic estimator from.
+    weight_function : callable
+        Weight function to use for the L statistic estimator
     nsims : integer, optional
         Number of simulated patterns to compute distribution from.
     length_unit : string, optional
@@ -518,8 +595,7 @@ def ldistplot(pattern, nsims=1000, length_unit='cm', palette=None):
 
     Returns
     -------
-        The return signature is equivalent to that of
-        `seaborn.distplot`.
+    See `seaborn.distplot`.
 
     """
     sims = pattern.simulate(nsims=nsims)
@@ -527,9 +603,11 @@ def ldistplot(pattern, nsims=1000, length_unit='cm', palette=None):
     if palette is None:
         palette = (None, None)
 
-    axes = seaborn.distplot(sims.lstatistics(), color=palette[0],
-                            hist_kws={'histtype': 'stepfilled',
-                                      'label': 'Simulations'})
+    lstat = sims.lstatistics(weight_function=weight_function)
+
+    axes = distplot(lstat, color=palette[0],
+                    hist_kws={'histtype': 'stepfilled',
+                              'label': 'Simulations'})
     axes.axvline(pattern.lstatistic(), color=palette[1], label='Pattern')
     axes.set(xlabel=r"$\tau \ / \ \mathrm{{{}}}$".format(length_unit),
              ylabel=r"$f(\tau) \ / \ \mathrm{{{}}}^{{-1}}$"

@@ -243,7 +243,7 @@ class Ellipse(object):
 
         agparams_old = numpy.zeros((6,))
         w = numpy.ones_like(px)
-        for _ in xrange(100):
+        for _ in range(100):
             mmat = numpy.average(w * xixi.transpose(), axis=-1)
             #print(mmat == mmat.transpose())
 

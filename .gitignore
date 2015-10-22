@@ -1,8 +1,4 @@
 .ipynb_checkpoints
-import_data.ipynb
-cells*.ipynb
-module*.ipynb
-misc-plots.ipynb
-plot_conf.py
 *.pyc
-testnotebooks
+__pycache__
+gridcell.egg-info

@@ -25,106 +25,186 @@ modulated behavior.
 
 from __future__ import (absolute_import, division, print_function,
                         unicode_literals)
+from abc import ABCMeta, abstractmethod
+
 import numpy
 import pandas
 from scipy import signal, linalg, spatial
 from sklearn import cluster
 from matplotlib import pyplot
-from collections import Mapping
+from collections import MutableSequence
 
-from .utils import AlmostImmutable, gaussian, add_ticks, sensibly_divide
+from .utils import (AlmostImmutable, gaussian, sensibly_divide,  #add_ticks
+                    project_vectors)
 from .shapes import Ellipse
 from .imaps import IntensityMap2D
 from .pointpatterns import PointPattern, Window
-from .memoize.memoize import memoize_function, memoize_method
+from .memoize.memoize import memoize_method, Memparams
+
+
+_PI = numpy.pi
+_2PI = 2.0 * _PI
+
+
+class FeatureNames(object):
+    """
+    Lists of cell feature names and associated latex strings
+
+    """
+    peak_features = sum(
+        ((
+            ''.join(('peak', str(i), '_x')),
+            ''.join(('peak', str(i), '_y')),
+            ''.join(('peak', str(i), '_rad')),
+            ''.join(('peak', str(i), '_ang')),
+            ''.join(('peak', str(i), '_logx')),
+            ''.join(('peak', str(i), '_logy')),
+            ''.join(('peak', str(i), '_lograd')),
+        ) for i in range(1, 7)),
+        ()
+    )
+
+    grid_features = (
+        'scale',
+        'logscale'
+    ) + peak_features + (
+        'ellipse_x',
+        'ellipse_y',
+        'ellipse_rad',
+        'ellipse_ang',
+    )
+
+    default_features = (
+        'logscale',
+    ) + sum(
+        ((
+            ''.join(('peak', str(i), '_x')),
+            ''.join(('peak', str(i), '_y')),
+        ) for i in range(1, 7)),
+        ()
+    )
+
+    @staticmethod
+    def grid_features_latex(normalize_peaks=True, **kwargs):
+        end_unnorm = r"}$"
+        if normalize_peaks:
+            end = r"} / l$"
+        else:
+            end = end_unnorm
+
+        return (
+            r"$l$",
+            r"$\log l$",
+        ) + sum(
+            (
+                (
+                    "".join((r"$a_{x, ", str(i), end)),
+                    "".join((r"$a_{y, ", str(i), end)),
+                    "".join((r"$l_{", str(i), end)),
+                    "".join((r"$\beta_{", str(i), end_unnorm)),
+                    "".join((r"$\log a_{x, ", str(i), end)),
+                    "".join((r"$\log a_{y, ", str(i), end)),
+                    "".join((r"$\log l_{", str(i), end)),
+                )
+                for i in range(1, 7)
+            ),
+            ()
+        ) + (
+            r"$\epsilon \cos 2 \theta$",
+            r"$\epsilon \sin 2 \theta$",
+            r"$\epsilon$",
+            r"$2 \theta$",
+        )
+
+    @classmethod
+    def latex_mapping(cls, **kwargs):
+        def _lm(key):
+            try:
+                index = cls.grid_features.index(key)
+            except ValueError:
+                try:
+                    return "".join([r"$\textrm{",
+                                    key.replace("_", " "),
+                                    r"}$"])
+                except (TypeError, AttributeError):
+                    return key
+            else:
+                return cls.grid_features_latex(**kwargs)[index]
+        return _lm
 
 
 class Position(AlmostImmutable):
     """
     Represent positional data recorded over time
 
+    Parameters
+    ----------
+    t : array-like
+        Array containing the times of the position samples.
+    x, y : array-like
+        Arrays containing the x- and y-positions of the position samples.
+        Missing samples can be represented by nans or by using a masked array
+        for at least one of the arrays.
+    speed_window : non-negative scalar, optional
+        Length of the time span over which to average the computed speed at
+        each sample. Should be given in the same unit as the time samples in
+        `t`.
+        ..note:: The window length is converted to a number of samples using
+        the mean time interval between samples, and rounded up to the nearest
+        odd number to get a symmetric interval. Hence, if the positions are
+        sampled very irregularly the averaging procedure doesn't make much
+        sense, and one should rather let `speed_window=0.0`.
+    min_speed : non-negative scalar, optional
+        Lower speed limit for samples to be considered valid. Should be given
+        in the unit for speed derived from the position samples in `x, y` and
+        the time samples in `t`.
+    **kwargs : dict, optional
+        Any additional keyword arguments are stored as a dict in the attribute
+        `info`. They are not used for internal computations.
+
     """
+    params = Memparams(dict, 'params')
 
     def __init__(self, t, x, y, speed_window=0.0, min_speed=0.0, **kwargs):
-        """
-        Initialize the Position instance
+        self.params = dict(speed_window=speed_window, min_speed=min_speed)
+        self.info = kwargs
 
-        :t: array-like, giving the times of position samples. Should be close
-            to regularly spaced if speed_window != 0.0.
-        :x: array-like, giving the x coordinates of position samples
-        :y: array-like, giving the y coordinates of position samples
-        :speed_window: length of the time interval over which to compute the
-                       average speed at each sample. The length of the
-                       averaging interval is rounded up to the nearest odd
-                       number of samples to get a symmetric window. Must be
-                       a non-negative number, given in the same unit as 't'.
-                       Default is 0.0 (average speed computed over the shortest
-                       possible interval -- a central difference around the
-                       current sample).
-        :min_speed: lower speed limit for valid data. Sampled positions are
-                    only considered valid if the computed average speed at the
-                    sample is larger than this. Must be a non-negative number,
-                    given in the same unit as 'x' and 'y'. Default is 0.0 (all
-                    data valid).
-        :kwargs: none supported at the moment. In the future, support may be
-                 added for a keyword 'info' containing information about the
-                 transformation applied to get physical positions from raw
-                 position data, if a use case can be found for having this
-                 information available here.
-
-        """
-        if not min_speed >= 0.0:
-            raise ValueError("'min_speed' must be a non-negative number")
-        if not speed_window >= 0.0:
-            raise ValueError("'speed_window' must be a non-negative number")
-        self.speed_window = speed_window
-        self.min_speed = min_speed
-
-        self.speed, tweights, __ = self.speed_and_weights(t, x, y,
-                                                          speed_window)
-
-        speedmask = numpy.logical_or(self.speed < min_speed,
-                                     numpy.ma.getmaskarray(self.speed))
         nanmask = numpy.logical_or(numpy.isnan(x), numpy.isnan(y))
-        mask = numpy.logical_or(speedmask, nanmask)
+        x = numpy.ma.masked_where(nanmask, x)
+        y = numpy.ma.masked_where(nanmask, y)
+        tweights, dweights = self.time_and_distance_weights(t, x, y)
 
-        self.t = t
-        self._x = x
-        self._y = y
-        self.x = numpy.ma.masked_where(mask, x)
-        self.y = numpy.ma.masked_where(mask, y)
-        self.tweights = numpy.ma.masked_where(mask, tweights)
+        self.data = dict(t=t, x=x, y=y, tweights=tweights, dweights=dweights)
 
     @staticmethod
-    def speed_and_weights(t, x, y, speed_window):
+    def time_and_distance_weights(t, x, y):
         """
-        Compute speed and time- and distance weights for position samples
+        Compute time- and distance weights for position samples
 
-        The computed speed is averaged over a certain time window around each
-        sample. The time- and distance weights are arrays that assign a time
-        interval and a distance interval to each sample.
+        The time- and distance weights are arrays that assign a time interval
+        and a distance interval to each sample.
 
-        :t: array-like, giving the times of position samples. Should be close
-            to regularly spaced if speed_window != 0.0.
-        :x, y: array-like, giving the x and y coordinates of position samples.
-               Nans or masked entries are treated as missing values, and
-               affected entries in the returned speed and distance weight
-               arrays will be nans.
-        :speed_window: length of the time interval around each sample over
-                       which to average the speed at each sample. The length of
-                       the time interval is rounded up to the nearest odd
-                       number of samples to get a symmetric window. Must be
-                       a non-negative number, given in the same unit as 't'.
-        :returns: array with speed at each position sample, and time- and
-                  distance weight arrays. Missing values are masked.
+        Parameters
+        ----------
+        t : array-like
+            Array containing the times of the position samples.
+        x, y : array-like
+            Arrays containing the x- and y-positions of the position samples.
+            Missing samples can be represented by using masked arrays.
+
+        Returns
+        -------
+        tweights : ndarray
+            The length of time (time weight) associated with each position
+            sample.
+        dweights : masked ndarray
+            The covered distance (distance weight) associated with each
+            position sample.
 
         """
         tsteps = numpy.diff(t)
         tweights = 0.5 * numpy.hstack((tsteps[0], tsteps[:-1] + tsteps[1:],
                                        tsteps[-1]))
-
-        x = numpy.ma.masked_where(numpy.isnan(x), x)
-        y = numpy.ma.masked_where(numpy.isnan(y), y)
 
         xsteps = numpy.ma.diff(x)
         ysteps = numpy.ma.diff(y)
@@ -132,12 +212,37 @@ class Position(AlmostImmutable):
         dweights = 0.5 * numpy.ma.hstack((dsteps[0], dsteps[:-1] + dsteps[1:],
                                           dsteps[-1]))
 
+        return tweights, dweights
+
+    def speed(self):
+        """
+        Compute the speed at each sample.
+
+        The length of time over which to average the computed speed around each
+        sample is given by `self.params['speed_window']`.
+
+        Returns
+        -------
+        speed : masked ndarray
+            The speed at each position sample.
+
+        """
+        speed_window = self.params['speed_window']
+        if not speed_window >= 0.0:
+            raise ValueError("'speed_window' must be a non-negative number")
+
+        data = self.data
+
+        t = data['t']
+        mean_tstep = numpy.mean(numpy.diff(t))
+
+        window_length = 2 * int(0.5 * speed_window / mean_tstep) + 1
+        window_sequence = numpy.empty(window_length)
+        window_sequence.fill(1.0 / window_length)
+
+        tweights, dweights = data['tweights'], data['dweights']
         dw_mask = numpy.ma.getmaskarray(dweights)
         dw_filled = numpy.ma.filled(dweights, fill_value=0.0)
-
-        window_length = 2 * int(0.5 * speed_window / numpy.mean(tsteps)) + 1
-        window_sequence = numpy.empty((window_length,))
-        window_sequence.fill(1.0 / window_length)
 
         tweights_filt = sensibly_divide(
             signal.convolve(tweights, window_sequence, mode='same'),
@@ -148,39 +253,112 @@ class Position(AlmostImmutable):
             signal.convolve((~dw_mask).astype(numpy.float_),
                             window_sequence, mode='same'), masked=True)
 
-        speed = dweights_filt / tweights_filt
+        return dweights_filt / tweights_filt
 
-        return speed, tweights, dweights
+    def filtered_data(self):
+        """
+        Apply a speed mask to the data in `self.data`
+
+        Data at samples where the speed is below the minimum speed will be
+        masked.
+
+        Returns
+        -------
+        dict
+            Dict similar to `self.data`, but with all data masked at samples
+            where `self.speed() < self.params['min_speed']`. ..note::
+            `self.data['t']` is not masked -- the time is of interest even for
+            invalid samples.
+
+        """
+        data = self.data
+        t, x, y = data['t'], data['x'], data['y']
+        tweights, dweights = data['tweights'], data['dweights']
+        speed = self.speed()
+
+        min_speed = self.params['min_speed']
+        if not min_speed >= 0.0:
+            raise ValueError("'speed_window' must be a non-negative number")
+
+        speedmask = numpy.logical_or(speed < min_speed,
+                                     numpy.ma.getmaskarray(speed))
+
+        x = numpy.ma.masked_where(speedmask, x)
+        y = numpy.ma.masked_where(speedmask, y)
+        dweights = numpy.ma.masked_where(speedmask, dweights)
+        tweights = numpy.ma.masked_where(speedmask, tweights)
+
+        return dict(t=t, x=x, y=y, tweights=tweights, dweights=dweights)
 
     @memoize_method
-    def timemap(self, bins, range_):
+    def _occupancy(self, bins, range_):
         """
-        Compute a histogram showing the spatial distribution of time spent
+        Compute a map of occupancy times
 
-        Only samples considered valid (average speed at sample higher than
-        'self.min_speed') are included in the histogram. The histogram is
-        returned as an IntensityMap2D instance.
-
-        :bins: bin specification defining the bins to use in the histogram. The
-               simplest formats are a scalar 'nbins' or a tuple '(nbins_x,
-               nbins_y)', giving the number of bins of equal widths in each
-               direction. For information about other valid formats, see the
-               documentation for numpy.histogram2d().
-        :range_: range specification giving the x and y values of the outermost
-                 bin edges. The format is a tuple '((xmin, xmax), (ymin,
-                 ymax))'. Samples outside this region will be discarded.
-        :returns: IntensityMap2D instance containing the histogram
+        This part of the computation in `BaseCell.occupancy` is factored out
+        to optimize memoization.
 
         """
+        data = self.filtered_data()
+        x, y, tweights = data['x'], data['y'], data['tweights']
         hist, xedges, yedges = numpy.histogram2d(
-            numpy.ma.compressed(self.x),
-            numpy.ma.compressed(self.y),
+            numpy.ma.compressed(x),
+            numpy.ma.compressed(y),
             bins=bins,
             range=range_,
             normed=False,
-            weights=numpy.ma.compressed(self.tweights))
+            weights=numpy.ma.compressed(tweights))
 
         return IntensityMap2D(hist, (xedges, yedges))
+
+    def occupancy(self, bins, range_=None, distribution=False):
+        """
+        Compute a map of occupancy times
+
+        Only samples considered valid according to the speed filtering are
+        included in the histogram.
+
+        Parameters
+        ----------
+        bins : int or [int, int] or array-like or [array, array]
+            Bin specification defining the bins to use in the histogram. The
+            simplest formats are an integer `nbins` or a tuple `(nbins_x,
+            nbins_y)`, giving the number of bins of equal widths in each
+            direction. For information about other valid formats, see the
+            documentation for `numpy.histogram2d`.
+        range_ : array-like, shape(2,2), optional
+            Range specification giving the x and y values of the outermost bin
+            edges. The format is `[[xmin, xmax], [ymin, ymax]]`. Samples
+            outside this region will be discarded.
+        distribution : bool, optional
+            If True, the occupancy map will be normalized to have sum 1, such
+            that it can be interpreted as a frequency distribution for the
+            occupancy.
+
+        Returns
+        -------
+        IntensityMap2D
+            Occupancy map.
+
+        """
+        occupancy = self._occupancy(bins, range_)
+
+        if distribution:
+            occupancy /= self.total_time()
+
+        return occupancy
+
+    def total_time(self):
+        """
+        Compute the total recording time
+
+        Returns
+        -------
+        scalar
+            Total time.
+
+        """
+        return numpy.ma.sum(self.filtered_data()['tweights'])
 
     def plot_path(self, axes=None, linewidth=0.5, color='0.5', alpha=0.5,
                   **kwargs):
@@ -189,9 +367,9 @@ class Position(AlmostImmutable):
 
         Parameters
         ----------
-        axes : Axes, optional
-            Axes instance to add the path to. If None (default), the current
-            Axes instance is used if any, or a new one created.
+        axes : Axes or None, optional
+            Axes instance to add the path to. If None, the most current Axes
+            instance with `aspect='equal'` is grabbed or created.
         linewidth : scalar, optional
             The width of the plotted path.
         color : valid Matplotlib color specification
@@ -211,196 +389,463 @@ class Position(AlmostImmutable):
         if axes is None:
             axes = pyplot.gca(aspect='equal')
 
-        h = axes.plot(self.x, self.y, linewidth=linewidth, color=color,
-                      alpha=alpha, **kwargs)
-        return h
+        data = self.filtered_data()
+        x, y = data['x'], data['y']
 
-    def plot_samples(self, axes=None, marker='.', s=1.0, color=None,
+        kwargs.update(linewidth=linewidth, color=color, alpha=alpha)
+        return axes.plot(x, y, **kwargs)
+
+    def plot_samples(self, axes=None, marker='.', s=1.0, c=None,
                      alpha=0.5, **kwargs):
         """
         Make a scatter plot of the recorded positions without drawing a line
 
-        The samples can be added to an existing plot via the optional 'axes'
-        argument.
+        Parameters
+        ----------
+        axes : Axes or None, optional
+            Axes instance to add the path to. If None, the most current Axes
+            instance with `aspect='equal'` is grabbed or created.
+        marker : matplotlib marker spec, optional
+            Marker to use when drawing the positions.
+        s : scalar or sequence, optional
+            Marker sizes.
+        c : matplotlib color spec, a sequence of such, or None, optional
+            Color(s) to use when drawing the markers. If None, a grayscale
+            color is computed based on the time weight associated with each
+            sample, such that the sample that accounts for the longest time is
+            completely black.
+        alpha : scalar in [0, 1], optional
+            The opacity of the markers.
+        **kwargs : dict, optional
+            Additional keyword arguments are passed to `axes.scatter`.  Note
+            in particular the keyword 'label'.
 
-        :axes: Axes instance to add the path to. If None (default), the current
-               Axes instance with equal aspect ratio is used if any, or a new
-               one created.
-        :marker: a valid matplotlib marker specification. Defaults to '.'
-        :s: scalar or sequence giving the marker sizes. Defaults to 1.0
-        :color: a valid matplotlib color specification, or a sequence of such,
-                giving the color of the markers. If None (default), a grayscale
-                color is computed based on the time weight associated with each
-                sample, such that the sample that accounts for the longest time
-                is black.
-        :alpha: the opacity of the markers. Defaults to 0.5.
-        :kwargs: additional keyword arguments passed on to axes.plot() for
-                 specifying marker properties. Note especially the keyword
-                 'label'.
-        :returns: the plotted PathCollection instance
+        Returns
+        -------
+        PathCollection
+            The plotted PathCollection instance.
 
         """
         if axes is None:
             axes = pyplot.gca(aspect='equal')
 
-        if color is None:
-            color = 1.0 - (self.tweights / self.tweights.max())
+        data = self.filtered_data()
+        x, y, tweights = data['x'], data['y'], data['tweights']
 
-        h = axes.scatter(self.x, self.y, marker=marker, s=s,
-                         color=color, alpha=alpha, **kwargs)
-        return h
+        if c is None:
+            c = 1.0 - (tweights / tweights.max())
 
-    def plot_speed(self, axes=None, time_int=None, color='black',
+        kwargs.update(marker=marker, s=s, c=c, alpha=alpha)
+        return axes.scatter(x, y, **kwargs)
+
+    def plot_speed(self, axes=None, tstart=None, tend=None, color='black',
                    min_speed=True, min_speed_kw=None, **kwargs):
         """
         Plot the speed versus time
 
-        The path can be added to an existing plot via the optional 'axes'
-        argument.
+        Parameters
+        ----------
+        axes : Axes or None, optional
+            Axes instance to add the path to. If None, the most current Axes is
+            grabbed or created.
+        tstart : scalar or None, optional
+            Start time of the interval to plot the speed over. If None, the
+            interval begins at the beginning of the sample.
+        tend : scalar or None, optional
+            End time of the interval to plot the speed over. If None, the
+            interval ends at the end of the sample.
+        min_speed : bool, optional
+            If True, a horizontal line is added to the plot at the lower speed
+            limit for valid samples. By default, a solid, red line with
+            'linewidth' 0.5 will be plotted, but this can be overridden using
+            the parameter `min_speed_kw`. If false, no horizontal line is
+            plotted.
+        min_speed_kw : dict or None, optional
+            Optional keyword arguments to pass to `axes.axhline` when plotting
+            minimum speed.
+        color : matplotlib color spec, optional
+            Color to draw the speed curve with.
+        **kwargs : dict, optional
+            Additional keyword arguments are passed to `axes.plot`. Note
+            in particular the keywords 'linestyle', 'linewidth' and 'label'.
 
-        :axes: Axes instance to add the speed curve to. If None (default), the
-               current Axes instance is used if any, or a new one created.
-        :time_int: sequence giving the start and end of the time interval to
-                   plot the speed over. If None (default), the whole duration
-                   of the measurement is used.
-        :min_speed: if True, a horizontal line at self.min_speed (used to
-                    filter valid positions) is added to the plot. By default,
-                    a solid, red line with linewidth == 0.5 will be plotted,
-                    but this can be overridden using the parameter
-                    min_speed_kw. If false, no lines are plotted. Default is
-                    true.
-        :min_speed_kw: dict of keyword arguments to pass to the axes.plot()
-                        method used to plot the min_speed line. default: None
-                       (empty dict)
-        :color: a valid matplotlib color specification giving the color to plot
-                the speed curve with. Defaults to 'black'.
-        :kwargs: additional keyword arguments passed on to axes.plot() for
-                 specifying line properties. Note especially the keywords
-                 'linestyle', 'linewidth' and 'label'.
-        :returns: list containing the plotted Line2D instances
+        Returns
+        -------
+        list
+            List containing the plotted Line2D instances.
 
         """
         if axes is None:
             axes = pyplot.gca()
 
-        if min_speed_kw is None:
-            min_speed_kw = {}
+        data = self.filtered_data()
+        t, speed = (data['t'], data['speed'])
 
-        if time_int is not None:
-            start_index = numpy.argmin(numpy.abs(self.t - time_int[0]))
-            end_index = numpy.argmin(numpy.abs(self.t - time_int[1]))
-            t = self.t[start_index:end_index]
-            speed = self.speed[start_index:end_index]
-        else:
-            t, speed = self.t, self.speed
-        lines = axes.plot(t, speed, color=color, **kwargs)
+        start_index, end_index = 0, -1
+        if tstart is not None:
+            start_index = numpy.argmin(numpy.abs(t - tstart))
+        if tend is not None:
+            end_index = numpy.argmin(numpy.abs(t - tend))
+        t = t[start_index:end_index]
+        speed = speed[start_index:end_index]
+
+        kwargs.update(color=color)
+        lines = axes.plot(t, speed, **kwargs)
 
         if min_speed:
-            min_line = axes.axhline(self.min_speed, linewidth=0.5, color='r',
-                                    **min_speed_kw)
+            mkw = dict(linewidth=0.5, color='r')
+            if min_speed_kw is not None:
+                mkw.update(min_speed_kw)
+
+            min_line = axes.axhline(self.params['min_speed'], **mkw)
             lines.append(min_line)
 
         return lines
 
 
-class BaseCell(AlmostImmutable):
+# This is how we create a python2+3-compatible abstract base class: create an
+# intermediate empty abstract class inheriting anything we wish to inherit in
+# our abstract base class, and inherit from this
+AbstractAlmostImmutable = ABCMeta(str('AbstractAlmostImmutable'),
+                                  (AlmostImmutable,), {})
+
+
+class BaseCell(AbstractAlmostImmutable):
     """
-    Represent a cell for which only the spatial firing rate is known (no
-    temporal information about position or spikes). Can be used for modeling
-    prototyipcal/idealized grid cells, and also works as a base class for other
-    Cell classes.
+    Base class for representing a cell with spatially modulated firing rate.
+
+    This class defines most of the available operations and computations on
+    a grid cell, but lacks one important piece: information about the firing of
+    the cell. It is therefore only useful as an abstract base class for
+    functional cell classes.
+
+    Parameters
+    ----------
+    threshold : scalar, optional
+        Threshold value used to detect peaks in the autocorrelogram of the
+        firing rate of the cell.
+    **kwargs : dict, optional
+        Any additional keyword arguments are stored as a dict in the attribute
+        `info`. They are not used for internal computations. The
+        `features` attribute may look up features stored in this way.
 
     """
+    params = Memparams(dict, 'params')
 
-    def __init__(self, firing_rate, threshold):
+    def __init__(self, threshold=0.0, **kwargs):
+        self.params = dict(threshold=threshold)
+        self.info = kwargs
+
+    def spikemap(self, distribution_spikemap=False, **kwargs):
         """
-        Initialize the BaseCell instance
+        Compute a map of the spatial spike distribution
 
-        :firing_rate: an IntensityMap2D instance giving the spatial firing rate
-                      map for the cell. This map is assumed to not require
-                      further smoothing or other processing.
-        :threshold: peak threshold. Used to separate peaks in the
-                    autocorrelogram of the firing rate of the cell.
+        No temporal information is available here, so the spikemap is defined
+        as the ratemap times the occupancy map. Note that up to a constant
+        factor equal to the total time, this is equivalent to the rate map
+        weighted by the occupancy distribution. This method should be
+        reimplemented in derived classes where temporal information is present.
 
-        """
-        self.firing_rate = firing_rate
-        self.bins = firing_rate.shape
-        self.range_ = firing_rate.range_
-        self.threshold = threshold
+        Parameters
+        ----------
+        distribution_spikemap : bool, optional
+            This purpose of this parameter is to distinguish between the
+            distribution of spikes and the normalized distribution of spatial
+            spike frequency. It has no effect here, since no temporal
+            information is available, but is included in the argument list to
+            transparently avoid passing the keyword further.
+        **kwargs : dict, optional
+            Keyword arguments are passed to `BaseCell.ratemap` and
+            `BaseCell.occupancy`.
 
-    def autocorrelate(self, mode='full', pearson=True, normalized=False):
-        """
-        Compute the autocorrelogram of the smoothed firing rate
-
-        This is a wrapper around self.firing_rate.autocorrelate().
-
-        :mode: string indicating the size of the output. See
-               IntensityMap2D.autocorrelate() for details. Valid options:
-               'full', 'valid', 'same'. Default is 'full'.
-        :pearson: if True, the IntensityMap instances are normalized to mean
-                  0.0 and variance 1.0 before correlating. The result of the
-                  computation will then be the Pearson product-moment
-                  correlation coefficient between displaced intensity arrays,
-                  evaluated at each possible displacement. Default is True.
-        :normalized: if True, any masked values or nans in the intensity
-                     arrays, as well as values beyond the their edges, are
-                     treated as missing values, and the correlogram is
-                     renormalized for each cell to eliminate their influence.
-                     Default is True.
-        :returns: IntensityMap2D instance representing the autocorrelogram of
-                  the firing rate
+        Returns
+        -------
+        IntensityMap2D
+            Spike map.
 
         """
-        return self.firing_rate.autocorrelate(mode=mode, pearson=pearson,
-                                              normalized=normalized)
+        kwargs.update(distribution_occupancy=False)
+        return (self.ratemap(**kwargs) * self.occupancy(**kwargs))
+
+    def occupancy(self, distribution_occupancy=False, **kwargs):
+        """
+        Compute a map of occupancy times
+
+        No temporal information is available here, so the occupancy is defined
+        to be 1 in each of the bins used in the ratemap computed by
+        `BaseCell.ratemap`. This method should be reimplemented in derived
+        classes where temporal information is present.
+
+        Parameters
+        ----------
+        distribution_occupancy : bool, optional
+            If True, the occupancy map will be normalized to have sum 1, such
+            that it can be interpreted as a frequency distribution for the
+            occupancy.
+        **kwargs : dict, optional
+            Keyword arguments are passed to `BaseCell.ratemap`.
+
+        Returns
+        -------
+        IntensityMap2D
+            Occupancy map.
+
+        """
+        occupancy = self.ratemap(**kwargs).indicator
+        if distribution_occupancy:
+            occupancy /= self.total_time(**kwargs)
+        return occupancy
+
+    def total_time(self, **kwargs):
+        """
+        Compute the total recording time
+
+        No temporal information is available here, so the total time is defined
+        to be the sum of the occupancy map from `BaseCell.occupancy`. This
+        should be reasonably close to the truth in all cases, but may be
+        inaccurate due to filtering artifacts. This method should be
+        reimplemented in derived classes where temporal information is present.
+
+        Parameters
+        ----------
+        **kwargs : dict, optional
+            Keyword arguments are passed to `BaseCell.occupancy`.
+
+        Returns
+        -------
+        scalar
+            Total time.
+
+        """
+        kwargs.update(distribution_occupancy=False)
+        return self.occupancy(**kwargs).sum()
+
+    @abstractmethod
+    def ratemap(self, normalize_ratemean=False, **kwargs):
+        """
+        Compute the firing rate map of the cell
+
+        No firing information is available here, so no rate map is computed.
+        This method must be implemented in all functional derived classes.
+
+        Parameters
+        ----------
+        normalize_ratemean : bool, optional
+            If True, the firing rate is normalized such that the mean firing
+            rate is 1.0.
+        **kwargs : dict, optional
+            Not in use.
+
+        Returns
+        -------
+        IntensityMap2D
+            Firing rate map.
+
+        """
+        pass
+
+    def rate_mean(self, normalize_ratemean=False, **kwargs):
+        """
+        Compute the spatial mean of the firing rate
+
+        The contribution of the firing rate in each bin is weighted by the
+        occupancy frequency in that bin. If no smoothing has been applied to
+        the ratemap or occupancy map, this mean is thus equivalent to the
+        mean firing rate calculated directly from spike and time data.
+
+        Parameters
+        ----------
+        normalize_ratemean : bool, optional
+            If True, the firing rate is normalized such that the mean firing
+            rate is 1.0.
+        **kwargs : dict, optional
+            Keyword arguments are passed to `BaseCell.spikemap` and
+            `BaseCell.total_time`.
+
+        Returns
+        -------
+        scalar
+            The spatial mean of the firing rate.
+
+        """
+        if normalize_ratemean:
+            return 1.0
+        kwargs.update(distribution_spikemap=False)
+        return (self.spikemap(**kwargs).sum() / self.total_time(**kwargs))
+
+    def rate_std(self, **kwargs):
+        """
+        Compute the spatial standard deviation of the firing rate
+
+        The contribution of the firing rate in each bin is weighted by the
+        value of occupancy frequency in that bin.
+
+        Parameters
+        ----------
+        **kwargs : dict, optional
+            Keyword arguments are passed to `BaseCell.rate_var`
+
+        Returns
+        -------
+        scalar
+            The spatial variance of the firing rate.
+
+        """
+        return numpy.sqrt(self.rate_var(**kwargs))
+
+    def rate_var(self, ddof=0, **kwargs):
+        """
+        Compute the spatial variance of the firing rate
+
+        The contribution of the firing rate in each bin is weighted by the
+        occupancy frequency in that bin.
+
+        Parameters
+        ----------
+        ddof : int, optional
+            Delta degrees of freedom: the divisor used in calculating the
+            variance is `N - ddof`, where `N` is the number of bins with firing
+            rate values present. See the documentation for `numpy.var` for
+            details.
+        **kwargs : dict, optional
+            Additional keyword arguments are passed to `BaseCell.ratemap`,
+            `BaseCell.rate_mean` and `BaseCell.occupancy`.
+
+        Returns
+        -------
+        scalar
+            The spatial variance of the firing rate.
+
+        """
+        kwargs.update(distribution_occupancy=False)
+        ratemap = self.ratemap(**kwargs)
+        dev = ratemap - self.rate_mean(**kwargs)
+        wdev_sq = self.occupancy(**kwargs) * dev * dev
+        n = ratemap.count()
+        return wdev_sq.sum() * n / (n - ddof)
+
+    @memoize_method
+    def acorr(self, mode='full', pearson='global', normalize_acorr=True,
+              **kwargs):
+        """
+        Compute the autocorrelogram of the firing rate map
+
+        This is a convenience wrapper for calling
+        `self.ratemap(**kwargs).autocorrelate(...)`.
+
+        Parameters
+        ----------
+        mode, pearson
+            See `IntensityMap2D.autocorrelate`.
+        normalize_acorr
+            Passed as keyword 'normalize' to `IntensityMap2D.autocorrelate`.
+        **kwargs : dict, optional
+            Additional keyword arguments are passed to `BaseCell.ratemap`.
+
+        Returns
+        -------
+        IntensityMap2D
+            See `IntensityMap2D.autocorrelate`.
+
+        """
+        return self.ratemap(**kwargs).autocorrelate(mode=mode, pearson=pearson,
+                                                    normalize=normalize_acorr)
+
+    def corr(self, other, mode='full', pearson='global', normalize_corr=True,
+             **kwargs):
+        """
+        Compute the cross-correlogram of another cell's firing rate to this
+
+        This is a convenience wrapper for calling
+        `self.ratemap(**kwargs).correlate(other.ratemap(**kwargs), ...)`.
+
+        Parameters
+        ----------
+        other : BaseCell
+            BaseCell instance to correlate ratemaps with.
+        mode, pearson
+            See `IntensityMap2D.correlate`.
+        normalize_corr
+            Passed as keyword 'normalize' to `IntensityMap2D.correlate`.
+        **kwargs : dict, optional
+            Additional keyword arguments are passed to `BaseCell.ratemap`.
+
+        Returns
+        -------
+        IntensityMap2D
+            See `IntensityMap2D.correlate`.
+
+        """
+        return self.ratemap(**kwargs).correlate(other.ratemap(**kwargs),
+                                                mode=mode,
+                                                pearson=pearson,
+                                                normalize=normalize_corr)
 
     @staticmethod
-    @memoize_function
-    def detect_central_peaks(imap, threshold):
+    def detect_central_peaks(imap, threshold, n):
         """
         Identify the most central peaks in an IntensityMap
 
-        This is essentially a wrapper around imap.peaks(threshold), but
-        performs selection and sorting of the peaks. The selected peaks are the
-        peak closest to the center, and the six peaks closest to it. The center
-        peak is returned first, and the other six are sorted by the angle from
-        the x axis to the line from the center peak to each of them.
+        The detected peaks are the peak closest to the center, and the `n - 1`
+        peaks closest to it.
 
         A label array identifying the regions surrounding each peak is also
         returned.
 
-        :imap: IntensityMap instance to detect peaks in
-        :threshold: lower intensity bound defining the regions in which peaks
-                    are found.
-        :returns:
-            - numpy array 'peaks' of shape (7, 2), where (peaks[0][0],
-              peaks[0][1]) are the x and y coordinates of the central peak,
-              etc.
-            - array of labels identifying the region surrounding each peak,
-              such that labels == i is an index to the region surrounding the
-              ith peak (found at index i - 1 in the returned array of peaks)
+        Parameters
+        ----------
+        imap : IntensityMap
+            IntensityMap to detect peaks in.
+        threshold : scalar
+            Peak detection threshold -- a connected region of bins with
+            intensity greater than this value corresponds to one peak.
+        n : integer
+            The number of peaks to detect and return.
+
+        Returns
+        -------
+        ndarray, shape (n, 2)
+            Array containing the peak locations. The most central peak has [x,
+            y]-coordinates given by `peaks[0]`, and the coordinates of the six
+            peaks closest to it follow in `peaks[i], i = 1, ..., n`. The peaks
+            are sorted by the angle between the positive x axis and the line
+            from the central peak out to the peripheral peak.
+        labels : ndarray
+            Label array identifying the regions surrounding the detected
+            peaks: `labels == i` is an index to the region surrounding
+            the `peak[i - 1]`.
 
         """
-        all_peaks, labels, __ = imap.peaks(threshold)
+        all_peaks, labels, npeaks = imap.peaks(threshold)
+
+        if npeaks < n:
+            raise ValueError("Too few peaks detected")
 
         # Find the peak closest to the center
         apx, apy = all_peaks[:, 0], all_peaks[:, 1]
         apr = apx * apx + apy * apy
         cindex = numpy.argmin(apr)
 
-        # Find the seven peaks closest to the center (incl. the center peak)
-        cpeak = all_peaks[cindex]
-        cpx = apx - cpeak[0]
-        cpy = apy - cpeak[1]
-        cpr = cpx * cpx + cpy * cpy
-        rsort = numpy.argsort(cpr)
+        if n == 1:
+            sort = numpy.array([cindex])
+        else:
+            # Find the n peaks closest to the center (incl. the center peak)
+            cpeak = all_peaks[cindex]
+            cpx = apx - cpeak[0]
+            cpy = apy - cpeak[1]
+            cpr = cpx * cpx + cpy * cpy
+            rsort = numpy.argsort(cpr)
 
-        # Sort the peaks surrounding the center peak by angle
-        cpx = cpx[rsort[1:7]]
-        cpy = cpy[rsort[1:7]]
-        angles = numpy.mod(numpy.arctan2(cpy, cpx), 2 * numpy.pi)
-        asort = numpy.argsort(angles)
-        sort = numpy.hstack((rsort[0], rsort[1:7][asort]))
+            # Sort the peaks surrounding the center peak by angle, starting
+            # with the one closest to the x axis
+            cpx = cpx[rsort[1:n]]
+            cpy = cpy[rsort[1:n]]
+
+            angles = numpy.arctan2(cpy, cpx)
+            asort = numpy.argsort(angles)
+            start_index = numpy.argmin(numpy.abs(angles[asort]))
+            asort = numpy.roll(asort, -start_index)
+            sort = numpy.hstack((rsort[0], rsort[1:n][asort]))
 
         # Grab the sorted peaks, discard the radius information for now
         peaks = all_peaks[sort, :2]
@@ -408,297 +853,649 @@ class BaseCell(AlmostImmutable):
         # Find corresponding labels
         new_labels = numpy.zeros_like(labels)
         for (i, s) in enumerate(sort):
-            i1, s1 = i + 1, s + 1
-            new_labels[labels == s1] = i1
+            new_labels[labels == (s + 1)] = i + 1
 
         return peaks, new_labels
 
-    def peaks(self, project=True, threshold=None):
-        """
-        Identify the coordinates of the six inner peaks in the autocorrelogram
-        of the firing rate, sorted by angle with the positive x axis.
-
-        :project: if True, the peaks from the autocorrelogram are projected
-                  into the space of valid lattice vectors, such that each peak
-                  is equal to the sum of its two neighbors. If False, the peaks
-                  are returned without projection. Default is True.
-        :threshold: lower intensity bound defining the regions in which peaks
-                    are found. If None (default), the attribute self.threshold
-                    is used.
-        :returns: numpy array 'peaks' of shape (6, 2), where (peaks[0][0],
-                  peaks[0][1]) are the x and y coordinates of the first peak,
-                  etc.
-        """
-        if threshold is None:
-            threshold = self.threshold
-
-        acorr = self.autocorrelate()
-        peaks, __ = self.detect_central_peaks(acorr, threshold)
+    def _peaks(self, threshold, **kwargs):
+        acorr = self.acorr(**kwargs)
+        peaks, __ = self.detect_central_peaks(acorr, threshold, 7)
 
         # Discard center peak
-        peaks = peaks[1:]
+        return peaks[1:]
 
-        if project:
+    @memoize_method
+    def grid_peaks(self, threshold=None, polar_peaks=False, project_peaks=True,
+                   normalize_peaks=False, **kwargs):
+        """
+        Find the six inner peaks in the autocorrelogram of the firing rate map.
+
+        The peaks are sorted by angle with the positive x axis.
+
+        Parameters
+        ----------
+        threshold : scalar in [-1, 1] or None, optional
+            Threshold value for peak detection. If None, the parameter
+            `self.params['threshold']` is used.
+        polar_peaks : bool, optional
+            If True, the peak locations are returned as polar coordinates. If
+            False, they are returned as cartesian coordinates.
+        project_peaks : bool, optional
+            If True, the peaks from the autocorrelogram are projected into the
+            space of valid lattice vectors, such that each peak is equal to the
+            sum of its two neighbors. If False, the peaks are returned without
+            projection.
+        normalize_peaks : bool, optional
+            If True, peak coordinates are normalized by division with the grid
+            scale, returned from `BaseCell.scale`, such that they only
+            parametrize the shape of the grid pattern, not the size.
+        **kwargs : dict, optional
+            Additional keyword arguments are passed to `BaseCell.acorr` and
+            `BaseCell.scale`.
+
+        Returns
+        -------
+        ndarray, shape (6, 2)
+            Array where `peaks[i], i = 1, ..., 5` contains the x- and
+            y-coordinates, or the r- and theta-coordinates if polar_peaks is
+            True, of each of the six peaks.
+
+        """
+        if threshold is None:
+            threshold = self.params['threshold']
+
+        peaks = self._peaks(threshold, **kwargs)
+
+        if project_peaks:
             # Project to true lattice vectors
             pmat = (1 / 6) * linalg.toeplitz([2, 1, -1, -2, -1, 1])
             peaks = pmat.dot(peaks)
 
+        if normalize_peaks:
+            kwargs.update(project_peaks=project_peaks)
+            peaks /= self.scale(**kwargs)
+
+        if polar_peaks:
+            px, py = peaks[:, 0], peaks[:, 1]
+            radii = numpy.sqrt(px * px + py * py)
+            angles = numpy.arctan2(py, px)
+            peaks = numpy.column_stack((radii, angles))
+
         return peaks
 
-    def peaks_polar(self, project=True, threshold=None):
+    def scale(self, scale_mean='geometric', **kwargs):
         """
-        Identify the polar coordinates of the six inner peaks in the
-        autocorrelogram of the firing rate, sorted by angle with the positive
-        x axis.
+        Calculate the grid scale of the cell
 
-        :project: if True, the peaks from the autocorrelogram are projected
-                  into the space of valid lattice vectors, such that each peak
-                  is equal to the sum of its two neighbors. If False, the peaks
-                  are returned without projection. Default is True.
-        :threshold: lower intensity bound defining the regions in which peaks
-                    are found. If None (default), the attribute self.threshold
-                    is used.
-        :returns: numpy array 'peaks' of shape (6, 2), where (peaks[0][0],
-                  peaks[0][1]) is the r and theta coordinates of the first
-                  peak, etc.
+        Parameters
+        ----------
+        scale_mean : {'geometric', 'arithmetic'}, optional
+            Flag to select which grid scale definition to use:
+
+            ``geometric``
+                The scale is defined as the geometric mean of the semi-minor
+                and semi-major axes of the grid ellipse.
+            ``arithmetic``
+                The scale is defined as the arithmetic mean of the distances
+                from the origin to the each of the grid peaks.
+        **kwargs : dict, optional
+            Additional keyword arguments are passed to `BaseCell.grid_peaks`
+            and `BaseCell.grid_ellipse`.
+
+        Returns
+        -------
+        scalar
+            The grid scale.
 
         """
-        peaks = self.peaks(project=project, threshold=threshold)
-        px, py = peaks[:, 0], peaks[:, 1]
-        radii = numpy.sqrt(px * px + py * py)
-        angles = numpy.mod(numpy.arctan2(py, px), 2 * numpy.pi)
-        peaks_polar = numpy.column_stack((radii, angles))
-        return peaks_polar
+        kwargs.update(normalize_peaks=False)
+        if scale_mean == 'geometric':
+            ellipse = self.grid_ellipse(**kwargs)
+            scale = numpy.sqrt(ellipse.a * ellipse.b)
+        elif scale_mean == 'arithmetic':
+            kwargs.update(polar_peaks=True)
+            radii = self.grid_peaks(**kwargs)[:, 0]
+            scale = numpy.mean(radii)
+        else:
+            raise ValueError("unknown scale mean {}".format(scale_mean))
+
+        return scale
+
+    def logscale(self, **kwargs):
+        """
+        Calculate the natural logarithm of the scale of the cell
+
+        Parameters
+        ----------
+        **kwargs : dict, optional
+            Keyword arguments are passed to `BaseCell.scale`.
+
+        Returns
+        -------
+        scalar
+            The logarithm of the grid scale.
+
+        """
+        return numpy.log(self.scale(**kwargs))
 
     @memoize_method
-    def ellipse(self, project=True, threshold=None):
+    def grid_ellipse(self, **kwargs):
         """
-        Fit an ellipse to the inner ring of six peaks around the center of the
+        Fit an ellipse through the six peaks around the center of the
         autocorrelogram
 
-        :project: if True, the ellipse is fitted to the lattice-projected peaks
-                  (see BaseCell.peaks()). If False, the it is fitted to the
-                  unprojected peaks. Default is True.
-        :threshold: lower intensity bound defining the regions in which peaks
-                    are found. If None (default), the attribute self.threshold
-                    is used.
-        :returns: an Ellipse instance representing the fitted ellipse.
+        Parameters
+        ----------
+        **kwargs : dict, optional
+            Keyword arguments are passed to `BaseCell.grid_peaks`.
+
+        Returns
+        -------
+        Ellipse
+            Ellipse instance representing the fitted ellipse.
 
         """
-        peaks = self.peaks(project=project, threshold=threshold)
+        kwargs.update(polar_peaks=False)
+        peaks = self.grid_peaks(**kwargs)
         xscale, yscale = 0.5 * peaks[:, 0].ptp(), 0.5 * peaks[:, 1].ptp()
         f0 = numpy.sqrt(xscale * yscale)
         ellipse = Ellipse(fitpoints=peaks, f0=f0)
         return ellipse
 
+    def ellpars(self, cartesian_ellpars=False, **kwargs):
+        """
+        Extract shape and orientation parameters of the grid ellipse
+
+        The ellipse parameters consist of a polar coordinate tuple representing
+        the shape and tilt of the ellipse. The radial coordinate is the ellipse
+        eccentricity, while the angular coordinate is twice the angle between
+        the x-axis and the semimajor axis of the ellipse (the multiplication by
+        2 is done to match the ..math::`2 \pi`-degeneracy of polar coordinates
+        with the rotation by ..math::`\pi`-symmetry of an ellipse).
+
+        Parameters
+        ----------
+        **kwargs : dict, optional
+            Keyword arguments are passed to `BaseCell.grid_ellipse`.
+
+        Returns
+        -------
+        ndarray
+            The coordinate tuple [eccentricity, 2 * tilt] representing the
+            ellipse parameters. If `cartesian_ellpars == True`, the coordinate
+            tuple is transformed from polar to cartesian coordinates, and
+            becomes [eccentricity * cos(2 * tilt), eccentricity * sin(2
+            * tilt)].
+
+        """
+        ellipse = self.grid_ellipse(**kwargs)
+        ecc = ellipse.ecc
+        theta = 2.0 * ellipse.tilt
+        if cartesian_ellpars:
+            return numpy.array((ecc * numpy.cos(theta),
+                                ecc * numpy.sin(theta)))
+        return numpy.array((ecc, theta))
+
+    def sparsity(self, **kwargs):
+        """
+        Compute the spatial sparsity of the firing rate map of the cell
+
+        References
+        ----------
+
+        Skaggs, W. E., McNaughton, B. L., Wilson, M. A., & Barnes, C. A.
+        (1996). Theta phase precession in hippocampal neuronal populations and
+        the compression of temporal sequences. Hippocampus, 6(2), 149--172.
+        http://doi.org/10.1002/(SICI)1098-1063(1996)6:2<149::AID-HIPO6>3.0.CO;2-K  # noqa
+
+        Buetfering, C., Allen, K., & Monyer, H. (2014). Parvalbumin
+        interneurons provide grid cell-driven recurrent inhibition in the
+        medial entorhinal cortex. Nature Neuroscience, 17(5), 710--8.
+        http://doi.org/10.1038/nn.3696
+
+        Returns
+        -------
+        scalar in range [0, 1]
+            The spatial sparsity.
+        **kwargs : dict, optional
+            Keyword arguments will be passed to `BaseCell.rate_mean`,
+            `BaseCell.ratemap`, `BaseCell.occupancy`.
+
+        """
+        kwargs.update(distribution_occupancy=True)
+        fmean = self.rate_mean(**kwargs)
+        rmap = self.ratemap(**kwargs)
+        wrate_sq = rmap * rmap * self.occupancy(**kwargs)
+        return 1.0 - fmean * fmean / wrate_sq.sum()
+
+    def stability(self, **kwargs):
+        """
+        Compute a measure of the spatial stability of the cell firing pattern
+
+        No temporal information is available here, so the stability is defined
+        to be 1.0. This method should be reimplemented in derived classes where
+        temporal information is present.
+
+        Returns
+        -------
+        scalar
+            The spatial stability of the cell firing pattern.
+
+        """
+        return 1.0
+
     @memoize_method
-    def scale(self, mode='geometric', project=True, threshold=None):
+    def _grid_score(self, pearson, inner_factor, remove_cpeak, difference,
+                    **kwargs):
         """
-        Calculate the grid scale of the cell
+        Compute the grid score and the scale at which it was found
 
-        :mode: flag to select which grid scale definition to use. Valid
-               options:
-            'geometric': the scale is defined as the geometric mean of the
-                         semi-minor and semi-major axes of the ellipse fitted
-                         to the inner ring of six peaks.
-            'arithmetic': the scale is defined as the arithmetic mean of the
-                          distances from the center to the each of the six
-                          inner peaks.
-               Default is 'geometric'.
-        :project: if True, the scale is based on the lattice-projected peaks
-                  (see BaseCell.peaks()). If False, it is based on the
-                  unprojected peaks. Default is True.
-        :threshold: lower intensity bound defining the regions in which peaks
-                    are found. If None (default), the attribute self.threshold
-                    is used.
-        :returns: the grid scale
+        This part of `BaseCell.grid_score` is factored out to optimize
+        memoization.
 
         """
-        if mode == 'geometric':
-            ellipse = self.ellipse(project=project, threshold=threshold)
-            scale = numpy.sqrt(ellipse.a * ellipse.b)
-        elif mode == 'arithmetic':
-            radii = self.peaks_polar(project=project,
-                                     threshold=threshold)[:, 0]
-            scale = numpy.mean(radii)
-        else:
-            raise ValueError("unknown mode {}".format(mode))
+        angles_peaks = [60, 120]
+        angles_troughs = [30, 90, 150]
 
-        return scale
+        acorr = self.acorr(**kwargs)
+        if pearson == 'global':
+            acorr = (acorr - acorr.mean()) / acorr.std()
 
-    @memoize_method
-    def firing_field(self, threshold=None):
+        bset = acorr.bset
+
+        inner_radius = 0.0
+        if remove_cpeak:
+            # Define central peak radius
+            ffield = self.firing_field(**kwargs)
+            sigma = numpy.sqrt(numpy.amax(linalg.eigvalsh(ffield)))
+            inner_radius = 2.0 * sigma
+
+            acorr = acorr.shell(inner_radius, None)
+
+        min_binwidth = min(numpy.mean(w) for w in bset.binwidths)
+        min_corrwidth = min(numpy.max(numpy.abs(e)) for e in bset.edges)
+
+        scale_step = min_binwidth
+        scale_min = inner_radius + 4 * min_binwidth
+        scale_max = min_corrwidth
+        scales = numpy.arange(scale_min, scale_max, scale_step)
+
+        acorr_rot_peaks = [[acorr.rotate(a)
+                            for a in numpy.linspace(angle - 7.5, angle + 7.5,
+                                                    num=11, endpoint=True)]
+                           for angle in angles_peaks]
+        acorr_rot_troughs = [[acorr.rotate(a)
+                              for a in numpy.linspace(angle - 7.5, angle + 7.5,
+                                                      num=11, endpoint=True)]
+                             for angle in angles_troughs]
+
+        def _score(scale):
+            # Find doughnut in autocorrelgroam
+            acorr_ring = acorr.shell(scale * inner_factor, scale)
+            ring_data = acorr_ring.data
+            ring_mask = ring_data.mask
+
+            def _doughnut_corr(arot):
+                # Extract doughnut from rotated autocorrelogram
+                arot_ring = arot.shell(scale * inner_factor, scale)
+                rot_ring_data = arot_ring.data
+                rot_ring_mask = rot_ring_data.mask
+
+                # Compute doughnut overlap
+                full_mask = numpy.logical_or(ring_mask, rot_ring_mask)
+                ring_olap = numpy.ma.array(ring_data, mask=full_mask)
+                rot_ring_olap = numpy.ma.array(rot_ring_data,
+                                               mask=full_mask)
+
+                # Compute correlation
+                if pearson == 'local':
+                    ring_olap = ((ring_olap - numpy.ma.mean(ring_olap)) /
+                                 numpy.ma.std(ring_olap))
+                    rot_ring_olap = ((rot_ring_olap -
+                                      numpy.ma.mean(rot_ring_olap)) /
+                                     numpy.ma.std(rot_ring_olap))
+
+                nbins = numpy.sum((~full_mask).astype(numpy.int_))
+                corr = numpy.ma.sum(ring_olap * rot_ring_olap) / nbins
+
+                return corr, nbins
+
+            corr_peaks, nbins_peaks = zip(
+                *(max(_doughnut_corr(arot) for arot in acorr_rot)
+                  for acorr_rot in acorr_rot_peaks))
+            corr_troughs, nbins_troughs = zip(
+                *(min(_doughnut_corr(arot) for arot in acorr_rot)
+                  for acorr_rot in acorr_rot_troughs))
+
+            if difference == 'min':
+                return min(corr_peaks) - max(corr_troughs)
+            elif difference == 'mean':
+                corr_peaks_mean = (
+                    sum(c * n for (c, n) in zip(corr_peaks, nbins_peaks)) /
+                    sum(nbins_peaks))
+                corr_troughs_mean = (
+                    sum(c * n for (c, n) in zip(corr_troughs, nbins_troughs)) /
+                    sum(nbins_troughs))
+                return corr_peaks_mean - corr_troughs_mean
+            else:
+                raise ValueError("unknown grid score mode: {}"
+                                 .format(difference))
+
+        max_score, max_scale = max((_score(scale), scale) for scale in scales)
+
+        return max_score, max_scale
+
+    def grid_score(self, return_scale=False, grid_score_pearson='local',
+                   grid_score_inner_factor=0.0, grid_score_remove_cpeak=False,
+                   grid_score_difference='mean', **kwargs):
         """
-        Compute a covariance matrix characterizing the average shape of the
-        firing fields
+        Compute the grid score of the firing rate map of the cell
 
-        The estimate is based on the region surrounding the central peak in the
-        autocorrelogram, such that the gaussian(x, cov=self.firing_field())
-        approximates the shape of the firing fields.
+        Parameters
+        ----------
+        return_scale : bool, optional
+            If True, the scale at which the maximum grid score was found is
+            returned.
+        grid_score_pearson : {None, 'global', 'local'}, optional
+            If `'global'`, the autocorrelogram is Pearson normalized once and
+            for all before rotations and doughnut extractions and correlations
+            are computed. If `'local'`, Pearson normalization is performed
+            independently on each doughnut. Otherwise, the plain (non-Pearson)
+            correlations between rotated autocorrelogram doughnuts are used.
+        grid_score_inner_factor : scalar in [0, 1], optional
+            The inner radius of each grid score doughnut is equal to this
+            factor times the outer radius.
+        grid_score_remove_cpeak : bool, optional
+            If True, the central peak is removed from all doughnuts.
+        grid_score_difference : {'min', 'mean'}, optional
+            If `'min'`, the grid score is defined as the difference between the
+            minimum peak rotation correlation and maximum trough rotation
+            correlation. If `'mean'`, the grid score is defined as the
+            difference between the weighted mean of each set of correlations.
+            The weights used are the number of valid autocorrelogram bins used
+            for computing each correlation.
+        **kwargs : dict, optional
+            Additional keyword arguments are passed to `BaseCell.acorr` and
+            `BaseCell.firing_field`.
 
-        :threshold: lower intensity bound defining the regions in which peaks
-                    are found. If None (default), the attribute self.threshold
-                    is used.
-        :returns: estimated firing field covariance matrix
+        Returns
+        -------
+        scalar in [-1, 1]
+            The grid score.
+        scalar, optional (only returned if `return_scale == True`)
+            The scale at which the maximum grid score was found.
+
+        """
+        max_score, max_scale = self._grid_score(
+            grid_score_pearson,
+            grid_score_inner_factor,
+            grid_score_remove_cpeak,
+            grid_score_difference,
+            **kwargs)
+
+        if return_scale:
+            return max_score, max_scale
+        return max_score
+
+    def firing_field(self, threshold=None, **kwargs):
+        """
+        Compute a covariance matrix characterizing the average firing field
+        shape
+
+        The estimate is found by fitting a gaussian to the region surrounding
+        the central peak in the autocorrelogram of the firing rate of the cell.
+
+        Parameters
+        ----------
+        threshold : scalar in [-1, 1] or None, optional
+            Threshold value defining the central peak region. If None, the
+            parameter `self.params['threshold']` is used.
+        **kwargs : dict, optional
+            Additional keyword arguments are passed to `BaseCell.acorr`.
+
+        Returns
+        -------
+        ndarray, shape (2, 2)
+            The estimated covariance matrix.
 
         """
         if threshold is None:
-            threshold = self.threshold
+            threshold = self.params['threshold']
 
-        acorr = self.autocorrelate()
-        __, labels = self.detect_central_peaks(acorr, threshold)
+        acorr = self.acorr(**kwargs)
+        __, labels = self.detect_central_peaks(acorr, threshold, 1)
 
         central_mask = ~(labels == 1)
         __, __, firing_field = acorr.fit_gaussian(mask=central_mask)
 
         return firing_field
 
-    @memoize_method
-    def firing_field_map(self, threshold=None):
+    def firing_field_map(self, **kwargs):
         """
         Compute an IntensityMap2D instance showing the fitted firing field
 
         The intensity map is computed over the same region as the
-        autocorrelogram returned from self.autocorrelate() and normalized to
-        a maximal value of 1.0, and is thus useful for comparing the fitted
-        field with the region it was fitted to.
+        autocorrelogram returned from `self.acorr`, and normalized to a maximal
+        value of 1.0. It is thus useful for comparing the fitted field with the
+        region it was fitted to.
 
-        :threshold: lower intensity bound defining the regions in which peaks
-                    are found. If None (default), the attribute self.threshold
-                    is used.
-        :returns: IntensityMap2D instance of the fitted firing field
+        Parameters
+        ----------
+        **kwargs : dict, optional
+            Keyword arguments are passed to `BaseCell.acorr` and
+            `BaseCell.firing_field`.
+
+        Returns
+        -------
+        IntensityMap2D
+            Intensity map containing the fitted firing field.
 
         """
-        acorr = self.autocorrelate()
-        firing_field = self.firing_field(threshold=threshold)
+        acorr = self.acorr(**kwargs)
+        bset = acorr.bset
+        firing_field = self.firing_field(**kwargs)
 
-        xcm, ycm = acorr.bset.cmesh
+        xcm, ycm = bset.cmesh
         xypoints = numpy.vstack((xcm.ravel(), ycm.ravel())).transpose()
         ffarr = gaussian(xypoints, cov=firing_field).reshape(acorr.shape)
         ffarr *= 1.0 / numpy.abs(ffarr).max()
 
-        return IntensityMap2D(ffarr, acorr.bset)
+        return IntensityMap2D(ffarr, bset)
 
-    def correlate(self, other, mode='full', pearson=True, normalized=False):
-        """
-        Compute the cross-correlaogram of another cell's firing rate to this
-
-        This is a wrapper around self.firing_rate.correlate().
-
-        :other: another Cell instance.
-        :mode: string indicating the size of the output. See
-               IntensityMap2D.correlate() for details. Valid options: 'full',
-               'valid', 'same'. Default is 'full'.
-        :pearson: if True, the IntensityMap instances are normalized to mean
-                  0.0 and variance 1.0 before correlating. The result of the
-                  computation will then be the Pearson product-moment
-                  correlation coefficient between displaced intensity arrays,
-                  evaluated at each possible displacement. Default is True.
-        :normalized: if True, any masked values or nans in the intensity
-                     arrays, as well as values beyond the their edges, are
-                     treated as missing values, and the correlogram is
-                     renormalized for each cell to eliminate their influence.
-                     Default is True.
-        :returns: IntensityMap2D instance representing the cross-correlogram of
-                  the firing rates
-
-        """
-        return self.firing_rate.correlate(other.firing_rate, mode=mode,
-                                          pearson=pearson,
-                                          normalized=normalized)
-
-    @memoize_method
-    def features(self, roll=0, lweight=1.0, extra=False):
+    def features(self, index=FeatureNames.default_features, weights=None,
+                 roll=0, normalize_peaks=True, **kwargs):
         """
         Compute a series of features of this cell
 
-        The purpose of the feature array is to embed the cell into
-        a high-dimensional space with dimensionless axes, where the Euclidean
-        distance between cells correspond to some concept of closeness. This is
-        useful for clustering cells into modules.
-
-        The present definition consists of the x and y coordinates of three
-        unique inner peaks in the autocorrelogram, divided by the grid scale
-        (parametrizing the orientation and shape of the grid), as well as the
-        logarithm of the grid scale (parametrizing the size of the grid). The
-        balance between the two is controlled by the parameter `sweight`.
+        The purpose of the feature series is to provide a unified interface to
+        all the scalar properties of the cell, useful for statistical analysis,
+        clustering etc.
 
         Parameters
         ----------
+        index : sequence, optional
+            Index to select which features are included in the series. The
+            index must be a sequence containing strings from
+            `gridcell.grid_features` and/or names of callable attributes on
+            `self`, and/or keys to the `self.params` and/or `self.info` dicts.
+            The labels in the index are interpreted as follows:
+
+            ``peaki_x, peaki_y``
+                Cartesian coordinates of the i-th peak from
+                `BaseCell.grid_peaks`. The peaks are numbered from 1 to 6.
+            ``peaki_rad, peaki_ang``
+                Polar versions of the peak coordinates described above.
+            ``peaki_logx, peaki_logy, peaki_lograd``
+                The natural logarithm of the corresponding lengths described
+                above.
+            ``ellipse_rad, ellipse_ang``
+                Polar coordinates representing the shape and orientation of the
+                ellipse from `BaseCell.grid_ellipse`, as explained in detail in
+                T`BaseCell.ellpars`.
+            ``ellipse_x, ellipse_y``
+                Cartesian versions of the ellipse parameters described above.
+            ``_method_ or _key_``
+                If the label does not match any of the candidates explained
+                above, the following lookup attempts are made:
+                1. The label is assumed to be the name of a callable attribute
+                   of `self`, that returns a scalar and can be called without
+                   arguments. (The callable can take optional keyword arguments
+                   -- see `**kwargs`. It should swallow unused keyword
+                   arguments silently). Example: 'grid_score'.
+                2. The label is assumed to be a key to the `self.params`
+                   dict.
+                3. The label is assumed to be a key to the `self.info` dict.
+
+        weights : dict or None, optional
+            For each `label` in `index`, the corresponding feature is
+            multiplied by `weights[label]` if this value exists. This allows
+            for custom weighting of features against each other -- useful for
+            e.g. tuning the relative importance of features when clustering.
         roll : integer, optional
-             Quantities related to individual peaks are listed in the order
-             given by `numpy.roll(self.peaks(), roll, axis=0)`.
-        lweight : scalar, optional
-            The scaling factor deciding the relative weight between
-            size-related and shape-related features. The size-related features
-            are multiplied by this number.
-        extra : bool, optional
-            If True, the feature series is extended to also include the scale
-            (no logarithm taken), polar coordinates for the peaks, as well as
-            both cartesian and polar coordinates for the ellipse parameters.
+            Quantities related to individual peaks are ordered from 1 to 6 in
+            the order given by `numpy.roll(self.grid_peaks(), roll, axis=0)`.
+            This parameter may be useful when comparing features between cells,
+            in order to properly align corresponding peaks with each other.
+        normalize_peaks : bool, optional
+            See `BaseCell.grid_peaks`. This keyword is listed explicitly here
+            because the default value may be different.
+        **kwargs : dict, optional
+            Additional keyword arguments are passed to all instance methods
+            called from this method, such as `grid_peaks`, `grid_ellipse`,
+            `scale`, `sparsity`, etc. This gives the user complete control over
+            the choices underlying the feature computation. For example, to
+            disable Bravais lattice projection of grid peaks and use the
+            arithmetic mean definition of grid scale, use the keyword arguments
+            `{'project_peaks': False, 'scale_mean': 'arithmetic'}`.
 
         Returns
         -------
         Series
-            Series containing the cell features. The keys are appropriately
-            Latex-formatted strings..
-
+            Series containing the requested cell features. The Series index is
+            the same as `index`.
         """
-        scale = self.scale()
-        logscale = numpy.log(scale)
-        peaks = numpy.roll(self.peaks(), roll, axis=0)
+        def _indexerror(label):
+            return ValueError("Unknown label '{}'".format(label))
 
-        # Make sure that the differences between all features are
-        # dimensionless, such that the distance is independent of units. Note
-        # that (log(l_2) - log(l_1)) ** 2 = log(l_2 / l_1) ** 2, which is
-        # dimensionless and thus OK, even though the dimension of log(l) is
-        # not well-defined in a strict sense.
-        feats = numpy.hstack((lweight * logscale, peaks[:3].ravel() / scale))
-        featlabels = ('log_l', 'ax1', 'ay1', 'ax2', 'ay2', 'ax3', 'ay3')
-        if extra:
-            polar = numpy.roll(self.peaks_polar(), roll, axis=0)
-            polar[:, 0] /= scale
-            ellipse = self.ellipse()
-            ecc, tilt_2 = ellipse.ecc, 2.0 * ellipse.tilt
-            x_ell = ecc * numpy.cos(tilt_2)
-            y_ell = ecc * numpy.sin(tilt_2)
-            feats = numpy.hstack((feats, scale, polar[:3].ravel(), x_ell,
-                                  y_ell, ecc, tilt_2))
-            featlabels += ('l', 'al1', 'beta1', 'al2', 'beta2', 'al3',
-                           'beta3', 'xell', 'yell', 'epsilon', '2theta')
-        index = [features_index[label] for label in featlabels]
-        return pandas.Series(feats, index=index)
+        # The peaks need their own keyword dict to store the keys
+        # 'normalize_peaks' and 'polar_peaks' without sending them all over the
+        # place.
+        pkw = dict(kwargs)
+        pkw.update(normalize_peaks=normalize_peaks)
 
-    @memoize_method
-    def roll(self, other):
+        # The ellipse needs its own keyword dict to store the key
+        # 'cartesian_ellipse' without sending it all over the place.
+        ekw = dict(kwargs)
+
+        data = dict(peaks=None, ellipse=None)
+
+        def _lookup_feature(label):
+            if label[:4] == 'peak':
+                if data['peaks'] is None:
+                    pkw.update(polar_peaks=False)
+                    data['peaks'] = numpy.roll(self.grid_peaks(**pkw),
+                                               roll, axis=0)
+                    pkw.update(polar_peaks=True)
+                    data['peaks_polar'] = numpy.roll(self.grid_peaks(**pkw),
+                                                     roll, axis=0)
+                peaks = data['peaks']
+                peaks_polar = data['peaks_polar']
+
+                peak_index = int(label[4]) - 1
+
+                component = label[5:]
+                if component == '_ang':
+                    return peaks_polar[peak_index, 1]
+                elif component.startswith('_log'):
+                    def f(p):
+                        return numpy.log(p)
+                    component = '_' + label[9:]
+                else:
+                    def f(p):
+                        return p
+
+                if component == '_x':
+                    return f(peaks[peak_index, 0])
+                elif component == '_y':
+                    return f(peaks[peak_index, 1])
+                elif component == '_rad':
+                    return f(peaks_polar[peak_index, 0])
+
+            elif label[:7] == 'ellipse':
+                if data['ellipse'] is None:
+                    ekw.update(cartesian_ellpars=False)
+                    data['ellipse'] = self.ellpars(**ekw)
+                    ekw.update(cartesian_ellpars=True)
+                    data['ellipse_cartesian'] = self.ellpars(**ekw)
+                ellipse = data['ellipse']
+                ellipse_cartesian = data['ellipse_cartesian']
+
+                component = label[7:]
+                if component == '_x':
+                    return ellipse_cartesian[0]
+                elif component == '_y':
+                    return ellipse_cartesian[1]
+                elif component == '_rad':
+                    return ellipse[0]
+                elif component == '_ang':
+                    return ellipse[1]
+
+            if hasattr(self, label):
+                return getattr(self, label)(**kwargs)
+
+            try:
+                return self.params[label]
+            except TypeError:
+                raise _indexerror(label)
+            except KeyError:
+                pass
+            try:
+                return self.info[label]
+            except (TypeError, KeyError):
+                raise _indexerror(label)
+
+        values = []
+        if weights is None:
+            weights = {}
+        for label in index:
+            weight = weights.get(label, 1.0)
+            values.append(weight * _lookup_feature(label))
+
+        return pandas.Series(values, index=index)
+
+    def roll(self, other, **kwargs):
         """
-        Determine the peak roll necessary to align the peaks in this cell most
-        cloesly with the ones in `other`
+        Determine the roll that aligns the grid peaks from this cell most
+        closely with those from `other`
 
         Parameters
         ----------
         other : BaseCell
-            Cell to align this one with.
+            Cell to align to.
+        **kwargs : dict, optional
+            Keyword arguments are passed to `BaseCell.grid_peaks`.
 
         Returns
         -------
         roll : integer
-            The peak roll to apply to `self` to align it with `other`.
-            The peak roll is defined such that `numpy.roll(self.peaks(), roll,
-            axis=0)` and `other.peaks()` give coordinates to the most closely
+            The peak roll to apply to `self.grid_peaks` to align with
+            `other.grid_peaks`. The peak roll is defined such that
+            `numpy.roll(self.grid_peaks(), roll, axis=0)` and
+            `other.grid_peaks` give coordinates to the most closely
             corresponding peaks in `self` and `other`.
 
         """
-        pi = numpy.pi
-        pi_2 = 2.0 * pi
-        sangles = self.peaks_polar()[:, 1]
-        oangles = other.peaks_polar()[:, 1]
+        kwargs.update(polar_peaks=True)
+
+        sangles = self.grid_peaks(**kwargs)[:, 1]
+        oangles = other.grid_peaks(**kwargs)[:, 1]
 
         roll = 0
-        diff = numpy.mod(pi + sangles - oangles, pi_2) - pi
+        diff = numpy.mod(_PI + sangles - oangles, _2PI) - _PI
         delta = numpy.abs(numpy.sum(diff))
         for r in (-1, 1):
-            diff = numpy.mod(pi + numpy.roll(sangles, r) - oangles, pi_2) - pi
+            diff = numpy.mod(
+                _PI + numpy.roll(sangles, r) - oangles, _2PI) - _PI
             d = numpy.abs(numpy.sum(diff))
             if d < delta:
                 delta = d
@@ -707,19 +1504,19 @@ class BaseCell(AlmostImmutable):
 
     def distance(self, other, **kwargs):
         """
-        Compute a distance between the grid patterns of grid cells
+        Compute a distance between the grid patterns of cells
 
-        This method defines a metric on the space of grid patterns from grid
-        cells. The distance is defined as the Euclidean distance between the
-        feature arrays of the cells, using the relative peak roll given by
-        `BaseCell.roll`.
+        This method defines a metric on the space of grid patterns. The
+        distance is defined as the Euclidean distance between the feature
+        arrays of the cells, using the relative peak roll given by
+        `self.roll(other)`.
 
         Parameters
         ----------
         other : BaseCell
             BaseCell instance to measure distance to.
         kwargs : dict, optional
-            Keyword arguments to pass to `BaseCell.features`.
+            Keyword arguments are passed to `BaseCell.features`.
 
         Returns
         -------
@@ -728,371 +1525,397 @@ class BaseCell(AlmostImmutable):
 
         """
         if self is other:
-            dist = 0.0
-        else:
-            roll = self.roll(other)
+            return 0.0
 
-            ofeat = other.features(roll=0, **kwargs)
-            dfeat = self.features(roll=roll, **kwargs) - ofeat
-            dist = numpy.sqrt(numpy.sum(dfeat * dfeat))
+        roll = self.roll(other)
+        ofeat = other.features(roll=0, **kwargs)
+        dfeat = self.features(roll=roll, **kwargs) - ofeat
+        return numpy.sqrt(numpy.sum(dfeat * dfeat))
 
-        return dist
-
-    @memoize_method
-    def phase(self, other):
+    def phase(self, other, threshold=None, **kwargs):
         """
         Find the grid phase of this cell relative to another cell
 
-        :other: another Cell instance.
-        :returns: tuple containing the x and y components of the relative grid
-                  phase
+        Parameters
+        ----------
+        other : BaseCell
+            Cell instance to measure phase relative to.
+        threshold : scalar in [-1, 1] or None, optional
+            Threshold value defining the central peak region in the
+            cross-correlogram. If None, the parameter
+            `self.params['threshold']` is used.
+        **kwargs : dict, optional
+            Additional keyword arguments are passed to `BaseCell.corr`
+
+        Returns
+        -------
+        ndarray, shape (2,)
+            The x- and y-components of the grid phase of `self` relative to
+            `other`.
 
         """
-        corr = self.correlate(other)
-        peaks, __ = self.detect_central_peaks(corr, self.threshold)
+        if threshold is None:
+            threshold = self.params['threshold']
 
-        return peaks[0]
+        corr = self.corr(other, **kwargs)
+        peaks, __ = self.detect_central_peaks(corr, threshold, 1)
 
-    def plot_firing_rate(self, axes=None, cax=None, cmap=None, cbar_kw=None,
-                         **kwargs):
+        return numpy.array(peaks[0])
+
+    def plot_ratemap(self, vmin=0.0, rate_kw=None, **kwargs):
         """
-        Plot the spatial firing rate map of this cell
+        Plot the spatial firing rate map of the cell
 
-        This method is basically a wrapper around `self.firing_rate.plot`.
+        This method is essentially a convenience wrapper around
+        `self.ratemap().plot` -- the only difference is that it fixes the lower
+        end of the colorbar at 0.0.
 
         Parameters
         ----------
-        axes : Axes, optional
-            Axes instance to add the firing rate to. If None (default), the
-            current Axes instance is used if any, or a new one created.
-        cax : Axes, optional
-            Axes instance to add the colorbar to. If None (default), matplotlib
-            automatically makes space for a colorbar on the right-hand side of
-            the plot.
-        cmap : Colormap or registered colormap name, optional
-            Colormap to use for the plot. If None (default), the default
-            colormap from rcParams is used.
-            ..note:: The default map might be 'jet', and this is something you
-            certainly DON'T WANT to use! If you're clueless, try 'YlGnBu_r' or
-            'gray'.
-        cbar_kw : dict, optional
-            Keyword arguments to pass to `pyplot.colorbar`.
+        vmin
+            See `IntensityMap2D.plot`.
+        rate_kw : dict or None, optional
+            Optional keyword arguments to pass to `BaseCell.ratemap`.
+        **kwargs : dict, optional
+            Additional keyword arguments are passed to `IntensityMap2D.plot`.
+
+        Returns
+        -------
+        See `IntensityMap2D.plot`.
+
+        """
+        if rate_kw is None:
+            rate_kw = {}
+        kwargs.update(vmin=vmin)
+        return self.ratemap(**rate_kw).plot(**kwargs)
+
+    def plot_acorr(self, vmin=-1.0, vmax=1.0, threshold=False,
+                   grid_peaks=False, grid_ellipse=False, acorr_kw=None,
+                   **kwargs):
+        """
+        Plot the autocorrelogram of the firing rate map of the cell
+
+        This method is essentially a wrapper around `self.acorr().plot`, but
+        adds funcionality related to the grid peaks, peak threshold and grid
+        ellipse.
+
+        Parameters
+        ----------
+        vmin, vmax
+            See `IntensityMap2D.plot` (..note:: defaults may differ).
+        threshold : bool or scalar, optional
+            Bins with values below the threshold value are masked from the
+            plot. If True, `self.params['threshold']` is used as the threshold
+            value. If False, no thresholding is performed. Otherwise, the
+            provided value is used as the threshold value.
+        grid_peaks : bool, optional
+            If True, the grid peaks are marked in the plot, using some
+            (hopefully) sensible plotting defaults. Dashed lines shoing the
+            grid axes are also drawn. If more control is required, leave this
+            as False and call `self.plot_grid_peaks` on the returned Axes
+            instance.
+        grid_ellipse : bool, optional
+            If True, the grid ellipse is drawn in the plot, using some
+            (hopefully) sensible plotting defaults. If more control is
+            required, leave this False and call `self.plot_grid_ellipse` on the
+            returned Axes instance.
+        acorr_kw : dict or None, optional
+            Optional keyword arguments to pass to `BaseCell.acorr`.
+            ..note:: If the keyword argument 'pearson' is set to `None`, the
+            arguments `vmin` and `vmax` in this method should probably be set
+            to something other than the default (e.g. `None`).
+        cbar_kw : dict or None, optional
+            Optional keyword arguments to pass to `pyplot.colorbar`.
         **kwargs : dict, optional
             Additional keyword arguments pass to `IntensityMap2D.plot`.
 
         Returns
         -------
-        Axes
-            The axes instance containing the plot
-        Colorbar
-            The created `Colorbar` instance
+        See `IntensityMap2D.plot`
 
         """
-        axes, cbar = self.firing_rate.plot(axes=axes, cax=cax, vmin=0.0,
-                                           cmap=cmap, cbar_kw=cbar_kw,
-                                           **kwargs)
-        return axes, cbar
+        if acorr_kw is None:
+            acorr_kw = {}
+        acorr = self.acorr(**acorr_kw)
 
-    def plot_autocorrelogram(self, axes=None, cax=None, threshold=False,
-                             peaks=False, ellipse=False, cmap=None,
-                             cbar_kw=None, **kwargs):
+        if threshold is True:
+            threshold = self.params['threshold']
+        elif threshold is False:
+            threshold = None
+
+        kwargs.update(threshold=threshold, vmin=vmin, vmax=vmax)
+        ret = acorr.plot(**kwargs)
+        axes = ret[0]
+
+        if grid_peaks:
+            self.plot_grid_peaks(axes=axes)
+        if grid_ellipse:
+            self.plot_grid_ellipse(axes=axes)
+
+        return ret
+
+    def plot_grid_peaks(self, axes=None, marker='o', color='black',
+                        gridlines=True, gridlines_kw=None, grid_kw=None,
+                        **kwargs):
         """
-        Plot the autocorrelogram of the firing rate of this cell
+        Plot the locations of grid peaks from the firing rate autocorrelogram
 
-        The correlogram can be added to an existing plot via the optional
-        'axes' argument.
+        Parameters
+        ----------
+        axes : Axes or None, optional
+            Axes instance to add the firing rate to. If None, the most current
+            Axes instance with `aspect='equal'` is grabbed or created.
+        marker : matplotlib marker spec, optional
+            Marker to use when drawing the peaks.
+        color : matplotlib color spec, or a sequence of such, optional
+            Color(s) to use when drawing the markers.
+        gridlines : bool, optional
+            If True, the axes of the grid pattern are added to the plot as
+            lines through the peaks and the origin. By default, dashed lines
+            with color '0.5' and opacity (alpha) 0.5 are used, but this can be
+            overridden using the parameter `gridlines_kw`. If False, no lines
+            are plotted.
+        gridlines_kw : dict or None, optional
+            Optional keyword arguments to pass to `axes.plot` when plotting
+            gridlines.
+        grid_kw : dict or None, optional
+            Optional keyword arguments to pass to `BaseCell.grid_peaks`.
+        **kwargs : dict, optional
+            Additional keyword arguments pass to `axes.plot`. Note in
+            particular the keyword `markersize`.
 
-        This method is little but a wrapper around self.autocorrelate().plot().
-
-        :axes: Axes instance to add the intensity map to. If None (default),
-               a new Figure is created (this method never plots to the current
-               Figure or Axes). In the latter case, equal aspect ration will be
-               enforced on the newly created Axes instance.
-        :cax: Axes instance to plot the colorbar into. If None (default),
-              matplotlib automatically makes space for a colorbar on the
-              right-hand side of the plot.
-        :threshold: if True, mask values smaller than self.threshold from the
-                    plot. Default is False.
-        :peaks: if True, add the most central peak and the six peaks closest to
-                it to the plot, using some (hopefully) sensible plotting
-                defaults. If more control is required, leave this false and
-                call self.plot_peaks() on the returned axes instance.
-        :ellipse: if True, add an ellipse fitted through the six peaks closest
-                  to the center peak to the plot, using some (hopefully)
-                  sensible plotting defaults. If more control is required,
-                  leave this false and call self.plot_ellipse() on the returned
-                  axes instance.
-        :cmap: colormap to use for the plot. All valid matplotlib colormap
-               arguments can be used. If None (default), the default colormap
-               from rcParams is used (BEWARE: the default map might be 'jet',
-               and this is something you certainly DON'T WANT to use! If you're
-               clueless, try "YlGnBu_r" or "gray").
-        :cbar_kw: dict of keyword arguments to pass to the pyplot.colorbar()
-                  function. Default: None (empty dict)
-        :kwargs: additional keyword arguments passed on to axes.pcolormesh()
-        :returns: the axes instance containing the plot, and the colorbar
-                  instance
-
-        """
-        acorr = self.autocorrelate()
-
-        if threshold:
-            thres_val = self.threshold
-        else:
-            thres_val = None
-
-        axes, cbar = acorr.plot(axes=axes, cax=cax, threshold=thres_val,
-                                vmin=-1.0, vmax=1.0, cmap=cmap,
-                                cbar_kw=cbar_kw, **kwargs)
-        if peaks:
-            self.plot_peaks(axes=axes)
-        if ellipse:
-            self.plot_ellipse(axes=axes)
-
-        return axes, cbar
-
-    def plot_peaks(self, axes=None, project=True, threshold=None, marker='o',
-                   color='black', gridlines=True, gridlines_kw=None, **kwargs):
-        """
-        Plot the locations of the inner ring of peaks in the firing rate
-        autocorrelogram
-
-        The peaks can be added to an existing plot via the optional 'axes'
-        argument. They are typically added to a plot of the autocorrelogram.
-
-        :axes: Axes instance to add the path to. If None (default), the current
-               Axes instance with equal aspect ratio is used if any, or a new
-               one created.
-        :project: if True, the lattice-projected peaks are plotted (see
-                  BaseCell.peaks()). If False, the non-projected peaks are
-                  plotted.
-        :threshold: lower intensity bound defining the regions in which peaks
-                    are found. If None (default), the attribute self.threshold
-                    is used.
-        :marker: a valid matplotlib marker specification. Defaults to 'o'
-        :color: a valid matplotlib color specification, or a sequence of such,
-                giving the color of the markers. Defaults to 'black'.
-        :gridlines: if True, lines through the peaks showing the grid axes are
-                    added to the plot. By default, dashed lines with color ==
-                    '0.5' and opacity alpha == 0.5 are used, but this can be
-                    overridden using the parameter gridlines_kw. If false, no
-                    lines are plotted. Default is true.
-        :gridlines_kw: dict of keyword arguments to pass to the axes.plot()
-                       method used to plot gridlines. Default: None (empty
-                       dict)
-        :kwargs: additional keyword arguments passed on to the axes.plot()
-                 method used to plot peaks. Note in particular the keyword
-                 'markersize'.
-        :returns: a list of the plotted Line2D instances
+        Returns
+        -------
+        list
+            List of plotted Line2D instances
 
         """
         if axes is None:
             axes = pyplot.gca(aspect='equal')
 
-        peaks = self.peaks(project=project, threshold=threshold)
-        h = axes.plot(peaks[:, 0], peaks[:, 1], linestyle='None',
-                      marker=marker, color=color, **kwargs)
+        gkw = {}
+        if grid_kw is not None:
+            grid_kw.update(grid_kw)
+        gkw.update(polar_peaks=False)
+        peaks = self.grid_peaks(**gkw)
+
+        kwargs.update(linestyle='None', marker=marker, color=color)
+        h = axes.plot(peaks[:, 0], peaks[:, 1], **kwargs)
 
         if gridlines:
-            if gridlines_kw is None:
-                gridlines_kw = {}
-            acorr = self.autocorrelate()
+            glkw = dict(linestyle='dashed', color='0.5', alpha=0.5)
+            if gridlines_kw is not None:
+                glkw.update(gridlines_kw)
+            acorr = self.acorr(mode='full')
             xedges = acorr.bset.xedges
-            peaks_polar = self.peaks_polar(project=project)
+            gkw.update(polar_peaks=True)
+            peaks_polar = self.grid_peaks(**gkw)
             angles = peaks_polar[:3, 1]
             line_y = numpy.outer(xedges, numpy.tan(angles))
-            h += axes.plot(xedges, line_y, linestyle='dashed', color='0.5',
-                           alpha=0.5, **gridlines_kw)
+            h += axes.plot(xedges, line_y, **glkw)
 
         return h
 
-    def plot_ellipse(self, axes=None, project=True, threshold=None,
-                     linestyle='solid', linewidth=2.0, color='red',
-                     smajaxis=True, **kwargs):
+    def plot_grid_ellipse(self, linestyle='solid', linewidth=2.0, color='red',
+                          smajaxis=True, grid_kw=None, **kwargs):
         """
-        Plot an ellipse fitted through the inner ring of peaks in the firing
-        rate autocorrelogram
+        Plot the grid ellipse
 
-        The ellipse can be added to an existing plot via the optional 'axes'
-        argument. It is typically added to a plot of the autocorrelogram.
+        This method is essentially a wrapper around `self.grid_ellipse().plot`
 
-        This method is a simple wrapper around self.ellipse().plot()
+        Parameters
+        ----------
+        linestyle, linewidth, color, smajaxis, **kwargs
+            See `Ellipse.plot` (..note:: defaults may differ).
+        grid_kw : dict or None, optional
+            Optional keyword arguments to pass to `BaseCell.grid_ellipse`.
+        **kwargs : dict, optional
+            Additional keyword arguments are passed to `IntensityMap2D.plot`.
 
-        :axes: Axes instance to add the ellipse to. Passed through to the
-               self.ellipse().plot() method.
-        :project: if True, an ellipse fitted to the lattice-projected peaks is
-                  plotted (see BaseCell.peaks()). If False, an ellipse fitted
-                  to the unprojected peaks is plotted. Default is True.
-        :threshold: lower intensity bound defining the regions in which peaks
-                    are found. If None (default), the attribute self.threshold
-                    is used.
-        :linestyle,linewidth,color,smajaxis,kwargs:
-            see Ellipse.plot() (note that defaults are different here).
-        :returns: list containing the plotted objects: one pathces.Ellipse
-                  instance, and a Line2D instance per plotted axis.
+        Returns
+        -------
+        See `Ellipse.plot`.
 
         """
-        ell = self.ellipse(project=project, threshold=threshold)
-        h = ell.plot(axes=axes, linestyle=linestyle, linewidth=linewidth,
-                     color=color, smajaxis=smajaxis, **kwargs)
-        return h
+        if grid_kw is None:
+            grid_kw = {}
+        ell = self.grid_ellipse(**grid_kw)
+        kwargs.update(linestyle=linestyle, linewidth=linewidth, color=color,
+                      smajaxis=smajaxis)
+        return ell.plot(**kwargs)
 
-    def plot_correlogram(self, other, axes=None, cax=None, threshold=False,
-                         cpeak=False, ellipse=False, cmap=None, cbar_kw=None,
-                         **kwargs):
+    def plot_corr(self, other, vmin=-1.0, vmax=1.0, threshold=False,
+                  center_peak=False, corr_kw=None, **kwargs):
         """
-        Plot the cross-correlogram of the firing rate of another cell and this
+        Plot the cross-correlogram of the firing rate map of this and another
         cell
 
-        The correlogram can be added to an existing plot via the optional
-        'axes' argument.
+        This method is essentially a wrapper around `self.corr(other).plot`,
+        but adds funcionality related to the grid peaks, peak threshold and
+        grid ellipse.
 
-        :other:another BaseCell instance
-        :axes: Axes instance to add the intensity map to. If None (default),
-               a new Figure is created (this method never plots to the current
-               Figure or Axes). In the latter case, equal aspect ration will be
-               enforced on the newly created Axes instance.
-        :cax: Axes instance to plot the colorbar into. If None (default),
-              matplotlib automatically makes space for a colorbar on the
-              right-hand side of the plot.
-        :threshold: if True, mask values smaller than self.threshold from the
-                    plot. Default is False.
-        :cpeak: if True, add the most central peak to the plot, using some
-                (hopefully) sensible plotting defaults. If more control is
-                required, call self.detect_central_peaks() on
-                self.correlogram(other) to get peaks, and add them to the plot
-                manually.
-        :ellipse: if True, add an ellipse fitted through the six peaks closest
-                  to the center peak to the plot, using some (hopefully)
-                  sensible plotting defaults. If more control is required, call
-                  self.detect_central_peaks() on self.correlogram(other) to get
-                  the peaks, instantiate an Ellipse instance fitted to them,
-                  and add use Ellipse.plot() to add it to the plot.
-        :cmap: colormap to use for the plot. All valid matplotlib colormap
-               arguments can be used. If None (default), the default colormap
-               from rcParams is used (BEWARE: the default map might be 'jet',
-               and this is something you certainly DON'T WANT to use! If you're
-               clueless, try "YlGnBu_r" or "gray").
-        :cbar_kw: dict of keyword arguments to pass to the pyplot.colorbar()
-                  function. Default: None (empty dict)
-        :kwargs: additional keyword arguments passed on to axes.pcolormesh()
-        :returns: the axes instance containing the plot, and the colorbar
-                  instance
+        Parameters
+        ----------
+        other : BaseCell
+            BaseCell instance to plot correlated ratemap with.
+        vmin, vmax
+            See `IntensityMap2D.plot` (..note:: defaults may differ).
+        threshold : bool or scalar, optional
+            Bins with values below the threshold value are masked from the
+            plot. If True, `self.params['threshold']` is used as the threshold
+            value. If False, no thresholding is performed. Otherwise, the
+            provided value is used as the threshold value.
+        cpeak : bool, optional
+            If True, the most central peak in the correlogram is marked in the
+            plot, using some (hopefully) sensible plotting defaults. Dashed
+            coordinate axes are also drawn for easy visual assesment of the
+            offset of the peak from the origin. If more control is required,
+            leave this as False and call `self.detect_central_peaks` on
+            `self.corr(other)` to find peaks that can be added to the returned
+            Axes instance manually.
+            ..note:: the peak detection threshold is
+            `self.params['threshold']`, regardless of the value of the keyword
+            `threshold` (which is only used to mask bins in the plot).
+        corr_kw : dict or None, optional
+            Optional keyword arguments to pass to `BaseCell.corr`.
+            ..note:: If the keyword argument 'pearson' is set to `None`, the
+            arguments `vmin` and `vmax` in this method should probably be set
+            to something other than the default (e.g. `None`).
+        **kwargs : dict, optional
+            Additional keyword arguments are passed to `IntensityMap2D.plot`.
 
-        """
-        corr = self.correlate(other)
-
-        if threshold:
-            thres_val = self.threshold
-        else:
-            thres_val = None
-
-        axes, cbar = corr.plot(axes=axes, cax=cax, threshold=thres_val,
-                               vmin=-1.0, vmax=1.0, cmap=cmap, cbar_kw=cbar_kw,
-                               **kwargs)
-        if cpeak or ellipse:
-            pks, __ = self.detect_central_peaks(corr, self.threshold)
-            if cpeak:
-                axes.plot(pks[0, 0], pks[0, 1], linestyle='None', marker='o',
-                          color='black')
-                # Add a cross for comparison
-                axes.axvline(0.0, linestyle='dashed', color='0.5', alpha=0.5)
-                axes.axhline(0.0, linestyle='dashed', color='0.5', alpha=0.5)
-            if ellipse:
-                ell = Ellipse(fitpoints=pks)
-                ell.plot(axes=axes, majaxis=True, linewidth=2.0, color='red')
-
-        return axes, cbar
-
-    def plot_firing_field(self, axes=None, cax=None, threshold=False,
-                          cmap=None, cbar_kw=None, **kwargs):
-        """
-        Plot the shape of the firing field
-
-        A Gaussian function with peak in the center and covariance matrix
-        from self.firing_field() is plotted on axes identical to those used in
-        self.plot_autocorrelogram().
-
-        :axes: Axes instance to add the intensity map to. If None (default),
-               a new Figure is created (this method never plots to the current
-               Figure or Axes). In the latter case, equal aspect ration will be
-               enforced on the newly created Axes instance.
-        :cax: Axes instance to plot the colorbar into. If None (default),
-              matplotlib automatically makes space for a colorbar on the
-              right-hand side of the plot.
-        :threshold: if True, mask values smaller than self.threshold from the
-                    plot. Default is False.
-        :cmap: colormap to use for the plot. All valid matplotlib colormap
-               arguments can be used. If None (default), the default colormap
-               from rcParams is used (BEWARE: the default map might be 'jet',
-               and this is something you certainly DON'T WANT to use! If you're
-               clueless, try "YlGnBu_r" or "gray").
-        :cbar_kw: dict of keyword arguments to pass to the pyplot.colorbar()
-                  function. Default: None (empty dict)
-        :kwargs: additional keyword arguments passed on to axes.pcolormesh()
-        :returns: the axes instance containing the plot, and the colorbar
-                  instance
+        Returns
+        -------
+        See `IntensityMap2D.plot`
 
         """
-        ffield = self.firing_field_map()
+        if corr_kw is None:
+            corr_kw = {}
+        corr = self.corr(other, **corr_kw)
 
-        if threshold:
-            thres_val = self.threshold
-        else:
-            thres_val = None
+        if threshold is True:
+            threshold = self.params['threshold']
+        elif threshold is False:
+            threshold = None
 
-        axes, cbar = ffield.plot(axes=axes, cax=cax, threshold=thres_val,
-                                 cmap=cmap, cbar_kw=cbar_kw, **kwargs)
+        kwargs.update(threshold=threshold, vmin=vmin, vmax=vmax)
+        ret = corr.plot(**kwargs)
+        axes = ret[0]
 
-        return axes, cbar
+        if center_peak:
+            peak, __ = self.detect_central_peaks(corr,
+                                                 self.params['threshold'], 1)
+            axes.plot(peak[0, 0], peak[0, 1], linestyle='None', marker='o',
+                      color='black')
+
+            # Add a axes for comparison
+            axes.axvline(0.0, linestyle='dashed', color='0.5', alpha=0.5)
+            axes.axhline(0.0, linestyle='dashed', color='0.5', alpha=0.5)
+
+        return ret
+
+    def plot_firing_field(self, vmin=-1.0, vmax=1.0, threshold=False,
+                          ffield_kw=None, **kwargs):
+        """
+        Plot the shape of the average firing field
+
+        A Gaussian function with peak in the origin and covariance given by
+        `self.firing_field` is plotted on axes identical to those used in
+        `self.plot_acorr`.
+
+        This method is essentially a wrapper around
+        `self.firing_field_map().plot`, but adds funcionality related to the
+        peak threshold.
+
+        Parameters
+        ----------
+        vmin, vmax
+            See `IntensityMap2D.plot` (..note:: defaults may differ).
+        threshold : bool or scalar, optional
+            Bins with values below the threshold value are masked from the
+            plot. If True, `self.params['threshold']` is used as the threshold
+            value. If False, no thresholding is performed. Otherwise, the
+            provided value is used as the threshold value.
+        ffield_kw : dict or None, optional
+            Optional keyword arguments to pass to `BaseCell.firing_field_map`.
+        **kwargs : dict, optional
+            Additional keyword arguments are passed to `IntensityMap2D.plot`.
+
+        Returns
+        -------
+        See `IntensityMap2D.plot`.
+
+        """
+        if ffield_kw is None:
+            ffield_kw = {}
+        ffield = self.firing_field_map(**ffield_kw)
+
+        if threshold is True:
+            threshold = self.params['threshold']
+        elif threshold is False:
+            threshold = None
+
+        kwargs.update(threshold=threshold, vmin=vmin, vmax=vmax)
+        return ffield.plot(**kwargs)
 
 
 class TemplateGridCell(BaseCell):
     """
-    Represent an idealized grid cell defined only using the lattice vectors and
-    the firing field covariance matrix. Can for example be used to represent
-    the average cell from a module.
+    Represent a template grid cell
+
+    The grid cell firing pattern is constructed using lattice vectors and
+    a covariance matrix giving the shape of the firing fields.
+
+    Parameters
+    ----------
+    peaks : array-like, shape (6, 2)
+        Array containing the six primary lattice vectors of the grid pattern.
+        These vectors are equivalent to the coordinates of the six inner peaks
+        in the autocorrelogram of the cell, as returned by e.g.
+        `BaseCell.grid_peaks`.
+    firing_field : array-like, shape (2, 2)
+        Array containing the covariance matrix characterizing the shape of the
+        firing fields. See `BaseCell.firing_field` for an explanation.
+    bset : BinnedSet2D
+        A BinnedSet2D instance defining the region over which to construct the
+        firing rate map of the cell.
+    **kwargs : dict, optional
+        Keyword arguments are passed to `BaseCell`.
 
     """
-
-    def __init__(self, peaks, firing_field, bset, threshold):
-        """
-        Initialize the TemplateGridCell instance
-
-        :peaks: array-like of shape (6, 2), containing the six primary lattice
-                vectors of the grid (equivalent to the coordinates of the six
-                inner peaks in the autocorrelogram of the cell).
-        :firing_field: array-like of shape (2, 2), giving the covariance
-                       matrix characterizing the firing field shape. The
-                       gaussian(x, cov=firing_field) gives the shape of the
-                       firing fields of the cell.
-        :bset: a BinnedSet2D instance defining the region over
-               which this cells firing rate should be defined.
-        :threshold: peak threshold. Used to separate peaks in the
-                    autocorrelogram of the firing rate of the cell.
-
-        """
-        self._peaks = peaks
-        self._firing_field = firing_field
-        firing_rate = self.construct_firing_rate(peaks, firing_field, bset)
-        BaseCell.__init__(self, firing_rate, threshold=threshold)
+    def __init__(self, peaks, firing_field, bset, **kwargs):
+        BaseCell.__init__(self, **kwargs)
+        if not hasattr(self, 'data'):
+            setattr(self, 'data', {})
+        self.data.update(
+            peaks=peaks,
+            firing_field=firing_field,
+            bset=bset
+        )
 
     @staticmethod
-    def construct_firing_rate(peaks, firing_field, bset):
+    def construct_ratemap(peaks, firing_field, bset):
         """
-        Create an IntensityMap2D instance of an idealized firing rate based on
-        grid lattice vectors and the firing field covariance matrix
+        Construct an idealized grid cell firing rate map
 
-        :peaks: array-like of shape (6, 2), containing the six primary lattice
-                vectors of the grid (equivalent to the coordinates of the six
-                inner peaks in the autocorrelogram of the cell).
-        :firing_field: array-like of shape (2, 2), giving the covariance
-                       matrix characterizing the firing field shape. The
-                       gaussian(x, cov=firing_field) gives the shape of the
-                       firing fields of the cell.
-        :bset: a BinnedSet2D instance defining the region over
-               which this cells firing rate should be defined.
-        :returns: IntensityMap2D instance of the firing rate
+        Parameters
+        ----------
+        peaks : array-like, shape (6, 2)
+            Array containing the six primary lattice vectors of the grid
+            pattern.  These vectors are equivalent to the coordinates of the
+            six inner peaks in the autocorrelogram of the cell, as returned by
+            e.g.  `BaseCell.grid_peaks`.
+        firing_field : array-like, shape (2, 2)
+            Array containing the covariance matrix characterizing the shape of
+            the firing fields. See `BaseCell.firing_field` for an explanation.
+        bset : BinnedSet2D
+            A BinnedSet2D instance defining the region over which to construct
+            the firing rate map of the cell.
+
+        Returns
+        -------
+        IntensityMap2D
+            Firing rate map.
 
         """
         xcm, ycm = bset.cmesh
@@ -1111,117 +1934,121 @@ class TemplateGridCell(BaseCell):
         dx, dy = 0.5 * xcm.ptp(), 0.5 * ycm.ptp()
         diagsq = dx * dx + dy * dy
 
-        layers = int(numpy.ceil(numpy.sqrt(diagsq / mldsq.min()))) + 1
+        levels = int(numpy.ceil(numpy.sqrt(diagsq / mldsq.min())))
 
         pattern = numpy.vstack(((0.0, 0.0), peaks))
-        all_peaks = pattern.copy()
-        for i in range(layers):
+        all_peaks = [pattern]
+        for i in range(levels + 1):
             for l in range(i):
                 k = i - l
                 disp = k * lattice + l * lattice_r1
                 if (k - l) % 3 == 0:
                     for d in disp:
-                        all_peaks = numpy.vstack((all_peaks, pattern + d))
+                        all_peaks.append(pattern + d)
                 else:
                     for d in disp:
-                        all_peaks = numpy.vstack((all_peaks, d))
+                        all_peaks.append(d)
+        all_peaks = numpy.vstack(all_peaks)
 
         # Compute the firing rate
         firing_rate = 0.0
         for peak in all_peaks:
             firing_rate += gaussian(xypoints, mean=peak, cov=firing_field)
 
-        # Normalize to a peak rate of 1 Hz, mostly for aesthetics
-        firing_rate *= 1.0 / numpy.amax(firing_rate)
+        # Normalize to a mean firing rate of 1.0
+        firing_rate /= numpy.mean(firing_rate)
 
         # Reshape to the shape of xcm and ycm
         firing_rate = firing_rate.reshape(xcm.shape)
 
         return IntensityMap2D(firing_rate, bset)
 
-    def peaks(self, project=True, **kwargs):
+    @memoize_method
+    def ratemap(self, normalize_ratemean=False, **kwargs):
         """
-        Return the coordinates of the six inner peaks
+        Compute the firing rate map of the template grid cell
 
-        :project: if True, the peaks from the autocorrelogram are projected
-                  into the space of valid lattice vectors, such that each peak
-                  is equal to the sum of its two neighbors. If False, the peaks
-                  are returned without projection. Default is True.
-        :kwargs: None supported at the moment. Included to absorb 'threshold',
-                 which is typically passed by calling functions.
-        :returns: numpy array 'peaks' of shape (6, 2), where (peaks[0][0],
-                  peaks[0][1]) is the x and y coordinates of the first peak,
-                  etc.
+        Parameters
+        ----------
+        normalize_ratemean : bool, optional
+            This keyword has no effect here: since the firing rate of
+            a TemplateGridCell is synthetic, it is always normalized to mean
+            1.0.
+        **kwargs : dict, optional
+            Not in use.
+
+        Returns
+        -------
+        IntensityMap2D
+            Firing rate map.
+
         """
-        peaks = self._peaks
+        data = self.data
+        return self.construct_ratemap(data['peaks'], data['firing_field'],
+                                      data['bset'])
 
-        if project:
-            # Project to true lattice vectors
-            pmat = (1 / 6) * linalg.toeplitz([2, 1, -1, -2, -1, 1])
-            peaks = pmat.dot(peaks)
-
-        return peaks
+    def _peaks(self, *args, **kwargs):
+        return self.data['peaks']
 
     def firing_field(self, **kwargs):
-        """
-        Return the firing field covariance matrix
-
-        :kwargs: None supported at the moment. Included to absorb 'threshold',
-                 which is typically passed by calling functions.
-        :returns: firing field covariance matrix
-
-        """
-        return self._firing_field
+        return self.data['firing_field']
 
 
 class Cell(BaseCell):
     """
-    Represent a cell based on recorded spike train and position, and provide
-    methods for computing and plotting firing rate maps, correlations etc.
+    Represent a real cell with spatially modulated firing rate
+
+    The cell is based on recorded spike and position data.
+
+    Parameters
+    ----------
+    spike_t : array-like
+        Array giving the times at which the cell spiked.
+    pos : Position
+        Position instance representing the movement of the animal.
+    bins, range_ (range is optional)
+        Bin and range specification. See `Position.occupancy` for details.
+    filter_size : scalar, optional
+        Default smoothing width to use when computing the firing rate map.
+        Given in the same units as the coordinates in `pos`.
+    threshold : scalar, optional
+        See `BaseCell`
+    **kwargs
+        See `BaseCell`.
 
     """
+    def __init__(self, position, spike_t, bins, range_=None, filter_size=0.0,
+                 threshold=0.0, **kwargs):
+        BaseCell.__init__(self, threshold=threshold, **kwargs)
+        for name in ('params', 'data'):
+            if not hasattr(self, name):
+                setattr(self, name, {})
+        self.params.update(
+            filter_size=filter_size,
+            bins=bins,
+            range_=range_
+        )
 
-    def __init__(self, spike_t, pos, bins, range_, filter_size,
-                 threshold, **kwargs):
-        """
-        Initialize the Cell instance
+        posdata = position.filtered_data()
+        spike_x, spike_y = self.interpolate_spikes(spike_t,
+                                                   posdata['t'],
+                                                   posdata['x'],
+                                                   posdata['y'])
 
-        :spike_t: array-like, giving the times at which spikes were detected
-                  from this cell.
-        :pos: Position instance representing the spatial movement over time
-              of the animal.
-        :bins: bin specification defining the bins to use in the firing rate
-               map. The simplest formats are a scalar 'nbins' or a tuple
-               '(nbins_x, nbins_y)', giving the number of bins of equal widths
-               in each direction. For information about other valid formats,
-               see the documentation for numpy.histogram2d().
-        :range_: range specification giving the x and y values of the outermost
-                 bin edges. The format is a tuple '((xmin, xmax), (ymin,
-                 ymax))'. Samples outside this region will be discarded.
-        :threshold: peak threshold. Used to separate peaks in the
-                    autocorrelogram of the firing rate of the cell.
-        :filter_size: characteristic smoothing width to use when computing
-                      firing rates. Carries the same units as the coordinates
-                      in pos. If None, no smoothing is applied.
-        :kwargs: none supported at the moment. In the future, support may be
-                 added for a keyword 'info' containing information about the
-                 transformation applied to get physical positions from raw
-                 position data, if a use case can be found for having this
-                 information available here.
+        self.data.update(
+            spike_t=spike_t,
+            spike_x=spike_x,
+            spike_y=spike_y,
+        )
 
-        """
-        self.spike_t = spike_t
-        self.pos = pos
-        self.filter_size = filter_size
-
-        spike_x, spike_y = self.interpolate_spikes(spike_t, pos.t, pos.x,
-                                                   pos.y)
-        self.spike_x, self.spike_y = spike_x, spike_y
-
-        timemap = pos.timemap(bins=bins, range_=range_)
-        firing_rate = self.compute_firing_rate(spike_x, spike_y, timemap,
-                                               filter_size)
-        BaseCell.__init__(self, firing_rate, threshold=threshold)
+        flname = memoize_method.friend_list_name
+        try:
+            friends = getattr(position, flname)
+        except AttributeError:
+            setattr(position, flname, [self])
+        else:
+            friends.append(self)
+        self.position = position
 
     @staticmethod
     def interpolate_spikes(spike_t, t, x, y):
@@ -1232,14 +2059,19 @@ class Cell(BaseCell):
         contain nans, in which case spikes occuring in the corresponding times
         will be discarded.
 
-        :spike_t: array-like, giving the times at which spikes were detected
-        :t: array-like, giving the times of position samples
-        :x: array-like, possibly masked, giving the x coordinates of position
-            samples
-        :y: array-like, possibly masked, giving the y coordinates of position
-            samples
-        :returns: array of spike x coordinates, array of spike y coordinates.
-                  The arrays are masked if the input x and y arrays are masked.
+        Parameters
+        ----------
+        spike_t : array-like
+            Array giving spike times.
+        t, x, y : array-like
+            Arrays giving the time, x-coordinate and y-coordinate of the
+            position samples. If any of the arrays are masked or contain nans,
+            spikes occuring in the corresponding time intervals will be masked.
+
+        Returns
+        -------
+        spike_x, spike_y : ndarray
+            Array of spike x and y coordinates.
 
         """
         xf = numpy.ma.array(x, dtype=numpy.float_)
@@ -1257,52 +2089,340 @@ class Cell(BaseCell):
         spike_y = numpy.ma.masked_where(mask, spike_y)
         return spike_x, spike_y
 
-    @staticmethod
-    def compute_firing_rate(spike_x, spike_y, timemap, filter_size,
-                            smoothing_mode='pre'):
+    @memoize_method
+    def _spikemap(self, bins, range_):
         """
-        Compute the firing rate map from spikes and positional data
+        Compute a map of the recorded spikes
 
-        :spike_x: array-like, possibly masked, x coordinates of spikes
-        :spike_y: array_like, possibly masked, y coordinates of spikes
-        :timemap: IntensityMap2D instance giving the spatial distribution of
-                  time spent
-        :filter_size: if not None, the firing rate map is smoothed using the
-                      IntensityMap2D.smoothed() method, with this parameter as
-                      filter size.
-        :smoothing_mode: flag to select between two available smoothing
-                         methods. Possible values:
-            'pre': the histogram of spikes and the timemap are smoothed
-                   individually before they are divided by each other to create
-                   the firing rate map.
-            'post': the histogram of spikes is divided by the timemap to create
-                    an unsmoothed firing rate map, which is then smoothed.
-        :returns: IntensityMap2D instance giving the firing rate map, and if
-                  filter_size is not None, another InteisytMap2D giving the
-                  smoothed firing rate map.
+        This part of the computation in `Cell.spikemap` is factored out
+        to optimize memoization.
 
         """
-        bset = timemap.bset
+        # We use self._occupancy to instantiate the BinnedSet, to avoid
+        # creating unneccesary duplicate objects.
+        occupancy = self._occupancy(bins, range_)
+        bset = occupancy.bset
+
+        data = self.data
+        spike_x, spike_y = data['spike_x'], data['spike_y']
         spike_hist, __, __ = numpy.histogram2d(numpy.ma.compressed(spike_x),
                                                numpy.ma.compressed(spike_y),
                                                bins=(bset.xedges, bset.yedges),
                                                normed=False)
-        spikemap = IntensityMap2D(spike_hist, bset)
+        return IntensityMap2D(spike_hist, bset)
 
-        if filter_size is not None:
-            if smoothing_mode == 'pre':
-                firing_rate = (spikemap.smoothed(filter_size) /
-                               timemap.smoothed(filter_size))
-            elif smoothing_mode == 'post':
-                firing_rate = spikemap / timemap
-                firing_rate = firing_rate.smoothed(filter_size)
-            else:
-                raise ValueError("unknown smoothing mode {}"
-                                 .format(smoothing_mode))
+    def spikemap(self, distribution_spikemap=False, bins=None, range_=None,
+                 filter_size=None, filter_='gaussian', normalize_spikemap=True,
+                 **kwargs):
+        """
+        Compute a map of the spatial spike distribution
+
+        Parameters
+        ----------
+        distribution_spikemap : bool, optional
+            If True, the spike map will be normalized to have sum 1, such
+            that it can be interpreted as a spatial frequency distribution map
+            for the spikes.
+        bins, range_
+            See `Cell.occupancy`.
+        filter_size : scalar
+            Characteristic length of the smoothing filter to apply to the
+            spikemap. If None, the default specification, set at
+            initialization and stored in `self.params`, is used.
+        filter_
+            See `IntensityMap2D.smooth` (..note:: defaults may differ).
+        normalize_occupancy
+            Passed as keyword 'normalize' to `IntensityMap2D.smooth`.
+        **kwargs : dict, optional
+            Keyword arguments are passed to `Cell.nspikes`.
+
+        Returns
+        -------
+        IntensityMap2D
+            Spike map.
+
+        """
+        if filter_size is None:
+            filter_size = self.params['filter_size']
+
+        spikemap = self._spikemap(bins, range_)
+        if distribution_spikemap:
+            spikemap /= self.nspikes(**kwargs)
+
+        return spikemap.smooth(filter_size, filter_=filter_,
+                               normalize=normalize_spikemap)
+
+    def nspikes(self, **kwargs):
+        """
+        Count the number of spikes recorded from this cell
+
+        Parameters
+        ----------
+        **kwargs : dict, optional
+            Not in use.
+
+        Returns
+        -------
+        integer
+            Number of spikes.
+
+        """
+        return len(numpy.ma.compressed(self.data['spike_x']))
+
+    def _occupancy(self, bins, range_, distribution_occupancy=False):
+        """
+        Compute a map of the recorded spikes
+
+        This part of the computation in `Cell.occupancy` is factored out
+        as a courtesy to `Cell.spikemap`.
+
+        """
+        params = self.params
+        if bins is None:
+            bins = params['bins']
+        if range_ is None:
+            range_ = params['range_']
+        return self.position.occupancy(bins=bins, range_=range_,
+                                       distribution=distribution_occupancy)
+
+    def occupancy(self, distribution_occupancy=False, bins=None, range_=None,
+                  filter_size=None, filter_='gaussian',
+                  normalize_occupancy=True, **kwargs):
+        """
+        Compute a map of occupancy times
+
+        Parameters
+        ----------
+        bins, range_
+            Bin and range specification. See `Position.occupancy` for details.
+            If None, the default specification, set at initialization and
+            stored in `self.params`, is used.
+        distribution_occupancy : bool, optional
+            If True, the occupancy map will be normalized to have sum 1, such
+            that it can be interpreted as a frequency distribution for the
+            occupancy.
+        filter_size : scalar
+            Characteristic length of the smoothing filter to apply to the
+            occupancy map. If None, the default specification, set at
+            initialization and stored in `self.params`, is used.
+        filter_
+            See `IntensityMap2D.smooth` (..note:: defaults may differ).
+        normalize_occupancy
+            Passed as keyword 'normalize' to `IntensityMap2D.smooth`.
+        **kwargs : dict, optional
+            Not in use.
+
+        Returns
+        -------
+        IntensityMap2D
+            Occupancy map.
+
+        """
+        if filter_size is None:
+            filter_size = self.params['filter_size']
+        occupancy = self._occupancy(
+            bins=bins, range_=range_,
+            distribution_occupancy=distribution_occupancy)
+        return occupancy.smooth(filter_size, filter_=filter_,
+                                normalize=normalize_occupancy)
+
+    def total_time(self, **kwargs):
+        """
+        Compute the total recording time
+
+        Parameters
+        ----------
+        **kwargs : dict, optional
+            Not in use.
+
+        Returns
+        -------
+        scalar
+            Total time.
+
+        """
+        return self.position.total_time()
+
+    @memoize_method
+    def ratemap(self, bins=None, range_=None, normalize_ratemean=False,
+                filter_size=None, filter_mode='pre', filter_='gaussian',
+                normalize_ratemap=True, **kwargs):
+        """
+        Compute the firing rate map of the cell
+
+        Parameters
+        ----------
+        bins, range_
+            See `Cell.occupancy`.
+        normalize_ratemean : bool, optional
+            If True, the firing rate is normalized such that the mean firing
+            rate is 1.0.
+        filter_size : scalar, optional
+            Characteristic length of the smoothing filter used in the
+            computation. If None, the default filter size, set at
+            initialization and stored in `self.params`, is used.
+        filter_mode : {'pre', 'post'}
+
+            ``pre``
+                The occupancy map and spike histogram are smoothed
+                individually, and then divided to create the firing rate map.
+            ``post``
+                The histogram is divided by the occupancy to create a raw,
+                unsmoothed firing rate map, which is then smoothed.
+        filter_
+            See `IntensityMap2D.smooth` (..note:: defaults may differ).
+        normalize_ratemap
+            Passed as keyword 'normalize' to `IntensityMap2D.smooth`.
+        **kwargs: dict, optional
+            Passed on to `Cell.total_time`.
+
+        Returns
+        -------
+        IntensityMap2D
+            Firing rate map.
+
+        """
+        if filter_size is None:
+            filter_size = self.params['filter_size']
+
+        if filter_mode == 'pre':
+            prefilter_size = filter_size
+            postfilter_size = 0.0
+        elif filter_mode == 'post':
+            prefilter_size = 0.0
+            postfilter_size = filter_size
         else:
-            firing_rate = spikemap / timemap
+            raise ValueError("unknown filter mode {}"
+                             .format(filter_mode))
 
-        return firing_rate
+        kwargs.update(
+            bins=bins,
+            range_=range_,
+            filter_size=prefilter_size,
+            filter_=filter_,
+            distribution_occupancy=False,
+            distribution_spikemap=False,
+            normalize_occupancy=normalize_ratemap,
+            normalize_spikemap=normalize_ratemap,
+        )
+
+        occupancy = self.occupancy(**kwargs)
+        spikemap = self.spikemap(**kwargs)
+
+        ratemap = spikemap / occupancy
+        if normalize_ratemean:
+            kwargs.update(normalize_ratemean=False)
+            ratemap /= self.rate_mean(**kwargs)
+
+        return ratemap.smooth(postfilter_size, filter_=filter_,
+                              normalize=normalize_ratemap)
+
+    # This is really a stochastic property and should ideally not be memoized,
+    # but ain't nobody got time for that.
+    @memoize_method
+    def stability(self, **kwargs):
+        """
+        Compute a measure of the spatial stability of the cell firing pattern
+
+        Returns
+        -------
+        scalar
+            The spatial stability of the cell firing pattern.
+        **kwargs : dict, optional
+            Keyword arguments are passed to, `Cell.ratemap`,
+            `Cell.occupancy`, `Cell.nspikes` and `Cell.total_time`.
+
+        """
+        kwargs.update(
+            filter_size=2.0 * self.params['filter_size'],
+            distribution_occupancy=False,
+            normalize_ratemean=False,
+        )
+        rmap = self.ratemap(**kwargs)
+
+        kwargs.update(filter_size=0.0)
+
+        def _stability_terms(cell1, cell2):
+            dev = cell1.ratemap(**kwargs) - cell2.ratemap(**kwargs)
+            deviation = dev * dev / rmap
+
+            invtime1 = 1.0 / cell1.occupancy(**kwargs)
+            invtime2 = 1.0 / cell2.occupancy(**kwargs)
+            invtime = invtime1 + invtime2
+
+            return deviation.sum(), invtime.sum()
+
+        def _interval_length(int_):
+            return int_[1] - int_[0]
+
+        def _intervals():
+            split1, split2 = numpy.sort(numpy.random.random_sample(2))
+            ints = ((0.0, split1), (split1, split2), (split2, 1.0))
+            return sorted(ints, key=_interval_length, reverse=True)
+
+        deviation_sum = 0.0
+        invtime_sum = 0.0
+        trials = 50
+        for _ in range(trials):
+            int1, int2, _ = _intervals()
+            new_cell1 = self.subinterval(*int1)
+            new_cell2 = self.subinterval(*int2)
+            deviation, invtime = _stability_terms(new_cell1, new_cell2)
+            deviation_sum += deviation
+            invtime_sum += invtime
+
+        mean_sfactor = deviation_sum / invtime_sum
+
+        def _transform(x):
+            return 1.0 / (1.0 + x)
+            #return numpy.exp(-x)
+
+        return _transform(mean_sfactor)
+
+    def subinterval(self, start, stop):
+        """
+        Create a Cell object from the data recored in part of the session
+
+        Parameters
+        ----------
+        start, stop : scalar in [0, 1]
+            Start and stop times for the subinterval to use, given as fractions
+            of the total length of the recording session.
+
+        Returns
+        -------
+        Cell
+            New Cell object based on the data recorded between
+            ..math:`t_0 + (t_f - t_0) * start` and ..math:`t_0 + (t_f - t_0)
+            * stop`.
+
+        """
+        data = self.data
+        params = self.params
+        pos = self.position
+        posdata = pos.data
+        posparams = pos.params
+
+        t, x, y = posdata['t'], posdata['x'], posdata['y']
+        t_0, t_1 = t[(0, -1), ]
+        length = t_1 - t_0
+
+        t_start, t_stop = t_0 + length * start, t_0 + length * stop
+        posindex = numpy.logical_and(t_start < t, t <= t_stop)
+        new_t, new_x, new_y = t[posindex], x[posindex], y[posindex]
+        new_pos = Position(new_t, new_x, new_y,
+                           speed_window=posparams['speed_window'],
+                           min_speed=posparams['min_speed'])
+
+        spike_t = data['spike_t']
+        spikeindex = numpy.logical_and(t_start < spike_t, spike_t <= t_stop)
+        new_spike_t = data['spike_t'][spikeindex]
+
+        return Cell(position=new_pos, spike_t=new_spike_t,
+                    bins=params['bins'],
+                    range_=params['range_'],
+                    filter_size=params['filter_size'],
+                    threshold=params['threshold'])
 
     def plot_spikes(self, axes=None, path=False, marker='o', alpha=0.25,
                     zorder=10, **kwargs):
@@ -1312,390 +2432,634 @@ class Cell(BaseCell):
         The spikes can be added to an existing plot via the optional 'axes'
         argument.
 
-        :axes: Axes instance to add the spikes to. If None (default), the
-               current Axes instance with equal aspect ratio is used if any, or
-               a new one created.
-        :path: if True, plot the path through the spikes using some hopefully
-               sensible defaults. For better control, leave this False and use
-               self.pos.plot_path() instead.
-        :marker: a valid matplotlib marker specification. Defaults to 'o'
-        :alpha: the opacity of the markers. Defaults to 0.5.
-        :zorder: number determining the plotting order. Increase this if the
-                 spikes tend to be hidden behind other plotted features (e.g.
-                 the path).
-        :kwargs: additional keyword arguments passed on to axes.plot() for
-                 specifying marker properties. Note especially the keywords
-                 'color', 'markersize' and 'label'.
-        :returns: list containing the plotted Line2D instance
+        Parameters
+        ----------
+        axes : Axes or None, optional
+            Axes instance to add the path to. If None, the most current Axes
+            instance with `aspect='equal'` is grabbed or created.
+        path : bool, optional
+            If True, plot the path through the spikes using some hopefully
+            sensible defaults. For better control, leave this False and use
+            `Position.plot_path` instead.
+        marker : matplotlib marker spec, optional
+            Marker to use when drawing the spikes.
+        alpha : scalar in [0, 1], optional
+            The opacity of the markers.
+        zorder : integer, optional
+            Number determining the plotting order. Increase this if the spikes
+            tend to be hidden behind other plotted features (e.g.  the path).
+        **kwargs : dict, optional
+            Additional keyword arguments passed are passed to `axes.plot`. Note
+            in particular the keywords 'color', 'markersize' and 'label'.
+
+        Returns
+        -------
+        list
+            List containing the plotted Line2D instances
 
         """
         if axes is None:
             axes = pyplot.gca(aspect='equal')
 
+        data = self.data
+
         h = []
         if path:
-            plines = self.pos.plot_path(axes=axes)
+            pos = self.position
+            plines = pos.plot_path(axes=axes)
             h += plines
 
-        h = axes.plot(self.spike_x, self.spike_y, linestyle='None',
-                      marker=marker, alpha=alpha, zorder=zorder, **kwargs)
+        kw = dict(linestyle='None', marker=marker, alpha=alpha, zorder=zorder)
+        kw.update(kwargs)
+
+        h = axes.plot(data['spike_x'], data['spike_y'], **kw)
+
+        range_ = self.params['range_']
+        if range_ is not None:
+            axes.set_xlim(range_[0])
+            axes.set_ylim(range_[1])
+
         return h
 
 
-class CellCollection(AlmostImmutable, Mapping):
+class CellCollection(AlmostImmutable, MutableSequence):
     """
-    Represent a collection of Cell instances (presumably from the same animal),
-    and provide methods for general batch operations such as computing the
-    distance matrices between cells, identifying modules using clustering
-    algorithms, and create collective plots. This class subclasses Mapping to
-    work as a read-only dict, and individual cell instances are looked up by
-    using the cell label as key.
+    Collect a number of Cell instances and provide methods for feature
+    extraction, clustering, and plotting.
+
+    This class is a sequence type, and individual cells can be accessed, added
+    and removed by standard subscripting syntax.
+
+    Parameters
+    ----------
+    cells : sequence
+        Sequence of Cell instances.
+    **kwargs : dict, optional
+        Any additional keyword arguments are stored as a dict in the attribute
+        `info`. They are not used for internal computations.
 
     """
+    _cells = Memparams(list, '_cells')
 
     def __init__(self, cells, **kwargs):
-        """
-        Initialize the CellCollection instance
-
-        :cells: mapping of cell labels to Cell instances
-        :kwargs: none supported at the moment
-
-        """
         self._cells = cells
+        self.info = kwargs
 
-    def __getitem__(self, key):
-        return self._cells.__getitem__(key)
+        flname = memoize_method.friend_list_name
+        for cell in self:
+            try:
+                friends = getattr(cell, flname)
+            except AttributeError:
+                setattr(cell, flname, [self])
+            else:
+                friends.append(self)
 
-    def __iter__(self):
-        return self._cells.__iter__()
+    # Implement abstract methods
+    def __getitem__(self, index, *args, **kwargs):
+        item = self._cells.__getitem__(index, *args, **kwargs)
+        if isinstance(index, slice):
+            return type(self)(item, **self.info)
+        return item
 
-    def __len__(self):
-        return self._cells.__len__()
+    def __setitem__(self, *args, **kwargs):
+        return self._cells.__setitem__(*args, **kwargs)
+
+    def __delitem__(self, *args, **kwargs):
+        return self._cells.__delitem__(*args, **kwargs)
+
+    def __len__(self, *args, **kwargs):
+        return self._cells.__len__(*args, **kwargs)
+
+    def insert(self, *args, **kwargs):
+        return self._cells.insert(*args, **kwargs)
+
+    # Override certain possibly very slow mixins
+    def __iter__(self, *args, **kwargs):
+        return self._cells.__iter__(*args, **kwargs)
+
+    def __reversed__(self, *args, **kwargs):
+        item = self._cells.__reversed__(*args, **kwargs)
+        return type(self)(item, **self.info)
+
+    def index(self, *args, **kwargs):
+        return self._cells.index(*args, **kwargs)
+
+    # Implement equality comparison
+    def __eq__(self, other):
+        return type(other) == type(self) and other._cells == self._cells
+
+    def __ne__(self, other):
+        return not self.__eq__(other)
+
+    @staticmethod
+    def _cell_list_from_session(session, bins, range_, position_kw, cell_kw):
+        """
+        Create a list of instantiated Cell objects from a single experimental
+        session
+
+        Contains the common part of the factory methods `from_session` and
+        `from_multiple_sessions`.
+
+        """
+        pkw = dict(position_kw)
+        for key in ('info', 'params'):
+            try:
+                pkw.update(session[key])
+            except KeyError:
+                pass
+
+        position = Position(session['t'], session['x'], session['y'], **pkw)
+
+        cells = session['cells']
+        clist = []
+        for cell in cells:
+            ckw = dict(cell_kw)
+            for key in ('info', 'params'):
+                try:
+                    ckw.update(cell[key])
+                except KeyError:
+                    pass
+
+            ckw.update(position=position, spike_t=cell['spike_t'], bins=bins,
+                       range_=range_)
+            clist.append(Cell(**ckw))
+        return clist
 
     @classmethod
-    def from_session(cls, session, bins, range_, thresholds, **kwargs):
+    def from_session(cls, session, bins, range_=None, position_kw=None,
+                     cell_kw=None, **kwargs):
         """
         Construct a CellCollection from a single experimental session
 
-        :session: session mapping containing at least the following fields:
-            't': array-like, giving the times of position samples. Should be
-                 close to regularly spaced if the kwarg speed_window is
-                 provided.
-            'x': array-like, giving the x coordinates of position samples
-            'y': array-like, giving the y coordinates of position samples
-            'spike_ts': mapping of cell labels to spike time arrays giving the
-                        times at which spikes were detected from the cell.
-        :bins: bin specification defining the bins to use in the firing rate
-               maps. The simplest formats are a scalar 'nbins' or a tuple
-               '(nbins_x, nbins_y)', giving the number of bins of equal widths
-               in each direction. For information about other valid formats,
-               see the documentation for numpy.histogram2d().
-        :range_: range specification giving the x and y values of the outermost
-                 bin edges. The format is a tuple '((xmin, xmax), (ymin,
-                 ymax))'. Samples outside this region will be discarded.
-        :thresholds: mapping of cell labels to peak thresholds. Used to
-                     separate peaks in the autocorrelogram of the firing rate
-                     of the cell. A good idea may be to use a defaultdict to
-                     supply a default value, and only set explicit thresholds
-                     other than the default when necessary.
-        :kwargs: Passed through to the Position and Cell constructors. Note:
-                 'speed_window', 'min_speed' (Position), 'filter_size' (Cell).
+        Parameters
+        ----------
+        session : dict
+            Dict containing the following fields:
+
+            ``'t' : array-like``
+                Array containing the times of the position samples.
+            ``'x', 'y' : array-like``
+                Arrays containing the x- and y-positions of the position
+                samples.  Missing samples can be represented by nans or by
+                using a masked array for at least one of the arrays.
+            ``'cells': sequence``
+                Sequence where each element is a dict containing the
+                information for a particular cell in the following fields:
+
+                ``'spike_t': array-like``
+                    Array giving the times at which the cell spiked.
+                ``'params': dict, optional``
+                    Dict containing parameters to be passed as keyword
+                    arguments to the Cell instantiation.
+                ``'info': dict, optional``
+                    Dict containing information about the cell. Passed as
+                    keyword arguments to the Cell instantiation.
+            ``'params': dict, optional``
+                Dict containing parameters to be passed as keyword arguments to
+                the Position instantiation.
+            ``'info': dict, optional``
+                Dict containing information about the session. Passed as
+                keyword arguments to the Position instantiation.
+        bins, range_ (range is optional)
+            See `Cell`.
+        position_kw : dict, optional
+            Extra keyword arguments to `Position`. The keyword arguments from
+            the 'params' and 'info' fields in the elements of
+            `session['cells']` takes precedence in case of conflicts.
+        cell_kw : dict, optional
+            Extra keyword arguments to `Cell`. The keyword arguments from
+            the 'params' and 'info' fields in `session` takes precedence in
+            case of conflicts.
+        **kwargs : dict, optional
+            Any additional keyword arguments are stored as a dict in the
+            attribute `info` on the CellCollection instance. They are not used
+            for internal computations.
 
         """
-        t, x, y, spike_ts = (session[skey]
-                             for skey in ('t', 'x', 'y', 'spike_ts'))
-        pos = Position(t, x, y, **kwargs)
+        if position_kw is None:
+            position_kw = {}
+        if cell_kw is None:
+            cell_kw = {}
 
-        cells = {str(ckey): Cell(spike_t, pos, bins, range_,
-                                 threshold=thresholds[ckey], **kwargs)
-                 for (ckey, spike_t) in spike_ts.items()}
-        return cls(cells)
+        clist = cls._cell_list_from_session(session, bins, range_,
+                                            position_kw, cell_kw)
+        return cls(clist, **kwargs)
 
     @classmethod
-    def from_multiple_sessions(cls, sessions, bins, range_, thresholds,
-                               **kwargs):
+    def from_multiple_sessions(cls, sessions, bins, range_=None,
+                               position_kw=None, cell_kw=None, **kwargs):
         """
         Construct a CellCollection from multiple experimental sessions
 
-        :sessions: mapping of session labels to session mappings, or sequence
-                   of session mappings. Each session mapping should contain at
-                   least the following fields:
-            't': array-like, giving the times of position samples. Should be
-                 close to regularly spaced if the kwarg speed_window is
-                 provided.
-            'x': array-like, giving the x coordinates of position samples
-            'y': array-like, giving the y coordinates of position samples
-            'spike_ts': mapping of cell labels to spike time arrays giving the
-                        times at which spikes were detected from the cell.
-        :bins: bin specification defining the bins to use in the firing rate
-               maps. The simplest formats are a scalar 'nbins' or a tuple
-               '(nbins_x, nbins_y)', giving the number of bins of equal widths
-               in each direction. For information about other valid formats,
-               see the documentation for numpy.histogram2d().
-        :range_: range specification giving the x and y values of the outermost
-                 bin edges. The format is a tuple '((xmin, xmax), (ymin,
-                 ymax))'. Samples outside this region will be discarded.
-        :thresholds: nested mapping that maps session labels to mappings of
-                     cell labels to peak thresholds. If 'sessions' is
-                     a sequence, this should also be a sequence. A good idea
-                     may be to use a defaultdict for each session to supply
-                     a default value, and only set explicit thresholds other
-                     than the default when necessary.
-        :kwargs: Passed through to the Position and Cell constructors. Note:
-                 'speed_window', 'min_speed' (Position), 'filter_size',
-                 'threshold' (Cell).
+        For each Cell instance `cell`, `cell.info['session']` will be set to
+        the index of the session the cell was recorded in. This can be used to
+        look up cells from the same session with the `CellCollection.lookup`
+        method.
+
+        Parameters
+        ----------
+        sessions : dict
+            Dict containing the following fields:
+
+            ``'sessions' : sequence``
+                Sequence containing a dict for each experimental session. See
+                `CellCollection.from_session` for an explanation of the format
+                of each of the session dicts.
+            ``'params': dict, optional``
+                Dict containing parameters to be passed as keyword arguments to
+                the CellCollection instantiation.
+            ``'info': dict, optional``
+                Dict containing information common to all sessions. Will be
+                stored in the attribute `info` on the CellCollection instance.
+        bins, range_ (range is optional)
+            See `Cell`.
+        position_kw : dict, optional
+            Extra keyword arguments to `Position`. The keyword arguments from
+            the 'params' and 'info' fields in `session` takes precedence in
+            case of conflicts.
+        cell_kw : dict, optional
+            Extra keyword arguments to `Cell`. The keyword arguments from the
+            'params' and 'info' fields in the elements of `session['cells']`
+            takes precedence in case of conflicts.
+        **kwargs : dict, optional
+            Any additional keyword arguments are stored as a dict in the
+            attribute `info` on the CellCollection instance. They are not used
+            for internal computations.
 
         """
-        all_cells = {}
-        try:
-            items = sessions.items()
-        except AttributeError:
-            # We didn't get a mapping. Assume the next best thing: a sequence
-            items = enumerate(sessions)
+        if position_kw is None:
+            position_kw = {}
+        if cell_kw is None:
+            cell_kw = {}
 
-        for (sskey, session) in items:
-            t, x, y, spike_ts = (session[skey]
-                                 for skey in ('t', 'x', 'y', 'spike_ts'))
-            pos = Position(t, x, y, **kwargs)
-            # NOTE: currently, BinnedSet2D's are created via Position, such
-            # that we initialize separate (but equal) BinnedSet2D's for each
-            # session.
-            cells = {str(sskey) + '-' + str(ckey):
-                     Cell(spike_t, pos, bins, range_,
-                          threshold=thresholds[sskey][ckey], **kwargs)
-                     for (ckey, spike_t) in spike_ts.items()}
-            all_cells.update(cells)
-        return cls(all_cells)
+        clist = []
+        for (i, session) in enumerate(sessions['sessions']):
+            clist += cls._cell_list_from_session(session, bins, range_,
+                                                 position_kw, cell_kw)
 
-    def lookup(self, keys):
+        for key in ('info', 'params'):
+            try:
+                kwargs.update(sessions[key])
+            except KeyError:
+                pass
+
+        return cls(clist, **kwargs)
+
+    def lookup(self, info):
         """
-        Look up cells using a sequence of keys
+        Look up cells through their `info` attribute
 
-        The returned keys and cells are sorted by the keys.
+        Parameters
+        ----------
+        info : dict
+            Dict containing fields that should be matched in either `cell.info`
+            or `cell.pos.info` in all returned Cell instances `cell`.
 
-        :keys: sequence of keys to look up. If None, all cells are looked
-               selected.
-        :returns: sorted list of keys, list of cells.
-
-        """
-        if keys is None:
-            keys, cells = zip(*sorted(self.items()))
-        else:
-            keys = sorted(keys)
-            cells = [self[key] for key in keys]
-
-        return keys, cells
-
-    @memoize_method
-    def _mean_attribute(self, attr, keys=None):
-        """
-        Compute the mean of an attribute of the cells in the collection
-
-        :attr: the Cell attribute to compute the mean over. Assumed to be
-               a callable returning the requested values.
-        :keys: sequence of cell keys to select cells to compute the mean peak
-               locations from. If None, all cells are included.
-        :returns: attribute mean
+        Returns
+        -------
+        CellCollection
+            Collection of Cell instances mathcing `info`.
 
         """
-        __, cells = self.lookup(keys)
-        attrsum = sum(getattr(cell, attr)() for cell in cells)
-        ninv = 1.0 / len(cells)
+        clist = []
+        for cell in self:
+            for key, value in info.items():
+                try:
+                    cvalue = cell.info[key]
+                except KeyError:
+                    pass
+                else:
+                    if cvalue == value:
+                        clist.append(cell)
+                        continue
+                try:
+                    cpvalue = cell.pos.info[key]
+                except (AttributeError, KeyError):
+                    pass
+                else:
+                    if cpvalue == value:
+                        clist.append(cell)
+
+        return type(self)(clist, **self.info)
+
+    def _mean_attribute(self, attr, **kwargs):
+        """
+        Compute the mean of an attribute of the cells in the CellCollection
+
+        Parameters
+        ----------
+        attr : string
+            Name of the Cell attribute to compute the mean over. It is assumed
+            that for a Cell instance `cell`, `getattr(cell, attr)`  is
+            a callable returning the desired object.
+        **kwargs : dict, optional
+            Keyword arguments are passed to `getattr(cell, attr)`.
+
+        Returns
+        -------
+        mean :
+            Mean of the attribute across the cells in the CellCollection.
+
+        """
+        attrsum = sum(getattr(cell, attr)(**kwargs) for cell in self)
+        ninv = 1.0 / len(self)
         return ninv * attrsum
 
-    @memoize_method
-    def _mean_peak_attribute(self, attr, keys=None):
+    def _mean_peak_attribute(self, attr, roll=0, **kwargs):
         """
         Compute the mean of an attribute of the peaks of the cells in the
         collection
 
         Here, the attributes are assumed to be arrays with a value for each of
         the peaks in the inner ring, such that the arrays must be rolled into
-        maximal peak alignment before computing the mean (see BaseCell.roll()
+        maximal peak alignment before computing the mean (see `BaseCell.roll`
         for explanation of roll).
 
-        :attr: the Cell attribute to compute the mean over. Assumed to be
-               a callable returning the requested values in the form of an
-               array with entries for each peak.
-        :keys: sequence of cell keys to select cells to compute the mean peak
-               locations from. If None, all cells are included.
-        :returns: attribute mean
+        Parameters
+        ----------
+        attr : string
+            Name of the Cell attribute to compute the mean over. It is assumed
+            that for a Cell instance `cell`, `getattr(cell, attr)`  is
+            a callable returning the desired object.
+        roll : integer, optional
+            Global roll of the peak order of the cell. See `BaseCell.roll` for
+            the full explanation of the `roll` parameter.  ..note:: The
+            relative roll between cells necessary for for alignment of cell
+            peaks is automatically handled by this function.  This parameter
+            only controls an optional global roll, applied to all cells.
+        **kwargs : dict, optional
+            Keyword arguments are passed to `getattr(cell, attr)` and
+            `BaseCell.roll`.
+
+        Returns
+        -------
+        mean :
+            Mean of the peak attribute across the cells in the CellCollection.
 
         """
-        __, cells = self.lookup(keys)
-        refcell = cells[0]
-
+        refcell = self[0]
         attrsum = 0.0
-        for cell in cells:
-            roll = cell.roll(refcell)
-            attrsum += numpy.roll(getattr(cell, attr)(), roll, axis=0)
-        ninv = 1.0 / len(cells)
+        for cell in self:
+            cellroll = roll + cell.roll(refcell, **kwargs)
+            attrsum += numpy.roll(getattr(cell, attr)(**kwargs), cellroll,
+                                  axis=0)
+        ninv = 1.0 / len(self)
         return ninv * attrsum
 
-    def mean_firing_field(self, keys=None):
+    def mean_firing_field(self, **kwargs):
         """
         Compute the mean firing field of cells in the collection
 
-        :keys: sequence of cell keys to select cells to compute the mean firing
-               field from. If None, all cells are included.
-        :returns: the mean firing field covariance matrix
+        Parameters
+        ----------
+        **kwargs : dict, optional
+            Keyword arguments are passed to `cell.firing_field` for each cell.
+
+        Returns
+        -------
+        ndarray
+            The mean firing field covariance matrix.
 
         """
-        return self._mean_attribute('firing_field', keys=keys)
+        return self._mean_attribute('firing_field', **kwargs)
 
-    def mean_peaks(self, keys=None):
+    def mean_ellpars(self, cartesian_ellpars=False, **kwargs):
         """
-        Compute the mean locations of the inner six peaks of cells in the
-        collection
+        Compute the mean of the ellipse parameters of the cells in the
+        CellCollection
 
-        :keys: sequence of cell keys to select cells to compute the mean peak
-               locations from. If None, all cells are included.
-        :returns: numpy array of mean peak locations
+        Parameters
+        ----------
+        cartesian_ellpars : bool, optional
+            If True, the parameters are returned in cartesian coordinates.
+            If False, they are returned in cartesian coordinates.
+            In all cases, the means are computed in cartesian coordinates.
+        **kwargs : dict, optional
+            Keyword arguments are passed to `cell.ellpars` for each cell.
 
-        """
-        return self._mean_peak_attribute('peaks', keys=keys)
-
-    def mean_peaks_polar(self, keys=None):
-        """
-        Compute the mean polar coordinates of the inner six peaks of cells in
-        the collection
-
-        :keys: sequence of cell keys to select cells to compute the mean peak
-               polar coordinates from. If None, all cells are included.
-        :returns: numpy array of mean peak polar coordinates
+        Returns
+        -------
+        ndarray
+            The mean ellipse parameters.
 
         """
-        return self._mean_peak_attribute('peaks_polar', keys=keys)
+        kwargs.update(cartesian_ellpars=True)
+        ell_cart = self._mean_attribute('ellpars', **kwargs)
+        if cartesian_ellpars:
+            return ell_cart
+        return numpy.array((numpy.sqrt(numpy.sum(ell_cart * ell_cart)),
+                            numpy.arctan2(ell_cart[1], ell_cart[0])))
 
-    @memoize_method
-    def stacked_firing_rate(self, keys=None, normalize=None, threshold=None):
+    def mean_grid_peaks(self, polar_peaks=False, **kwargs):
+        """
+        Compute the mean of the coordinates of the inner six peaks in the
+        autocorrelogram of cells in the CellCollection
+
+        Parameters
+        ----------
+        polar_peaks : bool, optional
+            If True, the mean peak coordinates are returned as polar
+            coordinates. If False, they are returned as cartesian coordinates.
+            In all cases, the means are computed in cartesian coordinates.
+        **kwargs : dict, optional
+            Keyword arguments are passed to `cell.firing_field` for each cell.
+
+        Returns
+        -------
+        ndarray
+            Mean peak coordinates.
+
+        """
+        kwargs.update(polar_peaks=False)
+        peaks = self._mean_peak_attribute('grid_peaks', **kwargs)
+        if polar_peaks:
+            px, py = peaks[:, 0], peaks[:, 1]
+            radii = numpy.sqrt(px * px + py * py)
+            angles = numpy.arctan2(py, px)
+            peaks = numpy.column_stack((radii, angles))
+
+        return peaks
+
+    def stacked_ratemap(self, normalize='mean', threshold=None, **kwargs):
         """
         Compute the stacked firing rate map of cells in the collection
 
-        The stacked firing rate map is defined as the average of the firing
-        rates of all the cells.
+        The stacked firing rate map is the binwise average of the firing
+        rate maps of all the cells.
 
-        :keys: sequence of cell keys to select cells to compute the stacked
-               firing rate from. If None, all cells are included.
-        :normalize: string to select how to normalize the rate maps before
-                    stacking. Possible values:
-            None: no normalization is performed
-            'max': the maximum value of each rate map will be normalized to 1.0
-            'mean': the mean of the rate maps will be normalized to 1.0
-            'std': the standard deviation of the rate maps will be normalized
-                   to 1.0
-            'zscore': the rate maps are replaced with the correpsonding Z-score
-                      maps: for each rate map, its mean is be subtracted and
-                      the result is be divided by the standard deviation.
-        'threshold': if not None, each firing rate will be transformed to
-                     a binary variable with the value 1 in bins where the
-                     normalized firing rate exceeds `threshold`, and
-                     0 otherwise.
-        :returns: IntensityMap2D instance containing the stacked firing rate.
+        Parameters
+        ----------
+        normalize : {None, 'max', 'mean', 'std', 'zscore'}, optional
+            Flag to choose the mode of rate map normalization before averaging.
+            Possible values:
+
+            ``None``
+                No normalization si performed.
+            ``'max'``
+                The maximum value of each rate map is normalized to 1.0.
+            ``'mean'``
+                The mean firing rate of each cell is normalized to 1.0.
+            ``'std'``
+                The standard deviation of the firing rate of each cell is
+                normalized to 1.0.
+            ``'zscore'``
+                The firing rate of each cell is normalized to its Z-score by
+                subtracting the mean firing rate and dividing by the standard
+                deviation.
+        threshold : scalar or None, optional
+            If not None, each firing rate will be transformed to a binary map
+            with the value 1 in bins where the normalized firing rate exceeds
+            the threshold value, and 0 otherwise.
+        **kwargs : dict, optional
+            Additional keyword arguments are passed to each invocation of
+            `BaseCell.ratemap`, `BaseCell.rate_mean` and `BaseCell.rate_std`.
+
+        Returns
+        -------
+        IntensityMap2D
+            The stacked firing rate map.
 
         """
-        __, cells = self.lookup(keys)
-
         if normalize is None:
-            def _norm(imap):
-                return imap
+            def _norm(cell):
+                return cell.ratemap(**kwargs)
         elif normalize == 'max':
-            def _norm(imap):
-                return imap / imap.max()
+            def _norm(cell):
+                ratemap = cell.ratemap(**kwargs)
+                return ratemap / ratemap.max()
         elif normalize == 'mean':
-            def _norm(imap):
-                return imap / imap.mean()
+            def _norm(cell):
+                return cell.ratemap(**kwargs) / cell.rate_mean(**kwargs)
         elif normalize == 'std':
-            def _norm(imap):
-                return imap / imap.std()
+            def _norm(cell):
+                return cell.ratemap(**kwargs) / cell.rate_std(**kwargs)
         elif normalize == 'zscore':
-            def _norm(imap):
-                return (imap - imap.mean()) / imap.std()
+            def _norm(cell):
+                return ((cell.ratemap(**kwargs) - cell.rate_mean(**kwargs))
+                        / cell.rate_std(**kwargs))
         else:
             raise ValueError("unknown normalization: {}".format(normalize))
 
         if threshold is None:
             norm = _norm
         else:
-            def norm(imap):
-                imap = _norm(imap)
-                return (imap > threshold).astype(numpy.float_)
+            def norm(cell):
+                ratemap = _norm(cell)
+                return (ratemap > threshold).astype(numpy.float_)
 
-        return IntensityMap2D.mean_map((norm(cell.firing_rate)
-                                        for cell in cells),
+        return IntensityMap2D.mean_map((norm(cell) for cell in self),
                                        ignore_missing=True)
 
-    @memoize_method
-    def distances(self, keys1=None, keys2=None, **kwargs):
+    def distances(self, other=None, **kwargs):
         """
-        Compute a distance matrix between cells
+        Compute a distance matrix between the cells in CellCollection instances
 
         Parameters
         ----------
-        keys1, keys2 : sequence, optional
-            Sequences of cell keys to select cells to compute the distance
-            matrix between. If `None`, all cells are included.
+        other : None or iterable, optional
+            If `other` is an iterable, the distance matrix between the cells in
+            `cell` and the elements in `other`. If None, the distance matrix is
+            computed between the cells in this instance.
         kwargs : dict, optional
-            Keyword arguments to pass to `BaseCell.features`.
+            Additional keyword arguments to pass to `BaseCell.distance`.
 
         Returns
         -------
         DataFrame
-            The distance matrix, indexed along rows and columns by the cell
-            keys.
+            The distance matrix, indexed along rows by the Cell instances in
+            `self`, and along columns by the Cell instance(s) in `other`. Both
+            row and column order reflect the order of cells in the
+            CellCollections.
 
         """
-        keys1, cells1 = self.lookup(keys1)
-        keys2, cells2 = self.lookup(keys2)
+        if other is None:
+            other = self
 
-        distdict = {}
-        for (key1, cell1) in zip(keys1, cells1):
-            dists = [cell1.distance(cell2, **kwargs)
-                     for cell2 in cells2]
-            distdict[key1] = pandas.Series(dists, index=keys2)
+        distdict = {cell1: {cell2: cell1.distance(cell2, **kwargs)
+                            for cell2 in other} for cell1 in self}
 
-        distmatrix = pandas.DataFrame(distdict).transpose()
+        # Order the distance matrix using `loc`
+        return pandas.DataFrame(distdict).loc[self, other]
 
-        return distmatrix
+    def rolls(self, other=None, **kwargs):
+        """
+        Compute a roll matrix between the cells in CellCollection instances
 
-    @memoize_method
-    def features(self, keys=None, **kwargs):
+        Parameters
+        ----------
+        other : None or iterable, optional
+            If `other` is an iterable, the roll matrix between the cells in
+            `cell` and the elements in `other`. If None, the roll matrix is
+            computed between the cells in this instance.
+        kwargs : dict, optional
+            Additional keyword arguments to pass to `BaseCell.roll`.
+
+        Returns
+        -------
+        DataFrame
+            The roll matrix, indexed along rows by the Cell instances in
+            `self`, and along columns by the Cell instances in `other`. Both
+            row and column order reflect the order of cells in the
+            CellCollections.
+
+        """
+        if other is None:
+            other = self
+
+        rolldict = {cell1: {cell2: cell1.roll(cell2, **kwargs)
+                            for cell2 in other} for cell1 in self}
+
+        # Order the roll matrix using `loc`
+        return pandas.DataFrame(rolldict).transpose().loc[self, other]
+
+    def features(self, index=FeatureNames.default_features, weights=None,
+                 roll=0, **kwargs):
         """
         Compute a feature array of the cells
 
-        The feature series comprising the array are computed with the peak roll
-        for each cell required for global consistency.
+        The feature series comprising the array are computed, using the peak
+        roll for each cell required for global consistency.
 
         Parameters
         ----------
-        keys : sequence, optional
-            Sequence of cell keys to select cells to compute the feature array
-            for. If `None`, all cells are included.
+        index, weights
+            See `BaseCell.features`.
+        roll : integer, optional
+            Global roll of peak order of the cell. See `BaseCell.roll` for the
+            full explanation of the `roll` parameter.  ..note:: The relative
+            roll between cells necessary for for alignment of cell peaks is
+            automatically handled by this function if necessary (that is, if
+            `index` contains one or more names from `gridcell.grid_features`).
+            This parameter only controls an optional global roll, applied to
+            all cells.
         kwargs : dict, optional
-            Keyword arguments to pass to `BaseCell.features`.
+            Keyword arguments are passed to `BaseCell.features` and
+            `BaseCell.roll`.
 
         Returns
         -------
         DataFrame
-            Feature array. The DataFrame row indices are the cell keys, while
-            the DataFrame columns contain the features and are labelled by
-            appropriate Latex-formatted strings.
+            Feature array. The DataFrame row indices are the `Cell` instances,
+            while the DataFrame columns contain the features and are labelled
+            by the index from `BaseCell.features`. The row order reflects the
+            order of the elements in the CellCollection.
 
         """
-        keys, cells = self.lookup(keys)
-        refcell = cells[0]
+        relroll = pandas.Series({cell: 0 for cell in self})
+        for ind in index:
+            if ind in FeatureNames.peak_features:
+                refcell = self[0]
+                relroll = self.rolls(other=(refcell,), **kwargs)[refcell]
+                break
 
-        featdict = {}
-        for (key, cell) in zip(keys, cells):
-            roll = cell.roll(refcell)
-            featdict[key] = cell.features(roll=roll, **kwargs)
+        kwargs.update(index=index, weights=weights)
+        featdict = {cell: cell.features(roll=(roll + relroll[cell]), **kwargs)
+                    for cell in self}
 
-        features = pandas.DataFrame(featdict).transpose()
+        # Order the feature array using `loc`
+        return pandas.DataFrame(featdict).transpose().loc[self]
 
-        return features
-
-    def dbscan(self, eps, min_samples, keys=None, features_kw=None,
-               mod_kw=None, **kwargs):
+    def dbscan(self, eps, min_samples, feat_kw=None, **kwargs):
         """
         Use the DBSCAN clustering algorithm to find modules
 
@@ -1706,79 +3070,61 @@ class CellCollection(AlmostImmutable, Mapping):
         min_samples : integer
             Minimum number of neighbors for a point to be considered a core
             point.
-        keys : sequence, optional
-            Sequence of cell keys to select cells to search for modules among.
-            If `None`, all cells are included.
-        features_kw : dict, optional
-            Keyword arguments to pass to `BaseCell.features`.
-        mod_kw : dict, optional
-            Keyword arguments to pass to the factory method
-            `CellCollection.modules_from_labels`.
+        feat_kw : dict, optional
+            Keyword arguments to pass to `CellCollection.features`.
         **kwargs : dict, optional
-            Keyword arguments passed on to `cluster.dbscan()`.
+            Additional keyword arguments are passed on to `cluster.dbscan`.
 
         Returns
         -------
-        list
-            List of `Module` instances containing the detected modules.
-        CellCollection
-            CellCollection containing any outlier cells.
+        labels : sequence
+            Sequence of labels with indices corresponding to the inndices in
+            `self`: all cells with the same label become a module. The special
+            label `-1` denotes outliers. This output can be fed directly to
+            `Module.from_labels` to instantiate new `Module` instances based on
+            the labels.
 
         """
-        if features_kw is None:
-            features_kw = {}
+        if feat_kw is None:
+            feat_kw = {}
 
-        features = self.features(keys=keys, **features_kw)
-        keys, feature_arr = features.index, features.values
-        labels = cluster.dbscan(feature_arr, eps=eps,
-                                min_samples=min_samples, **kwargs)[1]
+        features = self.features(**feat_kw)
+        kwargs.update(eps=eps, min_samples=min_samples)
+        return cluster.dbscan(features.values, **kwargs)[1]
 
-        if mod_kw is None:
-            mod_kw = {}
-
-        return self.modules_from_labels(keys, labels, **mod_kw)
-
-    def mean_shift(self, keys=None, features_kw=None, mod_kw=None, **kwargs):
+    def mean_shift(self, feat_kw=None, cluster_all=False, **kwargs):
         """
         Use the mean shift clustering algorithm to find modules
 
         Parameters
         ----------
-        keys : sequence, optional
-            Sequence of cell keys to select cells to search for modules among.
-            If `None`, all cells are included.
-        features_kw : dict, optional
-            Keyword arguments to pass to `BaseCell.features`.
-        mod_kw : dict, optional
-            Keyword arguments to pass to the factory method
-            `CellCollection.modules_from_labels`.
+        feat_kw : dict, optional
+            Keyword arguments to pass to `CellCollection.features`.
+        cluster_all : bool, optional
+            Whether to assign all cells to a cluster. See `cluster.mean_shift`
+            for more details. ..note:: default value may be different here.
         **kwargs : dict, optional
-            Keyword arguments passed on to `cluster.mean_shift()`.
+            Additional keyword arguments are passed on to `cluster.mean_shift`.
 
         Returns
         -------
-        list
-            List of `Module` instances containing the detected modules.
-        CellCollection
-            CellCollection containing any outlier cells.
+        labels : sequence
+            Sequence of labels with indices corresponding to the inndices in
+            `self`: all cells with the same label become a module. The special
+            label `-1` denotes outliers. This output can be fed directly to
+            `Module.from_labels` to instantiate new `Module` instances based on
+            the labels.
 
         """
-        if features_kw is None:
-            features_kw = {}
+        if feat_kw is None:
+            feat_kw = {}
 
-        features = self.features(keys=keys, **features_kw)
-        keys, feature_arr = features.index, features.values
+        features = self.features(**feat_kw)
 
-        labels = cluster.mean_shift(feature_arr, cluster_all=False,
-                                    **kwargs)[1]
+        kwargs.update(cluster_all=cluster_all)
+        return cluster.mean_shift(features.values, **kwargs)[1]
 
-        if mod_kw is None:
-            mod_kw = {}
-
-        return self.modules_from_labels(keys, labels, **mod_kw)
-
-    def k_means(self, n_clusters, n_runs=1, keys=None, features_kw=None,
-                mod_kw=None, **kwargs):
+    def k_means(self, n_clusters, n_runs=1, feat_kw=None, **kwargs):
         """
         Use the K-means clustering algorithm to find modules
 
@@ -1790,254 +3136,132 @@ class CellCollection(AlmostImmutable, Mapping):
             The number of times to run the K-means algorithm. Each run is
             initialized with a new random state, and the run ending at
             the lowest intertia criterion is used.
-        keys : sequence, optional
-            Sequence of cell keys to select cells to search for modules among.
-            If `None`, all cells are included.
-        features_kw : dict, optional
+        feat_kw : dict, optional
             Keyword arguments to pass to `BaseCell.features`.
-        mod_kw : dict, optional
-            Keyword arguments to pass to the factory method
-            `CellCollection.modules_from_labels`.
         **kwargs : dict, optional
-            Keyword arguments passed on to `cluster.k_means()`.
+            Additional keyword arguments are passed on to `cluster.k_means`.
 
         Returns
         -------
-        list
-            List of `module` instances containing the detected modules.
-        CellCollection
-            CellCollection containing any outlier cells.
+        labels : sequence
+            Sequence of labels with indices corresponding to the inndices in
+            `self`: all cells with the same label become a module. The special
+            label `-1` denotes outliers. This output can be fed directly to
+            `Module.from_labels` to instantiate new `Module` instances based on
+            the labels.
 
         """
-        if features_kw is None:
-            features_kw = {}
+        if feat_kw is None:
+            feat_kw = {}
 
-        features = self.features(keys=keys, **features_kw)
-        keys, feature_arr = features.index, features.values
+        features = self.features(**feat_kw)
+        fvals = features.values
 
-        __, labels, inertia = cluster.k_means(feature_arr, n_clusters,
-                                              **kwargs)
-        for __ in range(n_runs - 1):
-            __, lbls, inrt = cluster.k_means(feature_arr, n_clusters, **kwargs)
+        __, labels, inertia = cluster.k_means(fvals, n_clusters, **kwargs)
+        for _ in range(n_runs - 1):
+            __, lbls, inrt = cluster.k_means(fvals, n_clusters, **kwargs)
             if inrt < inertia:
                 inertia = inrt
                 labels = lbls
 
-        if mod_kw is None:
-            mod_kw = {}
+        return labels
 
-        return self.modules_from_labels(keys, labels, **mod_kw)
-
-    def modules_from_labels(self, keys, labels, min_length=4, **kwargs):
+    def plot_features(self, index, feat_kw=None, axes=None, marker='o',
+                      mean=True, mean_kw=None, **kwargs):
         """
-        Use a list of keys and corresponding labels to instantiate Module
-        instances
+        Plot a selection of features of the cells in the CellCollection
+
+        The features can be added to an existing plot via the optional 'axes'
+        argument. In this case, the features markers are added to the right of
+        the current x limits.
 
         Parameters
         ----------
-        keys : sequence
-            Sequence of cell keys to create modules from.
-        labels : sequence
-            Sequence of labels corresponding to the `keys`.
-            All cells with the same label become a module. The special label
-            `-1` denotes outliers.
-        min_length : integer, optional
-            The minimum number of cells in a module. Tentative modules with
-            fewer cells than this are merged into the outliers.
+        index : sequence
+            Index of features to plot. See `BaseCell.features` for explanation.
+        feat_kw : dict, optional
+            Keyword arguments to pass to `BaseCell.features`.
+        axes : Axes, optional
+            Axes instance to add the features to. If None, the current Axes
+            instance is used if any, or a new one created.
+        marker : valid matplotlib marker specification, optional
+            Marker used to plot the features.
+        mean : bool, optional
+            If True, add a line showing the mean of each feature. By default
+            this will be a gray line (color='0.50') with linewidth 0.5, but
+            this can be overridden using the parameter `mean_kw`.
+        mean_kw : dict, optional
+            Keyword arguments to pass to `axes.plot` when plotting the mean.
         kwargs : dict, optional
-            Keyword arguments passed to the `Module` constructor.
-        :mod_kw: dict of keyword arguments to pass to the Module constructor.
-        :returns: sequence of module instances, sorted by mean grid scale;
-                  Cellcollection instance containing any outliers.
+            Additional keyword arguments to pass to `axes.plot`.  Note in
+            particular the keywords 'markersize', 'color' and 'label'.
 
-        """
-        tentative_modules_ = {}
-        outliers_ = {}
-        for (key, label) in zip(keys, labels):
-            if label == -1:
-                outliers_[key] = self[key]
-            else:
-                try:
-                    tentative_modules_[label][key] = self[key]
-                except KeyError:
-                    tentative_modules_[label] = {key: self[key]}
-        modules_ = []
-        for mod in tentative_modules_.values():
-            if len(mod) < min_length:
-                outliers_.update(mod)
-            else:
-                modules_.append(mod)
-        outliers = CellCollection(outliers_)
-        modules = [Module(mod, **kwargs) for mod in modules_]
-        modules.sort(key=(lambda mod: mod.template.scale()))
-
-        return modules, outliers
-
-    def plot_scales(self, axes=None, keys=None, marker='o', mean=True,
-                    mean_kw=None, **kwargs):
-        """
-        Plot the grid scales of cells in the cell collection
-
-        The scales can be added to an existing plot via the optional 'axes'
-        argument. In this case, the scale markers are added to the right of the
-        current x limits.
-
-        :axes: Axes instance to add the scales to. If None (default), the
-               current Axes instance is used if any, or a new one created.
-        :keys: sequence of cell keys to select cells to plot scales for. If
-               None (default), all cells are included.
-        :marker: a valid matplotlib marker specification. Defaults to 'o'
-        :mean: if True, add a line showing the mean of the plotted scales. By
-               default, a gray (color == 0.5) thin (linewidth == 0.5) line is
-               used, but this can be overridden using the parameter mean_kw.
-        :mean_kw: dict of keyword arguments to pass to the axes.plot() method
-                  used to plot the mean. Default: None (empty dict)
-        :kwargs: additional keyword arguments passed on to the axes.plot()
-                 method used to plot scales. Note in particular the keywords
-                 'markersize', 'color' and 'label'.
-        :returns: a list of the plotted Line2D instances
+        Returns
+        -------
+        list
+            List containing the plotted Line2D instances.
 
         """
         if axes is None:
             axes = pyplot.gca()
 
-        if mean_kw is None:
-            mean_kw = {}
+        if feat_kw is None:
+            feat_kw = {}
 
-        features = self.features(keys=keys, extra=True)
-        scales = features[features_index['l']]
-
-        # Start plotting from the current right end of the plot
-        xlim = axes.get_xlim()
-        right = xlim[1]
-        xlocs = numpy.arange(right, right + len(scales))
-
-        lines = axes.plot(xlocs, scales, linestyle='None', marker=marker,
-                          **kwargs)
-
-        if mean:
-            mscale = numpy.empty_like(xlocs)
-            mscale.fill(scales.mean())
-            lines += axes.plot(xlocs, mscale, linewidth=0.5, color='0.50',
-                               **mean_kw)
-
-        # Add ticklabels and rotate
-        add_ticks(axes.xaxis, xlocs, scales.index)
-        pyplot.xticks(axes=axes, rotation='vertical')
-
-        # Set limits so the plot is ready for another round
-        axes.set_xlim((xlim[0], xlocs[-1] + 1.0))
-
-        # This does not belong here anymore, but don't forget the syntax!
-        #fig.subplots_adjust(bottom=0.2)
-
-        return lines
-
-    def plot_angles(self, axes=None, keys=None, marker='o', mean=True,
-                    mean_kw=None, **kwargs):
-        """
-        Plot the grid angles of cells in the cell collection
-
-        The angles can be added to an existing plot via the optional 'axes'
-        argument. In this case, the angle markers are added to the right of the
-        current x limits.
-
-        :axes: Axes instance to add the angles to. If None (default), the
-               current Axes instance is used if any, or a new one created.
-        :keys: sequence of cell keys to select cells to plot angles for. If
-               None (default), all cells are included.
-        :marker: a valid matplotlib marker specification. Defaults to 'o'
-        :mean: if True, add lines showing the means of the plotted angles. By
-               default, a gray (color == 0.5) thin (linewidth == 0.5) line is
-               used, but this can be overridden using the parameter mean_kw.
-        :mean_kw: dict of keyword arguments to pass to the axes.plot() method
-                  used to plot the mean. Default: None (empty dict)
-        :kwargs: additional keyword arguments passed on to the axes.plot()
-                 method used to plot angles. Note in particular the keywords
-                 'markersize', 'color' and 'label'.
-        :returns: a list of the plotted Line2D instances
-
-        """
-        if axes is None:
-            axes = pyplot.gca()
-
-        features = self.features(keys=keys, extra=True)
-        index = [features_index[label]
-                 for label in ('beta1', 'beta2', 'beta3')]
-        angles = numpy.rad2deg(features[index])
+        features = self.features(index=index, **feat_kw)
 
         # Start plotting from the current right end of the plot
         xlim = axes.get_xlim()
         right = xlim[1]
-        xlocs = numpy.arange(right, right + len(angles))
+        xlocs = numpy.arange(right, right + len(features))
 
-        # Create a threefold tile of xlocs separated by a nan. This is a trick
-        # to stack three lines on top of each other as part of the same Line2D
-        # instance, without connecting the end of one with the beginning of the
-        # next.
-        xlocs_nan = numpy.hstack((xlocs, numpy.nan))
-        xlocs3 = numpy.tile(xlocs_nan, 3)
-        angles_flat = numpy.hstack((angles[index[0]], numpy.nan,
-                                    angles[index[1]], numpy.nan,
-                                    angles[index[2]], numpy.nan))
-
-        # Plot the angles
-        lines = axes.plot(xlocs3, angles_flat, linestyle='None', marker=marker,
-                          **kwargs)
+        kw = dict(linestyle='None', marker=marker)
+        kw.update(kwargs)
+        lines = []
+        for ind in index:
+            lines += axes.plot(xlocs, features[ind], **kw)
 
         if mean:
-            if mean_kw is None:
-                mean_kw = {}
-
-            mangles = angles.mean()
-            ma1 = numpy.empty_like(xlocs)
-            ma2 = numpy.empty_like(xlocs)
-            ma3 = numpy.empty_like(xlocs)
-            ma1.fill(mangles[index[0]])
-            ma2.fill(mangles[index[1]])
-            ma3.fill(mangles[index[2]])
-            mangles_flat = numpy.hstack((ma1, numpy.nan,
-                                         ma2, numpy.nan,
-                                         ma3, numpy.nan))
-            lines += axes.plot(xlocs3, mangles_flat, linewidth=0.5,
-                               color='0.50', **mean_kw)
+            mkw = dict(color='0.50', linewidth=0.5)
+            if mean_kw is not None:
+                mkw.update(mean_kw)
+            for ind in index:
+                m = numpy.empty_like(xlocs, dtype=numpy.float_)
+                m.fill(features[ind].mean())
+                lines += axes.plot(xlocs, m, **mkw)
 
         # Add ticklabels and rotate
-        add_ticks(axes.xaxis, xlocs, angles.index)
-        pyplot.xticks(axes=axes, rotation='vertical')
+        #add_ticks(axes.xaxis, xlocs, features.index)
+        #pyplot.xticks(axes=axes, rotation='vertical')
 
         # Set limits so the plot is ready for another round
         axes.set_xlim((xlim[0], xlocs[-1] + 1.0))
 
-        # This does not belong here anymore, but don't forget the syntax!
-        #fig.subplots_adjust(bottom=0.2)
-
         return lines
 
-    def plot_ellpars(self, axes=None, keys=None, marker='o', mean=None,
-                     mean_kw=None, **kwargs):
+    def plot_ellpars(self, ellpars_kw=None, axes=None, keys=None, marker='o',
+                     mean=None, mean_kw=None, **kwargs):
         """
         Plot the ellipse parameters for cells in the cell collection
 
-        The parameters are visualized in a polar plot with eccentricity as the
-        radius and twice the ellipse tilt as the angle. The tilt is doubled
-        because ellipse tilts are equivalent modulo pi radians, whereas polar
-        coordinates are equivalent modulo 2 * pi radians.
+        The parameters are visualized in a polar plot with coordinates as
+        explained in `BaseCell.ellpars`.
 
         Parameters
         ----------
+        ellpars_kw : dict, optional
+            Keyword arguments to pass to `BaseCell.ellpars`.
         axes: Axes, optional
-            Axes instance to add the ellipse parameters to. If None (default),
-            the current Axes instance is used if any, or a new one created.
-        keys : sequence, optional
-            Sequence of cell keys to select cells to plot ellipse parameters
-            for. If None, all cells are included.
+            Axes instance to add the ellipse parameters to. If None, the
+            current Axes instance is used if any, or a new one created.
         marker : valid matplotlib marker specification.
             Marker to use plot the ellipse parameters as.
         mean : bool, optional
             If True, add a point showing the mean of the ellipse parameters.
-            The mean is computed in the cartesian coordinate representation of
-            the ellpars as they are plotted by this method.
+            The mean is computed in the cartesian representation of the ellipse
+            parameters. By default, the mean is plotted using a grey marker
+            (color='0.50') of the same type as the ellipse parameters, but this
+            can be overridden using the parameter `mean_kw`.
         mean_kw : dict, optional
             Keyword arguments to pass to `axes.plot` when plotting the mean
             parameters.
@@ -2054,52 +3278,50 @@ class CellCollection(AlmostImmutable, Mapping):
         if axes is None:
             axes = pyplot.gca(projection='polar')
 
-        features = self.features(keys=keys, extra=True)
-        index = [features_index[label] for label in ('epsilon', '2theta')]
-        ellpars = features[index]
+        epkw = {}
+        if ellpars_kw is not None:
+            epkw.update(ellpars_kw)
+        epkw.update(cartesian_ellpars=False)
 
-        lines = axes.plot(ellpars[index[1]], ellpars[index[0]],
-                          linestyle='None', marker='o', **kwargs)
+        ellpars = numpy.vstack([cell.ellpars(**epkw) for cell in self])
+
+        kw = dict(linestyle='None', marker=marker)
+        kw.update(kwargs)
+        lines = axes.plot(ellpars[:, 1], ellpars[:, 0], **kw)
 
         if mean:
-            if mean_kw is None:
-                mean_kw = {}
-            index = [features_index[label] for label in ('xell', 'yell')]
-            cartesian_ellpars = features[index]
-            mean_cartesian_ellpars = cartesian_ellpars.mean()
-            mean_xell = mean_cartesian_ellpars[index[0]]
-            mean_yell = mean_cartesian_ellpars[index[1]]
-            mean_tilt_2 = numpy.arctan2(mean_yell, mean_xell)
-            mean_ecc = numpy.sqrt(mean_xell * mean_xell +
-                                  mean_yell * mean_yell)
-
-            lines += axes.plot(mean_tilt_2, mean_ecc, linestyle='None',
-                               marker='o', color='0.50', **mean_kw)
+            mkw = dict(linestyle='None', marker=marker, color='0.50')
+            if mean_kw is not None:
+                mkw.update(mean_kw)
+            mean_ellpars = self.mean_ellpars(**epkw)
+            lines += axes.plot(mean_ellpars[1], mean_ellpars[0], **mkw)
 
         axes.set_ylim((0.0, 1.0))
 
         return lines
 
-    def plot_peaks(self, axes=None, keys=None, marker='o', mean=False,
-                   mean_kw=None, **kwargs):
+    def plot_grid_peaks(self, grid_peaks_kw=None, axes=None, marker='o',
+                        mean=False, mean_kw=None, **kwargs):
         """
         Plot the peak locations for cells in the cell collection
 
         Parameters
         ----------
-        axes: Axes, optional
-            Axes instance to add the peaks to. If None (default), the current
-            Axes instance is used if any, or a new one created.
-        keys : sequence, optional
-            Sequence of cell keys to select cells to plot peaks for. If None,
-            all cells are included.
+        grid_peaks_kw : dict, optional
+            Keyword arguments to pass to `BaseCell.grid_peaks`.
+        axes : Axes, optional
+            Axes instance to add the peaks to. If None, the current Axes
+            instance is used if any, or a new one created.
         marker : valid matplotlib marker specification.
             Marker to use plot the ellipse parameters as.
         mean : bool, optional
-            If True, add points showing the means of the plotted peaks.
+            If True, add a point showing the mean coordinates of the peaks.
+            By default, the means are plotted using a grey marker
+            (color='0.50') of the same type as the ellipse parameters, but this
+            can be overridden using the parameter `mean_kw`.
         mean_kw : dict, optional
             Keyword arguments to pass to `axes.plot` when plotting the mean
-            parameters.
+            peak coordinates.
         kwargs : dict, optional
             Additional keyword arguments to to pass to `axes.plot`.  Note in
             particular the keywords 'markersize', 'color' and 'label'.
@@ -2113,131 +3335,399 @@ class CellCollection(AlmostImmutable, Mapping):
         if axes is None:
             axes = pyplot.gca(projection='polar')
 
-        peaks = numpy.vstack([cell.peaks_polar() for cell in self.values()])
+        gpkw = {}
+        if grid_peaks_kw is not None:
+            gpkw.update(grid_peaks_kw)
+        gpkw.update(polar_peaks=True)
 
-        lines = axes.plot(peaks[:, 1], peaks[:, 0], linestyle='None',
-                          marker='o', **kwargs)
+        peaks = numpy.vstack([cell.grid_peaks(**gpkw) for cell in self])
+
+        kw = dict(linestyle='None', marker=marker)
+        kw.update(kwargs)
+        lines = axes.plot(peaks[:, 1], peaks[:, 0], **kw)
 
         if mean:
-            if mean_kw is None:
-                mean_kw = {}
-            mean_peaks = numpy.mean([cell.peaks() for cell in self.values()],
-                                    axis=0)
-            mean_peakx = mean_peaks[:, 0]
-            mean_peaky = mean_peaks[:, 1]
-            mean_beta = numpy.arctan2(mean_peaky, mean_peakx)
-            mean_l_al = numpy.sqrt(mean_peakx * mean_peakx +
-                                   mean_peaky * mean_peaky)
+            mkw = dict(linestyle='None', marker=marker, color='0.50')
+            if mean_kw is not None:
+                mkw.update(mean_kw)
+            mean_peaks = self.mean_grid_peaks(**gpkw)
 
-            lines += axes.plot(mean_beta, mean_l_al, linestyle='None',
-                               marker='o', color='0.50', **mean_kw)
+            lines += axes.plot(mean_peaks[:, 1], mean_peaks[:, 0], **mkw)
 
         return lines
 
-    def plot_stacked_firing_rate(self, axes=None, keys=None, normalize=None,
-                                 cax=None, cmap=None, cbar_kw=None, **kwargs):
+    def plot_stacked_ratemap(self, vmin=0.0, rate_kw=None, **kwargs):
         """
-        Plot the stacked firing rate map for cells in the collection
+        Plot the stacked firing rate map of the cells in the collection
 
-        The stacked firing rate can be added to an existing plot via the
-        optional 'axes' argument.
+        This method is essentially a convenience wrapper around
+        `self.stacked_ratemap().plot` -- the only difference is that it fixes
+        the lower end of the colorbar to 0.0 by default (..note:: depending on
+        the normalization used, the minimum value in the stacked rate map may
+        be negative, making this default rather useless).
 
-        This method is just a wrapper around self.stacked_firing_rate.plot().
+        Parameters
+        ----------
+        vmin : None or scalar.
+            See `IntensityMap2D.plot`.
+        rate_kw : dict or None, optional
+            Optional keyword arguments to pass to
+            `CellCollection.stacked_ratemap`.
+        **kwargs : dict, optional
+            Additional keyword arguments are passed to `IntensityMap2D.plot`.
 
-        :axes: Axes instance to add the intensity map to. If None (default),
-               a new Figure is created (this method never plots to the current
-               Figure or Axes). In the latter case, equal aspect ration will be
-               enforced on the newly created Axes instance.
-        :keys: sequence of cell keys to select cells to plot the stacked firing
-               rate of. If None (default), all cells are included.
-        :normalize: string to select how to normalize the rate maps before
-                    stacking. See self.stacked_firing_rate for details. Note
-                    that this method does not support the optional `threshold`
-                    keyword to self.stacked_firing_rate -- if required, use
-                    self.stacked_firing_rate.plot instead.
-        :cax: Axes instance to plot the colorbar into. If None (default),
-              matplotlib automatically makes space for a colorbar on the
-              right-hand side of the plot.
-        :cmap: colormap to use for the plot. All valid matplotlib colormap
-               arguments can be used. If None (default), the default colormap
-               from rcParams is used (BEWARE: the default map might be 'jet',
-               and this is something you certainly DON'T WANT to use! If you're
-               clueless, try "YlGnBu_r" or "gray").
-        :cbar_kw: dict of keyword arguments to pass to the pyplot.colorbar()
-                  function. Default: None (empty dict)
-        :kwargs: additional keyword arguments passed on to axes.pcolormesh()
-        :returns: the axes instance containing the plot, and the colorbar
-                  instance
+        Returns
+        -------
+        See `IntensityMap2D.plot`.
 
         """
-        sfiring_rate = self.stacked_firing_rate(keys=keys, normalize=normalize)
-        axes, cbar = sfiring_rate.plot(axes=axes, cax=cax, cmap=cmap,
-                                       cbar_kw=cbar_kw, **kwargs)
-        return axes, cbar
+        if rate_kw is None:
+            rate_kw = {}
+        kwargs.update(vmin=vmin)
+        return self.stacked_ratemap(**rate_kw).plot(**kwargs)
+
+_PI_3 = _PI / 3.0
+_COS_PI_3, _SIN_PI_3 = numpy.cos(_PI_3), numpy.sin(_PI_3)
+
+REGULAR_GRID_PEAKS = numpy.array(
+    [[1.0, 0.0],
+     [_COS_PI_3, _SIN_PI_3],
+     [-_COS_PI_3, _SIN_PI_3],
+     [-1.0, 0.0],
+     [_COS_PI_3, -_SIN_PI_3],
+     [-_COS_PI_3, -_SIN_PI_3]])
 
 
 class Module(CellCollection):
     """
-    Represent a module of grid cells and provide methods for analyzing the grid
-    phases
+    Collect a number of Cell instances belonging to the same grid cell module
+    and provide methods for analyzing the grid phases.
+
+    Parameters
+    ----------
+    See `CellCollection`.
 
     """
 
-    def __init__(self, cells, threshold=0.20, **kwargs):
+    @classmethod
+    def from_labels(cls, cells, labels, min_length=4, **kwargs):
         """
-        Initialize the Module instance
+        Use a list of keys and corresponding labels to instantiate several
+        Module instances
 
-        :cells: a mapping of cell labels to Cell instances belonging to
-                a single module.
-        :threshold: peak threshold for the TemplateGridCell instance
-                    constructed by the module.
-        :kwargs: passed through to the CellCollection constructor
+        Parameters
+        ----------
+        cells : sequence of cells
+            Sequence to pick cells for the modules from.
+        labels : sequence
+            Sequence of labels with indices corresponding to the indices in
+            `cells`: all cells with the same label become a module. The special
+            label `-1` denotes outliers.
+        min_length : integer, optional
+            The minimum number of cells in a module. Potential modules with
+            fewer cells than this are merged into the outliers.
+        **kwargs : dict, optional
+            Keyword arguments passed to the `Module` constructor.
+
+        Returns
+        -------
+        modules : list
+            List of new Module instances. The modules are sorted by the grid
+            scale of the template cell.
+        outliers : CellCollection
+            Collection of outlier cells.
 
         """
-        CellCollection.__init__(self, cells, **kwargs)
+        tentative_modules = [[] for _ in range(max(labels) + 2)]
+        for (cell, label) in zip(cells, labels):
+            mod = tentative_modules[label].append(cell)
+        modules = []
+        outliers = CellCollection(tentative_modules.pop())
+        for mod in tentative_modules:
+            if len(mod) < min_length:
+                outliers += mod
+            else:
+                modules.append(cls(mod, **kwargs))
 
-        # Compute a large BinnedSet2D for the template cell
-        bset = next(iter(self.values())).firing_rate.bset
-        new_bset = bset
-        for __ in range(3):
-            new_bset = new_bset.correlate(bset, mode='full')
+        modules.sort(key=lambda mod: mod.template().scale())
 
-        # Construct the template cell
-        self.template = TemplateGridCell(self.mean_peaks(),
-                                         self.mean_firing_field(),
-                                         new_bset, threshold=threshold)
+        return modules, outliers
 
-        # Compute the window of possible phases
-        peak_pattern = numpy.vstack(((0.0, 0.0), self.template.peaks()))
-        window = spatial.Voronoi(peak_pattern).vertices
-        angles = numpy.arctan2(window[:, 1], window[:, 0])
-        sort_ind = numpy.argsort(angles)
-        window = window[sort_ind]
-        self.window = Window(window)
+    def _template_bset(self, **kwargs):
+        """
+        Compute a BinnedSet2D for the template cell
+
+        The BinnedSet2D is created by extending the BinnedSet2D underlying the
+        firing rate maps of the cells in the module to three times the width in
+        each dimension.
+
+        Parameters
+        ----------
+        **kwargs : dict, optional
+            Keyword arguments are passed to `BaseCell.ratemap`.
+
+        Returns
+        -------
+        BinnedSet2D
+            BinnedSet2D for the template cell.
+
+        """
+        bset = self[0].ratemap(**kwargs).bset
+        extension = [(s, s) for s in bset.shape]
+        return bset.extend(extension)
 
     @memoize_method
-    def phases(self, keys=None):
+    def template(self, template_kw=None, **kwargs):
         """
-        Compute the grid phase of cells in the module.
+        Construct a template cell for the module
 
-        The phase is defined with respect to the TemplateGridCell instance
-        belonging to the module (self.template).
+        The template cell is created using the average of the peak coorindates
+        of the cells in the module to define the grid pattern, and the average
+        of the firing field covariance matrix of the cells in the module to
+        define the firing field shape.
 
-        :keys: sequence of cell keys to select cells to compute the phase for.
-               If None, all cells are included.
-        :returns: dict containing the phases
+        Parameters
+        ----------
+        template_kw : dict or None, optional
+            Keyword arguments passed to the instantiation of the
+            TemplateGridCell.
+        **kwargs : dict, optional
+            Additional keyword arguments are passed to the underlying methods:
+            `Module.mean_grid_peaks`, `Module.mean_firing_field`, and
+            `BaseCell.ratemap`.
+
+        Returns
+        -------
+        TemplateGridCell
+            The template cell.
 
         """
-        keys, cells = self.lookup(keys)
-        phases = {key: cell.phase(self.template)
-                  for (key, cell) in zip(keys, cells)}
+        if template_kw is None:
+            template_kw = {}
+        return TemplateGridCell(self.mean_grid_peaks(**kwargs),
+                                self.mean_firing_field(**kwargs),
+                                self._template_bset(**kwargs), **template_kw)
+
+    def window_vertices(self, window_type='voronoi', project_phases=False,
+                        **kwargs):
+        """
+        Compute the vertices of the window of possible grid phases
+
+        The window is defined as the central (Voronoi) unit cell in the grid
+        pattern of the template cell of the module (see `Module.template`),
+        that is, the set of points closer to the central firing field of this
+        cell than to any other firing field in its firing pattern.
+
+        Parameters
+        ----------
+        window_type : {'voronoi', 'rhomboid'}, optional
+            If 'voronoi', the central Voronoi unit cell in the grid pattern of
+            the template cell of the module is used as window. If 'rhomboid',
+            a rhomboidal unit cell with four grid pattern nodes as vertices is
+            used as the window.
+        project_phases : bool, optional
+            If True, the window is derived from a regular hexagonal grid with
+            edge lengths 1.0, instead of from the module template cell.
+        **kwargs : dict, optional
+            Keyword arguments are passed to `Module.template` and
+            `TemplateGridCell.grid_peaks`.
+
+        Returns
+        -------
+        ndarray, shape (6, 2)
+            Coordinates of the vertices of the phase window, sorted by angle
+            with the x axis.
+
+        """
+        if project_phases:
+            grid_peaks = REGULAR_GRID_PEAKS
+        else:
+            pkw = dict(kwargs)
+            pkw.update(polar_peaks=False)
+            grid_peaks = self.template(**kwargs).grid_peaks(**pkw)
+
+        peak_pattern = numpy.vstack(((0.0, 0.0), grid_peaks))
+        if window_type == 'voronoi':
+            voronoi = spatial.Voronoi(peak_pattern)
+            window = voronoi.vertices[
+                voronoi.regions[voronoi.point_region[0]]]
+        elif window_type == 'rhomboid':
+            window = numpy.vstack((peak_pattern[:2],
+                                   peak_pattern[1] + peak_pattern[2],
+                                   peak_pattern[2]))
+        else:
+            raise ValueError("Unknown 'window_type': {}".format(window_type))
+
+        return window
+
+    def window(self, **kwargs):
+        """
+        Create a Window instance representing the window of possible grid
+        phases
+
+        See `self.window_vertices` for an explanation of what the window is all
+        about.
+
+        Parameters
+        ----------
+        **kwargs : dict, optional
+            Keyword arguments are passed to `Module.window_vertices`.
+
+        Returns
+        -------
+        Window
+            Window instance representing the grid phase window.
+
+        """
+        return Window(self.window_vertices(**kwargs))
+
+    @memoize_method
+    def _phases(self, **kwargs):
+        """
+        Compute the grid phases of the cells in the module
+
+        This part of the computation in `Module.phases` is factored out
+        to optimize memoization.
+
+        """
+        template = self.template(**kwargs)
+        return pandas.DataFrame(
+            {cell: cell.phase(template, **kwargs) for cell in self},
+            index=('phase_x', 'phase_y')).transpose().loc[self]
+
+    def phases(self, project_phases=False, **kwargs):
+        """
+        Compute the grid phases of the cells in the module.
+
+        The phase of each cell is defined with respect to the TemplateGridCell
+        instance belonging to the module (see `Module.template`).
+
+        Note that the phases returned from this method are the phases computed
+        by `BaseCell.phase`. They are not necessarily wrapped into to any
+        particular window of possible phases, as defined by
+        `Module.window_vertices` and `Module.window`. For a window-aware phase
+        pattern, use `Module.phase_pattern`.
+
+        Parameters
+        ----------
+        project_phases : bool, optional
+            If True, phases are projected onto a regular hexagonal grid with
+            edge lengths 1.0.
+        **kwargs : dict, optional
+            Keyword arguments are passed to `BaseCell.phase`,
+            `Module.template` and `TemplateGridCell.grid_peaks`.
+
+        Returns
+        -------
+        DataFrame
+            DataFrame containing the x- and y-components of the grid phase of
+            each cell relative to the template cell. The rows in the DataFrame
+            are indexed by the Cell objects.
+
+        """
+        phases = self._phases(**kwargs)
+        if project_phases:
+            pkw = dict(kwargs)
+            pkw.update(polar_peaks=False, project_peaks=True)
+            basis = self.template(**kwargs).grid_peaks(**pkw)[:2]
+            new_basis = REGULAR_GRID_PEAKS[:2]
+            coeffs = project_vectors(phases, basis)
+            phases = pandas.DataFrame(coeffs.dot(new_basis),
+                                      index=phases.index,
+                                      columns=phases.columns)
 
         return phases
 
     @memoize_method
-    def phase_pattern(self, edge_correction='periodic', keys=None):
+    def _pairwise_phases(self, **kwargs):
+        """
+        Compute the pairwise relative grid phases of the cells in the module
+
+        This part of the computation in `Module.pairwise_phases` is factored
+        out to optimize memoization.
+
+        """
+        phasedict = {cell1: pandas.DataFrame(
+            [cell1.phase(cell2, **kwargs) for cell2 in self],
+            index=self, columns=('phase_x', 'phase_y'))
+            for cell1 in self}
+        return pandas.Panel(phasedict).loc[self, self]
+
+    def pairwise_phases(self, from_absolute=True, project_phases=False,
+                        **kwargs):
+        """
+        Compute the pairwise relative grid phases of the cells in the module.
+
+        The pairwise phases can be computed in two different ways: either from
+        calling `BaseCell.phase` for each cell pair, or by computing the
+        pairwise vector difference between the absolute phases from
+        `Module.phases`.
+
+        A full, antisymmetric matrix of relative phases is returned, so each
+        cell pair is represented by two phases of opposite sign.
+
+        Just like for the absolute phases, no wrapping is performed by this
+        function. Use `Module.pairwise_phase_pattern` for window-aware, wrapped
+        phases.
+
+        ..note:: If `from_absolute` and `project_phases` are both False, there
+        is no guarantee that the phases are well-defined with respect to
+        a common window, and the wrapping may thus give nonsensical results.
+
+        Parameters
+        ----------
+        from_absolute : bool, optional
+            If True, the pairwise relative phases are computed as the
+            difference of the corresponding aboslute differences. If False,
+            each pairwise relative phase is computed using `BaseCell.phase`.
+        project_phases : bool, optional
+            If True, phases are projected onto a regular hexagonal grid with
+            edge lengths 1.0. The projection is based on the lattice defined by
+            the module template cell.
+        **kwargs : dict, optional
+            Keyword arguments are passed to `BaseCell.phase`,
+            `Module.template` and `TemplateGridCell.grid_peaks`.
+
+        Returns
+        -------
+        Panel
+            DataFrame containing the x- and y-components of the grid phase of
+            each cell relative to the template cell, under the keys given by
+            `BaseCell.phase`. The rows in the DataFrame are indexed by the Cell
+            objects.
+
+        """
+        if from_absolute:
+            kwargs.update(project_phases=project_phases)
+            abs_phases = self.phases(**kwargs)
+            values = abs_phases.values
+            diff = values - values[:, numpy.newaxis, :]
+            return pandas.Panel(diff, items=abs_phases.index,
+                                major_axis=abs_phases.index,
+                                minor_axis=abs_phases.columns)
+
+        pairwise_phases = self._pairwise_phases(**kwargs)
+        if project_phases:
+            pkw = dict(kwargs)
+            pkw.update(polar_peaks=False, project_peaks=True)
+            basis = self.template(**kwargs).grid_peaks(**pkw)[:2]
+            new_basis = REGULAR_GRID_PEAKS[:2]
+            coeffs = project_vectors(pairwise_phases, basis)
+            pairwise_phases = pandas.Panel(
+                coeffs.dot(new_basis), items=pairwise_phases.items,
+                major_axis=pairwise_phases.major_axis,
+                minor_axis=pairwise_phases.minor_axis)
+
+        return pairwise_phases
+
+    @memoize_method
+    def phase_pattern(self, edge_correction='periodic', **kwargs):
         """
         Create a PointPattern instance of the phases of the cells in the module
+
+        The phases as returned from `Module.phases` are wrapped into the window
+        returned from `Module.window` if possible, before the PointPattern
+        instance is created.
 
         Parameters
         ----------
@@ -2246,9 +3736,9 @@ class Module(CellCollection):
             String to select the default edge handling to apply in computations
             involving the returned PointPattern instance. See the documentation
             for `PointPattern` for details.
-        keys : sequence
-            Keys to select cells from which to include the phase in the
-            PointPattern. If None, all cells are included.
+        **kwargs : dict, optional
+            Additional keyword arguments are passed to `Module.phases` and
+            `Module.window`.
 
         Returns
         -------
@@ -2256,51 +3746,109 @@ class Module(CellCollection):
             PointPattern instance representning the phases.
 
         """
-        phases = tuple(self.phases(keys=keys).values())
-        return PointPattern(phases, self.window,
+        window = self.window(**kwargs)
+        # Avoid unneccesary spreading of keywords to memoized methods
+        try:
+            del kwargs['window_type']
+        except KeyError:
+            pass
+
+        phases = self.phases(**kwargs)
+        phase_points = PointPattern.wrap_into(window, phases.values)
+        return PointPattern(phase_points, window,
                             edge_correction=edge_correction)
 
-    def plot_phases(self, axes=None, keys=None, periodic=False, **kwargs):
+    @memoize_method
+    def pairwise_phase_pattern(self, full_window=False, sign='alternating',
+                               edge_correction='finite', **kwargs):
         """
-        Plot the absolute grid phases of the cells in the module
+        Create a PointPattern instance of the pairwise phases of the cells in
+        the module
 
-        The phases can be added to an existing plot via the optional 'axes'
-        argument.
+        Before the PointPattern instance is created, the pairwise phases as
+        returned from `Module.phases` are wrapped and reflected into half of
+        a centered translation of the window returned from `Module.window`, cut
+        along i diagonal. Using only half of the window ensures that the
+        relative phase of each cell pair has a unique representation.
 
-        :axes: Axes instance to add the phases to. Passed through to the
-               PointPattern.plot_pattern() method.
-        :keys: sequence of cell keys to select cells to include in the
-               phase pattern. If None, all cells are included.
-        :periodic: if True, the plot is peridically extended along the grid
-                   lattice vectors.
-        :kwargs: additional keyword arguments passed on to the
-                 PointPattern.plot_pattern() method. Note in particular the
-                 keywords 'window', 'window_kw' and 'plus_kw'.
-        :returns: a list of the plotted objects, as returned from
-                  PointPattern.plot_pattern()
+        Parameters
+        ----------
+        full_window : bool, optional
+            If True, the pairwise phases take values in the same window as the
+            absolute phases, leading to a sign ambiguity in the definition of
+            the relative phase (see the parameter `sign`). If False, the window
+            of the absolute phases is cut in half along a diagonal, such that
+            each possible relative phase has an unambiguous representation.
+        sign : {'alternating', 'random', 'both'}, optional
+            If `'alternating'`, the sign ambiguity in the definition of the
+            relative phase is resolved by making sure that each cell is placed
+            first and last in the phase computations an equal number of times.
+            If 'random', the sign is chosen for each cell pair. If `'both'`,
+            both representations of each relative phase is included, giving two
+            points per cell pair in the pattern.  If `full_window == False`,
+            this parameter has no effect.
+        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
+                               'plus'}, optional
+            String to select the default edge handling to apply in computations
+            involving the returned PointPattern instance. See the documentation
+            for `PointPattern` for details.
+        **kwargs : dict, optional
+            Additional keyword arguments are passed to `Module.pairwise_phases`
+            and `Module.window`.
+
+        Returns
+        -------
+        PointPattern
+            PointPattern instance representning the pairwise phases.
 
         """
-        phase_pattern = self.phase_pattern(keys=keys)
-        return phase_pattern.plot_pattern(axes=axes, periodic=periodic,
-                                          **kwargs)
+        # Avoid unneccesary spreading of keywords to memoized methods
+        flag = False
+        try:
+            from_absolute = kwargs.pop('from_absolute')
+        except KeyError:
+            pass
+        else:
+            flag = True
 
-features_index = {
-    'log_l': r"$\log{l}$",
-    'ax1': r"$a_{x,1} / l$",
-    'ay1': r"$a_{y,1} / l$",
-    'ax2': r"$a_{x,2} / l$",
-    'ay2': r"$a_{y,2} / l$",
-    'ax3': r"$a_{x,3} / l$",
-    'ay3': r"$a_{y,3} / l$",
-    'l': r"$l$",
-    'al1': r"$l_1 / l$",
-    'beta1': r"$\beta_1$",
-    'al2': r"$l_2 / l$",
-    'beta2': r"$\beta_2$",
-    'al3': r"$l_3 / l$",
-    'beta3': r"$\beta_3$",
-    'xell': r"$\epsilon \cos 2 \theta$",
-    'yell': r"$\epsilon \sin 2 \theta$",
-    'epsilon': r"$\epsilon$",
-    '2theta': r"$2 \theta$",
-}
+        window = self.window(**kwargs).centered()
+
+        try:
+            del kwargs['window_type']
+        except KeyError:
+            pass
+        if flag:
+            kwargs.update(from_absolute=from_absolute)
+
+        pairwise_phases = self.pairwise_phases(**kwargs)
+        indices = numpy.triu_indices(len(self), k=1)
+
+        if not full_window:
+            ppoints = PointPattern.wrap_into(
+                window, pairwise_phases.values[indices])
+            half_window = window.diagonal_cut()
+            good_points = half_window.intersection(ppoints)
+            bad_points = ppoints.difference(good_points)
+            phase_points = ([(gp.x, gp.y) for gp in good_points] +
+                            [(-bp.x, -bp.y) for bp in bad_points])
+            window = half_window
+        elif sign in ('random', 'alternating'):
+            if sign == 'random':
+                signs = numpy.random.randint(0, 2, size=indices[0].shape)
+            else:
+                signs = numpy.mod(numpy.arange(indices[0].size), 2)
+            indices = (numpy.where(signs, indices[0], indices[1]),
+                       numpy.where(signs, indices[1], indices[0]))
+            phase_points = PointPattern.wrap_into(
+                window, pairwise_phases.values[indices])
+        elif sign == 'both':
+            indices = (numpy.hstack((indices[0], indices[1])),
+                       numpy.hstack((indices[1], indices[0])))
+
+            phase_points = PointPattern.wrap_into(
+                window, pairwise_phases.values[indices])
+        else:
+            raise ValueError("unknown sign: {}.".format(sign))
+
+        return PointPattern(phase_points, window,
+                            edge_correction=edge_correction)

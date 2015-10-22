@@ -22,12 +22,11 @@ package
 from __future__ import (absolute_import, division, print_function,
                         unicode_literals)
 import numpy
-from scipy import stats
+from scipy import stats, linalg
 from scipy.ndimage import measurements
 from sklearn.neighbors import KernelDensity
 from sklearn.grid_search import GridSearchCV
 import seaborn
-from matplotlib import pyplot
 
 
 class AlmostImmutable(object):
@@ -55,64 +54,6 @@ class AlmostImmutable(object):
         """
         raise TypeError("{} instances do not support attribute deletion"
                         .format(self.__class__.__name__))
-
-
-class StepFunction(AlmostImmutable):
-    """
-    Provide a step function that can be used as an ordinary callable function,
-    in addition to providing arrays with the step locations and corresponding
-    function values as public attributes.
-
-    """
-
-    def __init__(self, xsteps, ysteps):
-        """
-        Initialize the StepFunction instance
-
-        :xsteps: the x values of step locations
-        :ysteps: the function values corresponding to the steps. The function
-                 is assumed to have the value y[i] for x values between x[i]
-                 and x[i + 1].
-
-        """
-        # Here, we use numpy
-        self.xsteps = numpy.array(xsteps)
-        self.ysteps = numpy.array(ysteps)
-
-        # Check for validity
-        if not (numpy.diff(self.xsteps) >= 0.0).all():
-            raise ValueError("'xsteps' should be monotonically increasing")
-
-    def __call__(self, x):
-        """
-        Call the function
-
-        :x: array-like with x values at which to evaluate the function
-
-        """
-        indices = numpy.searchsorted(self.xsteps, x, side='right') - 1
-        return self.ysteps[indices]
-
-    def plot(self, axes=None, **kwargs):
-        """
-        Plot the step function
-
-        The step function can be added to an existing plot via the optional
-        'axes' argument.
-
-        :axes: Axes instance to add the step function to. If None (default),
-               the current Axes instance is used if any, or a new one created.
-        :kwargs: additional keyword arguments passed on to the axes.step()
-                 method used to plot the function. Note in particular
-                 keywords such as 'linestyle', 'linewidth', 'color' and
-                 'label'.
-        :returns: list containing the Line2D instance for the plotted step
-                  function
-
-        """
-        if axes is None:
-            axes = pyplot.gca()
-        return axes.step(self.xsteps, self.ysteps, where='post', **kwargs)
 
 
 def gaussian(x, mean=0.0, cov=1.0):
@@ -372,11 +313,12 @@ def pearson_correlogram(in1, in2, mode='full'):
     return corr
 
 
-def kde_bw(data, n_bw=100, cv=5):
+def kde_bw(data, n_folds=None, n_bw=100):
     """
-    Estimate the optimal KDE bandwith for a single-variable dataset using cross
-    validation
+    Estimate the optimal KDE bandwiths for a dataset using cross validation
 
+    The function estimates bandwiths separately for each feature in the
+    dataset.
     To estimate individual bandwidths for each feature in a multivariate
     dataset, apply this function to each single-feature subset separately.
 
@@ -384,88 +326,118 @@ def kde_bw(data, n_bw=100, cv=5):
     ----------
     data : array-like, shape (n_data, n_features)
         The dataset.
+    n_folds : integer, optional
+        Number of folds to use for cross validation. If None, the default
+        number of folds in the underlying cross validation functions are used.
     n_bw : integer, optional
         Number of bandwidths to try out. Increasing this number increases the
         accuracy of the best bandwidth estimate, but also increases the
         computational demands of the function.
-    cv : integer, optional
-        Number of folds to use for cross validation.
 
     Returns
     -------
-    scalar
-        Estimated optimal bandwidth.
+    list
+        List of estimated optimal bandwidths, one for each feature in the
+        dataset.
 
     """
-    n, std = len(data), numpy.std(data)
-    # Use the silverman rule times 1.1 as the maximal candidate bandwidth, an
-    # one tenth of this as the minimal
-    silverman = (0.75 * n) ** (-0.2)
-    max_bw = 1.1 * silverman * std
-    grid = GridSearchCV(
-        KernelDensity(),
-        {'bandwidth': numpy.linspace(0.1 * max_bw, max_bw, n_bw)},
-        cv=cv)
-    grid.fit(data)
-    return grid.best_params_['bandwidth']
+    cv_kw = {}
+    if n_folds is not None:
+        cv_kw.update(cv=n_folds)
+
+    data = numpy.asarray(data)
+    if data.ndim == 1:
+            data = data[:, numpy.newaxis]
+    nd, nf = data.shape
+    bw = []
+    silverman_constant = (0.75 * nd) ** (-0.2)
+    for i in range(nf):
+        feature = data[:, i]
+        # Use the silverman rule times 1.1 as the maximal candidate bandwidth,
+        # an one tenth of this as the minimal
+        std = numpy.std(feature)
+        max_bw = 1.1 * silverman_constant * std
+        grid = GridSearchCV(
+            KernelDensity(),
+            dict(bandwidth=numpy.linspace(0.1 * max_bw, max_bw, n_bw)),
+            **cv_kw)
+        grid.fit(data)
+        bw.append(grid.best_params_['bandwidth'])
+    return bw
 
 
-def plot_kde(data, data2=None, *args, **kwargs):
+def kdeplot(data, data2=None, n_folds=None, n_bw=None, **kwargs):
     """
     Plot a kernel density estimate of univariate or bivariate data
 
     This is a wrapper around `seaborn.kdeplot`, using `kde_bw` to estimate
-    optimal bandwidth separately for each feature. The call signature is the
-    same as `seaborn.kdeplot`.
+    optimal bandwidths. The call signature accepts all keywords that
+    `seaborn.kdeplot` accepts, plus additional optional keyword arguments as
+    stated below.
 
     Parameters
     ----------
     data, data2, *args, **kwargs
         See the documentation for `seaborn.kdeplot`.
+    n_folds, n_bw
+        See `kde_bw`.
 
     Returns
     -------
-        See the documentation for `seaborn.kdeplot`.
+    See `seaborn.kdeplot`.
 
     """
-    data_ = numpy.asarray(data)
+    bw_kw = {}
+    if n_folds is not None:
+        bw_kw.update(n_folds=n_folds)
+    if n_bw is not None:
+        bw_kw.update(n_bw=n_bw)
+
     if data2 is not None:
-        data2_ = numpy.asarray(data2)
-        data_ = numpy.column_stack((data, data2_))
-        bw = (kde_bw(data_[:, 0][:, numpy.newaxis]),
-              kde_bw(data_[:, 1][:, numpy.newaxis]))
+        data_ = numpy.column_stack((data, data2))
+        bw = kde_bw(data_, **bw_kw)
     else:
-        if data_.ndim == 1:
-            data_ = data_[:, numpy.newaxis]
-        bw = kde_bw(data_)
+        bw = kde_bw(data, **bw_kw)[0]
 
-    kwargs.update({'bw': bw})
-    return seaborn.kdeplot(data, data2=data2, *args, **kwargs)
+    kwargs.update(bw=bw)
+    return seaborn.kdeplot(data, data2=data2, **kwargs)
 
 
-def module_keys(modules, outliers):
+def distplot(data, n_folds=None, n_bw=None, **kwargs):
     """
-    Compute an invariant representation of a clustering of cells into modules
+    Plot a univariate distribution of observations
 
-    This function makes it easy to check if two clusterings of cells into
-    modules are equal: just compare the output of this function by equality.
+    This is a wrapper around `seaborn.distplot`, using `kde_bw` to estimate
+    optimal bandwidths for kernel density estimates. The call signature accepts
+    all keywords that `seaborn.kdeplot` accepts, plus additional optional
+    keyword arguments as stated below.
 
     Parameters
     ----------
-    modules, outliers
-        The output from any of the clustering methods in `CellCollection`.
+    data, data2, *args, **kwargs
+        See the documentation for `seaborn.kdeplot`.
+    n_folds, n_bw
+        See `kde_bw`. To use the default value in the underlying function, let
+        the corresponding keyword be None in this function.
 
     Returns
     -------
-    modkeys : set
-        Set containing a frozenset with cell keys for each module
-    outkeys : set
-        Set containing the outlier cell keys.
+    See `seaborn.kdeplot`.
 
     """
-    modkeys = set([frozenset(mod.keys()) for mod in modules])
-    outkeys = set(outliers.keys())
-    return modkeys, outkeys
+    bw_kw = {}
+    if n_folds is not None:
+        bw_kw.update(n_folds=n_folds)
+    if n_bw is not None:
+        bw_kw.update(n_bw=n_bw)
+
+    kde = kwargs.get('kde', True)
+    if kde:
+        bw = kde_bw(data, **bw_kw)[0]
+        kde_kws = kwargs.pop('kde_kws', {})
+        kde_kws.update(bw=bw)
+        kwargs.update(kde_kws=kde_kws)
+    return seaborn.distplot(data, **kwargs)
 
 
 def check_stable(n_calls, function, *args, **kwargs):
@@ -504,8 +476,47 @@ def check_stable(n_calls, function, *args, **kwargs):
     """
     out = function(*args, **kwargs)
     for __ in range(1, n_calls):
-        old_out = out
-        out = function(*args, **kwargs)
-        if not (out == old_out):
+        new_out = function(*args, **kwargs)
+        if not numpy.all(new_out == out):  # Support array-valued functions
             return False
     return True
+
+
+def project_vectors(vectors, basis_vectors):
+    """
+    Project a set of vectors onto an arbitrary (possibly non-orthogonal) basis
+
+    Parameters
+    ----------
+    vectors : array-like, shape (n1, n2, ..., k)
+        Array of k-dimensional vectors to project.
+    basis_vectors : array-like, shape (k, k)
+        Array of k linearly independent k-dimensional vectors to compute the
+        projections onto. The vectors do not have to be orthogonal.
+
+    Returns
+    -------
+    coefficients : ndarray, shape (n1, n2, ..., k)
+        Array of projection coefficients such that
+        `coefficients[i1, i2, ..., j] * basis_vectors[j]` is the projection of
+        `vectors[i1, i2, ...]` along `basis_vectors[j]`, and
+        `coefficients[i1, i2, ...].dot(basis_vectors) == vectors[i1, i2, ...]`.
+
+    """
+    vectors = numpy.asarray(vectors)
+    basis_vectors = numpy.asarray(basis_vectors)
+
+    vshape = vectors.shape
+    k = vshape[-1]
+    (k1, k2) = basis_vectors.shape
+    if k != k1 or k1 != k2:
+        raise ValueError("need {0} linearly independent basis vectors of "
+                         "dimension {0} to compute projection of 'vectors' of "
+                         "dimension {0} ('basis_vectors' must be a square, "
+                         "nonsingular array of shape ({0}, {0}).".format(k))
+
+    a = numpy.inner(basis_vectors, basis_vectors)
+    b = numpy.inner(basis_vectors, vectors)
+    coeffs = linalg.solve(a, b, sym_pos=True)
+    coeffs = numpy.rollaxis(coeffs, 0, coeffs.ndim)
+    return coeffs

@@ -24,12 +24,11 @@ from __future__ import (absolute_import, division, print_function,
                         unicode_literals)
 import numpy
 from scipy import signal, fftpack, special
-from scipy.ndimage import filters, measurements
+from scipy.ndimage import filters, measurements, interpolation
 from skimage import feature  # , exposure
 from matplotlib import pyplot
 
 from .utils import AlmostImmutable, sensibly_divide, pearson_correlogram
-from .memoize.memoize import memoize_method
 from .ndfit import fit_ndgaussian
 
 
@@ -156,6 +155,23 @@ class BinnedSet(AlmostImmutable):
 
         return cls.from_center_binwidth_shape(cls, center, binwidth, shape)
 
+    def __eq__(self, other):
+        """
+        Define equality as the exact equality of all bin edge arrays
+
+        :other: another BinnedSet instance
+        :returns: True if equal, otherwise False
+
+        """
+        if not type(other) == type(self):
+            return False
+        sedges, oedges = self.edges, other.edges
+        return ((len(sedges) == len(oedges)) and
+                all(numpy.all(se == oe) for (se, oe) in zip(sedges, oedges)))
+
+    def __neq__(self, other):
+        return not self.__eq__(other)
+
     def __add__(self, vector):
         """
         Define addition of a BinnedSet with a sequence of numbers as
@@ -187,7 +203,6 @@ class BinnedSet(AlmostImmutable):
         return len(self.edges)
 
     @property
-    @memoize_method
     def shape(self):
         """
         The number of bins in the BinnedSet instance along each axis
@@ -196,7 +211,14 @@ class BinnedSet(AlmostImmutable):
         return tuple(e.size - 1 for e in self.edges)
 
     @property
-    @memoize_method
+    def size(self):
+        """
+        The total number of bins in the BinnedSet
+
+        """
+        return numpy.prod(self.shape)
+
+    @property
     def range_(self):
         """
         The range of values spanned by the BinnedSet along each axis
@@ -205,7 +227,6 @@ class BinnedSet(AlmostImmutable):
         return tuple((e[0], e[-1]) for e in self.edges)
 
     @property
-    @memoize_method
     def centers(self):
         """
         Tuple of arrays giving the bin center values
@@ -214,7 +235,6 @@ class BinnedSet(AlmostImmutable):
         return tuple(0.5 * (e[1:] + e[:-1]) for e in self.edges)
 
     @property
-    @memoize_method
     def mesh(self):
         """
         Meshgrid arrays created from the bin edge arrays
@@ -228,7 +248,6 @@ class BinnedSet(AlmostImmutable):
         return numpy.meshgrid(*self.edges, indexing='ij')
 
     @property
-    @memoize_method
     def cmesh(self):
         """
         Meshgrid arrays created from the bin center arrays
@@ -242,7 +261,6 @@ class BinnedSet(AlmostImmutable):
         return numpy.meshgrid(*self.centers, indexing='ij')
 
     @property
-    @memoize_method
     def area(self):
         """
         Array giving the area (in general, volume) volume of each bin
@@ -268,7 +286,6 @@ class BinnedSet(AlmostImmutable):
         return numpy.prod([r[1] - r[0] for r in self.range_])
 
     @property
-    @memoize_method
     def regular(self):
         """
         Whether this BinnedSet instance is regular (has bins that are equal in
@@ -278,7 +295,6 @@ class BinnedSet(AlmostImmutable):
         return all(numpy.allclose(w, w[0]) for w in self.binwidths)
 
     @property
-    @memoize_method
     def square(self):
         """
         Whether the bins defined by this BinnedSet instance are square, or in
@@ -287,7 +303,6 @@ class BinnedSet(AlmostImmutable):
         """
         return self.regular and numpy.allclose(*(w[0] for w in self.binwidths))
 
-    @memoize_method
     def compatible(self, other):
         """
         Check if this instance is compatible with another instance (both
@@ -307,19 +322,6 @@ class BinnedSet(AlmostImmutable):
                           zip(self.binwidths, other.binwidths)))
         return compatible
 
-    def equals(self, other):
-        """
-        Define equality as the exact equality of all bin edge arrays
-
-        :other: another BinnedSet instance
-        :returns: True if equal, otherwise False
-
-        """
-        sedges, oedges = self.edges, other.edges
-        return ((len(sedges) == len(oedges)) and
-                all(numpy.all(se == oe) for (se, oe) in zip(sedges, oedges)))
-
-    @memoize_method
     def translated(self, vector):
         """
         Return a translated copy of the BinnedSet instance
@@ -342,7 +344,7 @@ class BinnedSet(AlmostImmutable):
                              .format(self.__class__.__name__))
 
         new_edges = [e + v for (e, v) in zip(self.edges, vector)]
-        return self.__class__(new_edges)
+        return type(self)(new_edges)
 
     def reflected(self):
         """
@@ -357,11 +359,10 @@ class BinnedSet(AlmostImmutable):
             return self._reflected
         except AttributeError:
             new_edges = [-e[::-1] for e in self.edges]
-            self._reflected = self.__class__(new_edges)
+            self._reflected = type(self)(new_edges)
             self._reflected._reflected = self  # Involution at work
             return self._reflected
 
-    @memoize_method
     def fft(self):
         """
         Compute a frequency space BinnedSet matching the FFT of a map over this
@@ -381,7 +382,7 @@ class BinnedSet(AlmostImmutable):
         if not self.regular:
             raise ValueError("a {} instance must be regular (have bins of "
                              "equal size and shape) to compute an "
-                             "FFT-compatible instace"
+                             "FFT-compatible instance"
                              .format(self.__class__.__name__))
 
         center, fbinwidth, shape = [], [], []
@@ -394,7 +395,6 @@ class BinnedSet(AlmostImmutable):
 
         return self.from_center_binwidth_shape(center, fbinwidth, shape)
 
-    @memoize_method
     def convolve(self, other, mode='full'):
         """
         Compute a BinnedSet instance matching a convolution of maps over this
@@ -490,6 +490,50 @@ class BinnedSet(AlmostImmutable):
                   for (i, n, c) in zip(indices, self.shape, self.centers)]
         coords_arr = numpy.array(coords).transpose()
         return numpy.atleast_2d(coords_arr)
+
+    def extend(self, extension):
+        """
+        Extend the BinnedSet with more bins along its dimension
+
+        This is only possible for regular BinnedSets (self.regular == True).
+
+        Parameters
+        ----------
+        extension : sequence
+            Sequence where each element is a two-element sequence containing
+            the number of bins to add at the beginning and end, respectively,
+            of the corresponding dimension. For example, if `extension=[(2, 3),
+            (1, 0)]`, the BinnedSet is extended with 2 new bins before and
+            3 new bins after the existing bins along the first dimension, and
+            1 new bin before existing bins along the second dimension.
+
+        Returns
+        -------
+        BinnedSet
+            Extended BinnedSet
+
+        """
+        if not self.regular:
+            raise ValueError("{} instances must be regular (have bins of "
+                             "equal size and shape) to compute extensions"
+                             .format(self.__class__.__name__))
+
+        old_edges = self.edges
+        new_edges = []
+        widths = (numpy.mean(w) for w in self.binwidths)
+        for (ext, old_edge, width) in zip(extension, old_edges, widths):
+            old_min, old_max = old_edge[(0, -1), ]
+            new_start = numpy.arange(old_min - width * ext[0],
+                                     old_min - width * 0.5, width)
+            new_end = numpy.arange(old_max + width,
+                                   old_max + width * (ext[1] + 0.5), width)
+            new_edge = numpy.concatenate((new_start, old_edge, new_end))
+            new_edges.append(new_edge)
+
+        # Append remaining unchanged edge arrays
+        new_edges += old_edges[len(new_edges):]
+
+        return type(self)(new_edges)
 
 
 class BinnedSet2D(BinnedSet):
@@ -625,7 +669,7 @@ class IntensityMap(AlmostImmutable):
         the `numpy.ma` module) may be used to represent missing data. Note that
         while several `IntensityMap` methods are explicitly designed to handle
         missing values (e.g. `smoothing`, `convolve` and `correlate`, when
-        `normalized == True`), other methods are not designed with this in mind
+        `normalize == True`), other methods are not designed with this in mind
         (e.g. `fft`).  In the latter case, missing values will be represented
         as nans in an unmasked array and handled by floating-point arithmetic.
     bset : BinnedSet or sequence
@@ -686,11 +730,11 @@ class IntensityMap(AlmostImmutable):
         center = [0.0] * self.ndim
         binwidth = [numpy.mean(w) for w in self.bset.binwidths]
         shape = arr.shape
-        new_bset = self.bset.__class__.from_center_binwidth_shape(center,
-                                                                  binwidth,
-                                                                  shape)
+        new_bset = self.bset.from_center_binwidth_shape(center,
+                                                        binwidth,
+                                                        shape)
 
-        return self.__class__(arr, new_bset)
+        return type(self)(arr, new_bset)
 
     def _inherit_binary_operation(self, other, op):
         """
@@ -699,7 +743,7 @@ class IntensityMap(AlmostImmutable):
 
         Parameters
         ----------
-        other : array-like
+        other : array-like or IntensityMap
             The binary operation is applied to `self` and `other`. If `other`
             is also an `IntensityMap` instance, an exception is raised if they
             are not defined over `BinnedSet` instances that compare equal.
@@ -729,7 +773,7 @@ class IntensityMap(AlmostImmutable):
             # Apparently, other is not an IntensityMap
             new_data = bound_op(other)
         else:
-            if not ((bset.equals(obset)) or
+            if not ((bset == obset) or
                     bset.shape == () or
                     obset.shape == ()):
                 raise ValueError("instances of {} must be defined over "
@@ -741,7 +785,13 @@ class IntensityMap(AlmostImmutable):
             if bset.shape == ():
                 bset = obset
 
-        return self.__class__(new_data, bset)
+        return type(self)(new_data, bset)
+
+    def __eq__(self, other):
+        return self._inherit_binary_operation(other, '__eq__')
+
+    def __neq__(self, other):
+        return ~self.__eq__(other)
 
     def __lt__(self, other):
         return self._inherit_binary_operation(other, '__lt__')
@@ -819,16 +869,16 @@ class IntensityMap(AlmostImmutable):
     # Negation is implemented explicitly to take advantage of the involution
     # property
     #def __neg__(self):
-    #    return self.__class__(self.data.__neg__(), self.bset)
+    #    return type(self)(self.data.__neg__(), self.bset)
 
     def __pos__(self):
-        return self.__class__(self.data.__pos__(), self.bset)
+        return type(self)(self.data.__pos__(), self.bset)
 
     def __abs__(self):
-        return self.__class__(self.data.__abs__(), self.bset)
+        return type(self)(self.data.__abs__(), self.bset)
 
     def __invert__(self):
-        return self.__class__(self.data.__invert__(), self.bset)
+        return type(self)(self.data.__invert__(), self.bset)
 
     def __neg__(self):
         """
@@ -843,7 +893,7 @@ class IntensityMap(AlmostImmutable):
         try:
             return self._neg
         except AttributeError:
-            self._neg = self.__class__(self.data.__neg__(), self.bset)
+            self._neg = type(self)(self.data.__neg__(), self.bset)
             self._neg._neg = self  # Involution at work
             return self._neg
 
@@ -860,7 +910,7 @@ class IntensityMap(AlmostImmutable):
             return self._reflected
         except AttributeError:
             sl = tuple(slice(None, None, -1) for __ in range(self.ndim))
-            self._reflected = self.__class__(self.data[sl], -self.bset)
+            self._reflected = type(self)(self.data[sl], -self.bset)
             self._reflected._reflected = self  # Involution at work
             return self._reflected
 
@@ -879,7 +929,7 @@ class IntensityMap(AlmostImmutable):
             A copy of `self`, cast to `dtype`.
 
         """
-        return self.__class__(self.data.astype(dtype), self.bset)
+        return type(self)(self.data.astype(dtype), self.bset)
 
     @staticmethod
     def mean_map(maps, ignore_missing=True):
@@ -913,7 +963,7 @@ class IntensityMap(AlmostImmutable):
         num_valid = (~numpy.ma.getmaskarray(data)).astype(numpy.int_)
         length = 0  # Since iterators have no len(), we must sum it up manually
         for map_ in maps:  # No [1:]: the first element was consumed by next()
-            if not (map_.bset.equals(ref_bset)):
+            if not (map_.bset == ref_bset):
                 raise ValueError("instances of {} must be defined over "
                                  "instances of {} that compare equal for "
                                  "the mean to be defined"
@@ -929,38 +979,39 @@ class IntensityMap(AlmostImmutable):
             full_mask = (num_valid < length)
             new_data = numpy.ma.array(new_data, mask=full_mask, keep_mask=True)
 
-        return ref_map.__class__(new_data, ref_bset)
+        return type(ref_map)(new_data, ref_bset)
 
-    @memoize_method
-    def mean(self):
+    def mean(self, weight_by_area=True):
         """
         Compute the mean intensity of the instance, ignoring missing values
-
-        The contribution each bin is correctly weighted by the area (volume) of
-        the bin.
 
         Returns
         -------
         scalar
             The mean intensity.
+        weight_by_area : bool, optional
+            If True, the contribution from each bin is weighted by the area
+            (volume) of the bin.
 
         """
-        return self.integral() / self.indicator.integral()
+        if weight_by_area:
+            return self.integral() / self.indicator.integral()
+        else:
+            return self.sum() / self.indicator.sum()
 
-    @memoize_method
-    def std(self, ddof=0):
+    def std(self, ddof=0, weight_by_area=True):
         """
         Compute the standard deviation of the intensity of the instance,
         ignoring missing values
-
-        The contribution each bin is correctly weighted by the area (volume) of
-        the bin.
 
         Parameters
         ----------
         ddof : int, optional
             Delta degrees of freedom: see the documentation for
             `IntensityMap.var` for details.
+        weight_by_area : bool, optional
+            If True, the contribution from each bin is weighted by the area
+            (volume) of the bin.
 
         Returns
         -------
@@ -968,16 +1019,12 @@ class IntensityMap(AlmostImmutable):
             The standard deviation of the intensity.
 
         """
-        return numpy.sqrt(self.var(ddof=ddof))
+        return numpy.sqrt(self.var(ddof=ddof, weight_by_area=weight_by_area))
 
-    @memoize_method
-    def var(self, ddof=0):
+    def var(self, ddof=0, weight_by_area=True):
         """
         Compute the variance of the intensity of the instance, ignoring missing
         values
-
-        The contribution each bin is correctly weighted by the area (volume) of
-        the bin.
 
         Parameters
         ----------
@@ -985,6 +1032,9 @@ class IntensityMap(AlmostImmutable):
             Delta degrees of freedom: the divisor used in calculating the
             variance is `N - ddof`, where `N` is the number of bins with values
             present. See the documentation for `numpy.var` for details.
+        weight_by_area : bool, optional
+            If True, the contribution from each bin is weighted by the area
+            (volume) of the bin.
 
         Returns
         -------
@@ -996,9 +1046,12 @@ class IntensityMap(AlmostImmutable):
         dev = self - mean
         square = dev * dev
         n = self.count()
-        return n * square.integral() / ((n - ddof) * self.indicator.integral())
+        if weight_by_area:
+            return (n * square.integral() /
+                    ((n - ddof) * self.indicator.integral()))
+        else:
+            return (n * square.sum() / ((n - ddof) * self.indicator.sum()))
 
-    @memoize_method
     def min(self):
         """
         Find the minimum intensity of the instance, ignoring missing values
@@ -1011,7 +1064,6 @@ class IntensityMap(AlmostImmutable):
         """
         return numpy.ma.min(self.data)
 
-    @memoize_method
     def max(self):
         """
         Find the maximum intensity of the instance, ignoring missing values
@@ -1024,7 +1076,39 @@ class IntensityMap(AlmostImmutable):
         """
         return numpy.ma.max(self.data)
 
-    @memoize_method
+    def sum(self, axis=None):
+        """
+        Find the sum of the intensity over the binned set, ignoring missing
+        values
+
+        Parameters
+        ----------
+        axis : None or int or tuple of ints, optional
+            Axis or axes along which the sum is performed. If None, the
+            sum is computed over all dimensions.
+
+        Returns
+        -------
+        scalar or IntensityMap
+            If axis is None, the value of the sum of the intensity over the
+            bset is returned. Otherwise, the marginal summed map resulting from
+            summing the intensity along the specified axes is returned.
+
+        """
+        if axis is None:
+            return numpy.ma.sum(self.data)
+
+        new_data = numpy.ma.sum(self.data, axis=axis)
+        remaining_axes = numpy.setdiff1d(range(self.ndim), axis)
+        remaining_edges = [self.bset.edges[ax] for ax in remaining_axes]
+
+        # This is kind of a hack that breaks good OO design, but is there
+        # a better solution?
+        if len(remaining_edges) == 2:
+            return IntensityMap2D(new_data, (remaining_edges,))
+        else:
+            return IntensityMap(new_data, (remaining_edges,))
+
     def integral(self, axis=None):
         """
         Find the integral of the intensity over the binned set, ignoring
@@ -1046,36 +1130,25 @@ class IntensityMap(AlmostImmutable):
 
         """
         if axis is None:
-            return numpy.ma.sum(self.data * self.bset.area)
+            return (self * self.bset.area).sum()
 
         try:
             measure = numpy.prod([self.bset.binwidths[ax] for ax in axis],
                                  axis=0)
         except TypeError:
             measure = self.bset.binwidths[axis]
-        new_data = numpy.ma.sum(self.data * measure, axis=axis)
-        remaining_axes = numpy.setdiff1d(range(self.ndim), axis)
-        remaining_edges = [self.bset.edges[ax] for ax in remaining_axes]
-
-        # This is kind of a hack that breaks good OO design, but is there
-        # a better solution?
-        if len(remaining_edges) == 2:
-            return IntensityMap2D(new_data, (remaining_edges,))
-        else:
-            return IntensityMap(new_data, (remaining_edges,))
+        (self * measure).sum(axis=axis)
 
     @property
-    @memoize_method
     def mask(self):
         """
         A boolean IntensityMap instance with value True in all bins where this
         instance has missing values
 
         """
-        return self.__class__(self.data.mask, self.bset)
+        return type(self)(self.data.mask, self.bset)
 
     @property
-    @memoize_method
     def indicator(self):
         """
         An integer IntensityMap instance with value 0 in all bins where this
@@ -1129,7 +1202,6 @@ class IntensityMap(AlmostImmutable):
         return self._data
 
     @property
-    @memoize_method
     def unmasked_data(self):
         """
         A representation of the intensity data with missing values as nans
@@ -1157,7 +1229,6 @@ class IntensityMap(AlmostImmutable):
         """
         return self.data.count(axis=axis)
 
-    @memoize_method
     def filled(self, fill_value):
         """
         Create an IntensityMap instance from this instance, with missing values
@@ -1173,9 +1244,8 @@ class IntensityMap(AlmostImmutable):
         if new_data == sdata:
             return self
         else:
-            return self.__class__(new_data, self.bset)
+            return type(self)(new_data, self.bset)
 
-    @memoize_method
     def fft(self):
         """
         Compute the Discrete Fourier Transform of this IntensityMap instance
@@ -1187,10 +1257,9 @@ class IntensityMap(AlmostImmutable):
         new_bset = self.bset.fft()
         new_data = fftpack.fftn(self.unmasked_data)
 
-        return self.__class__(new_data, new_bset)
+        return type(self)(new_data, new_bset)
 
-    @memoize_method
-    def smoothed(self, size, filter_='gaussian', normalized=False):
+    def smooth(self, size, filter_='gaussian', normalize=False):
         """
         Return a new IntensityMap instance which is a smoothed version of this
 
@@ -1208,7 +1277,7 @@ class IntensityMap(AlmostImmutable):
                  the conversion between physical lengths in the units used by
                  the BinnedSet, and bin/pixel numbers,
                   Default is 'gaussian'.
-        :normalized: if True, the smoothed IntensityMap is renormalized for
+        :normalize: if True, the smoothed IntensityMap is renormalized for
                      each bin to eliminate the influence of missing values and
                      values beyond the edges. Where only missing values would
                      have contributed, the resulting value is missing. If
@@ -1226,6 +1295,9 @@ class IntensityMap(AlmostImmutable):
                              .format(self.__class__.__name__,
                                      self.bset.__class__.__name__))
 
+        if size == 0.0:
+            return self
+
         size_b = [size / numpy.mean(w) for w in self.bset.binwidths]
 
         options = {'mode': 'constant', 'cval': 0.0}
@@ -1233,17 +1305,19 @@ class IntensityMap(AlmostImmutable):
             def smoothfunc(arr):
                 return filters.gaussian_filter(arr, size_b, **options)
         elif filter_ == 'uniform':
+            # Round bin size to nearest odd integer
+            size_b = [2 * int(0.5 * s) + 1 for s in size_b]
+
             def smoothfunc(arr):
                 return filters.uniform_filter(arr, size_b, **options)
         else:
             raise ValueError("unknown filter {}".format(filter_))
 
-        new_data = _safe_mmap(normalized, smoothfunc, (self.data,))
+        new_data = _safe_mmap(normalize, smoothfunc, (self.data,))
 
-        return self.__class__(new_data, self.bset)
+        return type(self)(new_data, self.bset)
 
-    @memoize_method
-    def convolve(self, other, mode='full', normalized=False):
+    def convolve(self, other, mode='full', normalize=False):
         """
         Compute the convolution of this and another IntensityMap instance
 
@@ -1254,7 +1328,7 @@ class IntensityMap(AlmostImmutable):
         :mode: string indicating the size of the output. See
                scipy.signal.convolve for details. Valid options:
                'full', 'valid', 'same'
-        :normalized: if True, the convolved IntensityMap is renormalized for
+        :normalize: if True, the convolved IntensityMap is renormalized for
                      each bin to eliminate the influence of missing values and
                      values beyond the edges. Where only missing values would
                      have contributed, the resulting value is missing. If
@@ -1277,12 +1351,11 @@ class IntensityMap(AlmostImmutable):
         def convfunc(arr1, arr2):
             return signal.convolve(arr1, arr2, mode=mode)
 
-        new_data = _safe_mmap(normalized, convfunc, (sdata, odata))
+        new_data = _safe_mmap(normalize, convfunc, (sdata, odata))
 
-        return self.__class__(new_data, new_bset)
+        return type(self)(new_data, new_bset)
 
-    @memoize_method
-    def correlate(self, other, mode='full', pearson=True, normalized=False):
+    def correlate(self, other, mode='full', pearson=None, normalize=False):
         """
         Compute the cross-correlogram of this and another IntensityMap instance
 
@@ -1295,23 +1368,26 @@ class IntensityMap(AlmostImmutable):
         mode : {'full', 'valid', 'same'}, optional
             String indicating the size of the output. See
             `scipy.signal.convolve` for details.
-        pearson : bool, optional
-            If True, each entry in the result is the Pearson correlation
-            coefficient between the overlapping parts of the IntensityMap
-            instances at the corresponding displacement. See
-            `utils.pearson_correlogram` for details. If False, the result
-            contains plain cross-correlations.
-        normalized : bool, optional
+        pearson : {None, 'global', 'local'}, optional
+            If either `'global'` or `'local'`, each entry in the result is the
+            Pearson correlation coefficient between the overlapping parts of
+            the IntensityMap instances at the corresponding displacement. If
+            `'global'`, the global means and standard deviations of the
+            IntensityMaps are used to compute standard scores, while if
+            `'local'`, new means and standard deviations are computed for the
+            overlapping parts of the IntensityMaps at each displacement. If
+            None, the plain (non-Pearson) correlation is computed.
+        normalize : bool, optional
             If True, the correlated IntensityMap is renormalized for each bin
             to eliminate the influence of missing values and values beyond the
             edges. Where only missing values would have contributed, the
             resulting value is missing. If False, values beyond the boundary
             are interpreted as 0.0, and the presence of missing values will
             raise a ValueError.
-            ..note:: Not applicable if `pearson == True` -- the Pearson
-            correlation coefficient is by definition normalized (albeit in
-            a slightly different way), and can handle missing values
-            gracefully.
+            ..note:: Not applicable if `pearson == 'local'` -- the local
+            Pearson correlation coefficient is implicitly normalized and
+            handlies missing-value gracefully (see `utils.pearson_correlogram`
+            for details).
 
         Returns
         -------
@@ -1329,7 +1405,7 @@ class IntensityMap(AlmostImmutable):
 
         new_bset = self.bset.correlate(other.bset, mode=mode)
 
-        if pearson:
+        if pearson == 'local':
             new_data = pearson_correlogram(sdata, odata, mode=mode)
 
             # Remove the outer frame of nonsense
@@ -1341,28 +1417,46 @@ class IntensityMap(AlmostImmutable):
                 s[axis] = sl_firstlast
                 new_data[s] = numpy.ma.masked
         else:
+            if pearson == 'global':
+                sdata = ((sdata - numpy.ma.mean(sdata)) /
+                         (numpy.ma.std(sdata)))
+                odata = ((odata - numpy.ma.mean(odata)) /
+                         (numpy.ma.std(odata)))
+            elif pearson is not None:
+                raise ValueError("'pearson' must be either 'global', 'local', "
+                                 "or None.")
+
             def corrfunc(arr1, arr2):
-                return signal.correlate(arr1, arr2, mode=mode)
+                max_overlap = [min(s1, s2)
+                               for (s1, s2) in zip(arr1.shape, arr2.shape)]
+                max_size_sq = numpy.sqrt(numpy.prod(max_overlap))
+                return signal.correlate(arr1 / max_size_sq, arr2 / max_size_sq,
+                                        mode=mode)
 
-            new_data = _safe_mmap(normalized, corrfunc, (sdata, odata))
+            new_data = _safe_mmap(normalize, corrfunc, (sdata, odata))
 
-        return self.__class__(new_data, new_bset)
+        return type(self)(new_data, new_bset)
 
-    def autocorrelate(self, mode='full', pearson=True, normalized=False):
+    def autocorrelate(self, mode='full', pearson=None, normalize=False):
         """
         Compute the autocorrelogram of this IntensityMap instance
 
-        Convenience method for calling self.correlate(self, mode=mode)
+        This is a convenience wrapper for calling `self.correlate(self, ...)`.
 
-        :mode, pearson, normalized: see self.correlate()
-        :returns: new IntensityMap instance representing the autocorrelogram of
-                  this instance
+        Parameters
+        ----------
+        mode, pearson, normalize
+            See `IntensityMap.correlate`.
+
+        Returns
+        -------
+        IntensityMap
+            See `IntensityMap.correlate`.
 
         """
         return self.correlate(self, mode=mode, pearson=pearson,
-                              normalized=normalized)
+                              normalize=normalize)
 
-    @memoize_method
     def labels(self, threshold):
         """
         Label connected regions of intensities larger than a threshold
@@ -1380,7 +1474,6 @@ class IntensityMap(AlmostImmutable):
         labels, n = measurements.label(data_thres)
         return labels, n
 
-    @memoize_method
     def peaks(self, threshold):
         """
         Detect peaks in the IntensityMap instance
@@ -1458,7 +1551,6 @@ class IntensityMap(AlmostImmutable):
         scale, mean, cov = fit_ndgaussian(xdata, fdata)
         return scale, mean, cov
 
-    @memoize_method
     def crop_missing(self):
         """
         Remove slices containing only missing values from the edges of an
@@ -1502,7 +1594,74 @@ class IntensityMap(AlmostImmutable):
             # Swap back axis
             new_data = numpy.ma.swapaxes(new_data, 0, axis)
 
-        return self.__class__(new_data, new_edges)
+        return type(self)(new_data, new_edges)
+
+    def rotate(self, angle, axes=(1, 0), reshape=False):
+        """
+        Compute a rotated version of the intensity map
+
+        The map is rotated around its center.
+
+        Parameters
+        ----------
+        angle : scalar
+            Angle to rotate, in degrees.
+        axes : sequence of 2 ints, optional
+            Axes defining the plane of rotation.
+        reshape : bool, optional
+            If True, the returned intensity map is resized to fit the whole
+            rotated map. If False, the returned map is of the same size
+            as this (corners will be cropped unless `angle` is a multiple of
+            90).
+
+        Returns
+        -------
+        IntensityMap
+            Rotated version of the intensity map.
+
+        """
+        rotated_data = interpolation.rotate(self.unmasked_data, angle,
+                                            axes=axes, reshape=reshape,
+                                            order=1, cval=numpy.nan)
+        if reshape:
+            extension = []
+            for (rs, s) in zip(rotated_data.shape, self.shape):
+                ext_total = rs - s
+                ext_start = ext_total // 2
+                ext_end = ext_total - ext_start
+                extension.append((ext_start, ext_end))
+            new_bset = self.bset.extend(extension)
+        else:
+            new_bset = self.bset
+
+        return type(self)(rotated_data, new_bset)
+
+    def shell(self, inner_radius, outer_radius):
+        """
+        Return an intensity map with values outside a given shell masked out
+
+        Parameters
+        ----------
+        inner_radius, outer_radius : scalars
+            Values with distance from the origin (defined by self.bset) between
+            these radii are kept, while all others are masked out. If either is
+            None, only the other is used.
+
+        Returns
+        -------
+        IntensityMap
+            IntensityMap containing only values within the specified shell.
+
+        """
+        dmesh = numpy.sqrt(numpy.sum([cm * cm for cm in self.bset.cmesh],
+                                     axis=0))
+        mask = False
+        if inner_radius is not None:
+            mask = dmesh < inner_radius
+        if outer_radius is not None:
+            mask = numpy.logical_or(mask, dmesh >= outer_radius)
+        shell_data = numpy.ma.array(self.data, mask=mask, keep_mask=True)
+        return type(self)(shell_data, self.bset)
 
 
 class IntensityMap2D(IntensityMap):
@@ -1541,7 +1700,6 @@ class IntensityMap2D(IntensityMap):
 
         IntensityMap.__init__(self, data, bset, **kwargs)
 
-    @memoize_method
     def blobs(self, min_sigma=None, max_sigma=None, num_sigma=25,
               threshold=None, overlap=0.5, log_scale=True,
               ignore_missing=False):
@@ -1625,8 +1783,8 @@ class IntensityMap2D(IntensityMap):
             size = 0.125 * numpy.amax(self.bset.binwidths)
             filled = self
             while numpy.isnan(data).any():
-                filled = filled.smoothed(size, filter_='gaussian',
-                                         normalized=True)
+                filled = filled.smooth(size, filter_='gaussian',
+                                       normalize=True)
                 data = filled.data
         elif numpy.isnan(data).any():
             raise ValueError("cannot detect blobs in IntensityMap2D instances "
@@ -1672,7 +1830,7 @@ class IntensityMap2D(IntensityMap):
         return blobs
 
     def plot(self, axes=None, cax=None, threshold=None, vmin=None, vmax=None,
-             cmap=None, cbar_kw=None, **kwargs):
+             cmap=None, cbar=True, cbar_kw=None, **kwargs):
         """
         Plot the IntensityMap
 
@@ -1681,11 +1839,12 @@ class IntensityMap2D(IntensityMap):
 
         :axes: Axes instance to add the intensity map to. If None (default),
                a new Figure is created (this method never plots to the current
-               Figure or Axes). In the latter case, equal aspect ration will be
+               Figure or Axes). In the latter case, equal aspect ratio will be
                enforced on the newly created Axes instance.
-        :cax: Axes instance to plot the colorbar into. If None (default),
-              matplotlib automatically makes space for a colorbar on the
-              right-hand side of the plot.
+        cax : Axes, optional
+            Axes instance to add the colorbar to. If None (default), matplotlib
+            automatically makes space for a colorbar on the right-hand side of
+            the plot.
         :threshold: if not None, values below this threshold are masked from
                     the plot. This may be useful to visualize regions
                     surrounding peaks.
@@ -1695,23 +1854,24 @@ class IntensityMap2D(IntensityMap):
                      intensity of greater than or equal to vmax will be mapped
                      to the highest value in the colormap. If None (default),
                      the most extreme values in the intensity map will be used.
-        :cmap: colormap to use for the plot. All valid matplotlib colormap
-               arguments can be used. If None (default), the default colormap
-               from rcParams is used (BEWARE: the default map might be 'jet',
-               and this is something you certainly DON'T WANT to use! If you're
-               clueless, try "YlGnBu_r" or "gray").
+        cmap : Colormap or registered colormap name, optional
+            Colormap to use for the plot. If None (default), the default
+            colormap from rcParams is used.
+            ..note:: The default map might be 'jet', and this is something you
+            certainly DON'T WANT to use! If you're clueless, try 'YlGnBu_r' or
+            'gray'.
+        cbar : bool, optional
+            If True, add colorbar. If False, don't.
         :cbar_kw: dict of keyword arguments to pass to the pyplot.colorbar()
                   function. Default: None (empty dict)
         :kwargs: additional keyword arguments passed on to axes.pcolormesh()
         :returns: the axes instance containing the plot, and the colorbar
-                  instance
+                  instance (if plotted).
 
         """
         if axes is None:
             fig, axes = pyplot.subplots(subplot_kw={'aspect': 'equal'})
-
-        if cbar_kw is None:
-            cbar_kw = {}
+        ret = [axes]
 
         x, y = self.bset.mesh
 
@@ -1721,14 +1881,42 @@ class IntensityMap2D(IntensityMap):
 
         mesh = axes.pcolormesh(x, y, data, vmin=vmin, vmax=vmax, cmap=cmap,
                                **kwargs)
-        cbar = pyplot.colorbar(mesh, cax=cax, **cbar_kw)
+        if cbar:
+            if cbar_kw is None:
+                cbar_kw = {}
+            ret.append(pyplot.colorbar(mesh, cax=cax, **cbar_kw))
+
         axes.set(xlim=self.bset.xedges[(0, -1), ],
                  ylim=self.bset.yedges[(0, -1), ])
 
-        return axes, cbar
+        return ret
+
+    def rotate(self, angle, reshape=False):
+        """
+        Compute a rotated version of the intensity map
+
+        The map is rotated around its center.
+
+        Parameters
+        ----------
+        angle : scalar
+            Angle to rotate, in degrees.
+        reshape : bool, optional
+            If True, the returned intensity map is resized to fit the whole
+            rotated map. If False, the returned map is of the same size
+            as this (corners will be cropped unless `angle` is a multiple of
+            90).
+
+        Returns
+        -------
+        IntensityMap
+            Rotated version of the intensity map.
+
+        """
+        return IntensityMap.rotate(self, angle, reshape=reshape)
 
 
-def _safe_mmap(normalized, mapfunc, arrs):
+def _safe_mmap(normalize, mapfunc, arrs):
     """
     Safely compute a general multilinear map (e.g. filtering, convolution) over
     any number of arrays, optionally normalizing the result to eliminate the
@@ -1736,10 +1924,10 @@ def _safe_mmap(normalized, mapfunc, arrs):
 
     In this context, safely means that the presence of nans or masked values in
     any of the input arrays will cause an exception to be raised, unless
-    normalized == True, in which case nans and masked values are treated as
+    normalize == True, in which case nans and masked values are treated as
     missing values.
 
-    :normalized: if True, the output of the map is normalized at each element
+    :normalize: if True, the output of the map is normalized at each element
                  to eliminate the contribution from nans, masked values and
                  values beyond the edges of the array. Where only such values
                  would have contributed, the resulting value is nan. If False,
@@ -1757,19 +1945,24 @@ def _safe_mmap(normalized, mapfunc, arrs):
     """
     filled_arrs = []
     indicators = []
+    ones = []
     for arr in arrs:
         masked_arr = numpy.ma.masked_where(numpy.isnan(arr), arr)
         mask = numpy.ma.getmaskarray(masked_arr)
-        indicators.append((~mask).astype(numpy.float_))
+        ind = (~mask).astype(numpy.float_)
+        indicators.append(ind)
+        ones.append(numpy.ones_like(ind))
         filled_arrs.append(numpy.ma.filled(masked_arr, fill_value=0.0))
 
-    if normalized:
-        new_arr = sensibly_divide(mapfunc(*filled_arrs), mapfunc(*indicators),
-                                  masked=True)
+    if normalize:
+        perfect_weights = mapfunc(*ones)
+        weights = mapfunc(*indicators)
+        weights /= perfect_weights.max()
+        new_arr = sensibly_divide(mapfunc(*filled_arrs), weights, masked=True)
     else:
         if any(numpy.any(ind == 0.0) for ind in indicators):
             raise ValueError("cannot filter IntensityMap instances with "
-                             "masked values or nans unless normalized == True")
+                             "masked values or nans unless normalize == True")
         new_arr = mapfunc(*arrs)
 
     return new_arr
