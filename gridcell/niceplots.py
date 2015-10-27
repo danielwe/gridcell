@@ -608,7 +608,8 @@ def ldistplot(pattern, nsims=1000, weight_function=None, length_unit='cm',
     axes = distplot(lstat, color=palette[0],
                     hist_kws={'histtype': 'stepfilled',
                               'label': 'Simulations'})
-    axes.axvline(pattern.lstatistic(), color=palette[1], label='Pattern')
+    axes.axvline(pattern.lstatistic(weight_function=weight_function),
+                 color=palette[1], label='Pattern')
     axes.set(xlabel=r"$\tau \ / \ \mathrm{{{}}}$".format(length_unit),
              ylabel=r"$f(\tau) \ / \ \mathrm{{{}}}^{{-1}}$"
              .format(length_unit))
