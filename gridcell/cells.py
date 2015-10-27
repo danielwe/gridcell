@@ -169,6 +169,10 @@ class Position(AlmostImmutable):
         self.params = dict(speed_window=speed_window, min_speed=min_speed)
         self.info = kwargs
 
+        t = numpy.squeeze(t)
+        x = numpy.ma.squeeze(x)
+        y = numpy.ma.squeeze(y)
+
         nanmask = numpy.logical_or(numpy.isnan(x), numpy.isnan(y))
         x = numpy.ma.masked_where(nanmask, x)
         y = numpy.ma.masked_where(nanmask, y)
@@ -2029,6 +2033,8 @@ class Cell(BaseCell):
             range_=range_
         )
 
+        spike_t = numpy.squeeze(spike_t)
+
         posdata = position.filtered_data()
         spike_x, spike_y = self.interpolate_spikes(spike_t,
                                                    posdata['t'],
@@ -2398,7 +2404,6 @@ class Cell(BaseCell):
 
         """
         data = self.data
-        params = self.params
         pos = self.position
         posdata = pos.data
         posparams = pos.params
@@ -2418,11 +2423,57 @@ class Cell(BaseCell):
         spikeindex = numpy.logical_and(t_start < spike_t, spike_t <= t_stop)
         new_spike_t = data['spike_t'][spikeindex]
 
-        return Cell(position=new_pos, spike_t=new_spike_t,
-                    bins=params['bins'],
-                    range_=params['range_'],
-                    filter_size=params['filter_size'],
-                    threshold=params['threshold'])
+        kwargs = self.info
+        kwargs.update(self.params)
+
+        return Cell(position=new_pos, spike_t=new_spike_t, **kwargs)
+
+    def resample_spikes(self, length=None):
+        """
+        Create a Cell object by resampling spikes with replacement
+
+        Parameters
+        ----------
+        length : integer, optional
+            Length of the resampled spike train. If None, the length is the
+            same as the original spike train.
+
+        Returns
+        -------
+        Cell
+            New Cell object based on the data recorded between
+            ..math:`t_0 + (t_f - t_0) * start` and ..math:`t_0 + (t_f - t_0)
+            * stop`.
+
+        """
+        data = self.data
+
+        spike_t = data['spike_t']
+        if length is None:
+            length = len(spike_t)
+        new_spike_t = numpy.random.choice(spike_t, size=length, replace=True)
+        return self.new_spike_t(new_spike_t)
+
+    def new_spike_t(self, new_spike_t):
+        """
+        Create a new Cell object with the same position data, parameters and
+        info as this one, but new spiking times
+
+        Parameters
+        ----------
+        new_spike_t : array-like
+            Array with the new spike times
+
+        Returns
+        -------
+        Cell
+            New Cell object using the new spike times
+
+        """
+        kwargs = self.info
+        kwargs.update(self.params)
+
+        return Cell(position=self.position, spike_t=new_spike_t, **kwargs)
 
     def plot_spikes(self, axes=None, path=False, marker='o', alpha=0.25,
                     zorder=10, **kwargs):
