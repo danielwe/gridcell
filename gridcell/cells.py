@@ -2428,15 +2428,19 @@ class Cell(BaseCell):
 
         return Cell(position=new_pos, spike_t=new_spike_t, **kwargs)
 
-    def resample_spikes(self, length=None):
+    def resample_spikes(self, length=1.0, replace=True):
         """
         Create a Cell object by resampling spikes with replacement
 
         Parameters
         ----------
-        length : integer, optional
-            Length of the resampled spike train. If None, the length is the
-            same as the original spike train.
+        length : float, optional
+            Number of spikes in the resampled spike train, expressed as
+            a fraction of the number of spikes in the original spike train.
+        replace : bool, optional
+            If True, the resampling is performed with replacement. If False,
+            it is performed without replacement. Note that if False, length
+            must be `<= 1.0`.
 
         Returns
         -------
@@ -2446,12 +2450,9 @@ class Cell(BaseCell):
             * stop`.
 
         """
-        data = self.data
-
-        spike_t = data['spike_t']
-        if length is None:
-            length = len(spike_t)
-        new_spike_t = numpy.random.choice(spike_t, size=length, replace=True)
+        spike_t = self.data['spike_t']
+        n = int(length * len(spike_t))
+        new_spike_t = numpy.random.choice(spike_t, size=n, replace=replace)
         return self.new_spike_t(new_spike_t)
 
     def new_spike_t(self, new_spike_t):
