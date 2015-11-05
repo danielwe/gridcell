@@ -2047,13 +2047,7 @@ class Cell(BaseCell):
             spike_y=spike_y,
         )
 
-        flname = memoize_method.friend_list_name
-        try:
-            friends = getattr(position, flname)
-        except AttributeError:
-            setattr(position, flname, [self])
-        else:
-            friends.append(self)
+        memoize_method.register_friend(position, self)
         self.position = position
 
     @staticmethod
@@ -2557,14 +2551,8 @@ class CellCollection(AlmostImmutable, MutableSequence):
         self._cells = cells
         self.info = kwargs
 
-        flname = memoize_method.friend_list_name
         for cell in self:
-            try:
-                friends = getattr(cell, flname)
-            except AttributeError:
-                setattr(cell, flname, [self])
-            else:
-                friends.append(self)
+            memoize_method.register_friend(cell, self)
 
     # Implement abstract methods
     def __getitem__(self, index, *args, **kwargs):
