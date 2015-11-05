@@ -3897,3 +3897,41 @@ class Module(CellCollection):
 
         return PointPattern(phase_points, window,
                             edge_correction=edge_correction)
+
+    def phase_clusters(self, eps=0.075, min_samples=3, **kwargs):
+        """
+        Compute clusters of cells in phase space
+
+        In order to do meaningful clustering that respects the periodic
+        boundary conditions, the DBSCAN clustering algorithm is used.
+
+        Parameters
+        ----------
+        eps, min_samples
+            See `cluster.dbscan`. Note that clustering is performed on
+            projected phases, so `eps` is dimensionless and should be less than
+            1.0 to be meaningful.
+        kwargs : dict, optional
+            Additional keyword arguments are passed to `cluster.dbscan`.
+
+        Returns
+        -------
+        labels : sequence
+            Sequence of labels with indices corresponding to the indices in
+            `self`: all cells with the same label belong to a cluster. The
+            special label `-1` denotes outliers. This output can be fed
+            directly to `CellCollection.from_labels` to instantiate new
+            `CellCollection` instances based on the labels.
+
+        """
+        l = len(self)
+        dmatrix = numpy.zeros((l, l))
+        w = self.window(window_type='voronoi', project_phases=True).centered()
+        ph = PointPattern.wrap_into(
+            w, self.pairwise_phases(project_phases=True).values)
+        for i in range(l):
+            for j in range(l):
+                p = ph[i * l + j]
+                dmatrix[i, j] = numpy.sqrt(p.x * p.x + p.y * p.y)
+        kwargs.update(eps=eps, min_samples=min_samples)
+        return cluster.dbscan(dmatrix, metric='precomputed', **kwargs)[1]
