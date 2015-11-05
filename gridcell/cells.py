@@ -3691,8 +3691,8 @@ class Module(CellCollection):
         out to optimize memoization.
 
         """
-        pl = [(cell1, cell2) for cell1 in self for cell2 in self
-              if cell2 is not cell1]
+        pl = [(cell1, cell2) for cell1 in self for cell2 in self]
+              #if cell2 is not cell1]
         return pandas.DataFrame(
             {pair: pair[1].phase(pair[0], **kwargs)
              for pair in pl},
@@ -3717,7 +3717,7 @@ class Module(CellCollection):
 
         ..note:: If `from_absolute` and `project_phases` are both False, there
         is no guarantee that the phases are well-defined with respect to
-        a common window, and the wrapping may thus give nonsensical results.
+        a common window, and thus wrapping may not even make sense.
 
         Parameters
         ----------
@@ -3745,8 +3745,8 @@ class Module(CellCollection):
         if from_absolute:
             kwargs.update(project_phases=project_phases)
             abs_phases = self.phases(**kwargs)
-            pl = [(cell1, cell2) for cell1 in self for cell2 in self
-                  if cell2 is not cell1]
+            pl = [(cell1, cell2) for cell1 in self for cell2 in self]
+                  #if cell2 is not cell1]
             return pandas.DataFrame(
                 {pair: abs_phases.loc[pair[1]] - abs_phases.loc[pair[0]]
                  for pair in pl}).transpose().loc[pl]
@@ -3790,7 +3790,7 @@ class Module(CellCollection):
             PointPattern instance representning the phases.
 
         """
-        window = self.window(**kwargs).centered()
+        window = self.window(**kwargs)
         # Avoid unneccesary spreading of keywords to memoized methods
         try:
             del kwargs['window_type']
@@ -3867,7 +3867,7 @@ class Module(CellCollection):
         pairwise_phases = self.pairwise_phases(**kwargs)
         l = len(self)
         unique_indices = [(self[i], self[j])
-                          for i in range(l - 1) for j in range(i, l - 1)]
+                          for i in range(l - 1) for j in range(i + 1, l)]
 
         if not full_window:
             ppoints = PointPattern.wrap_into(
