@@ -3691,11 +3691,11 @@ class Module(CellCollection):
         out to optimize memoization.
 
         """
-        phasedict = {cell1: pandas.DataFrame(
-            [cell1.phase(cell2, **kwargs) for cell2 in self],
-            index=self, columns=('phase_x', 'phase_y'))
-            for cell1 in self}
-        return pandas.Panel(phasedict).loc[self, self]
+        pl = [(cell1, cell2) for cell1 in self for cell2 in self]
+        return pandas.DataFrame(
+            {pair: pair[1].phase(pair[0], **kwargs)
+             for pair in pl},
+            columns=('phase_x', 'phase_y')).transpose().loc[pl]
 
     def pairwise_phases(self, from_absolute=True, project_phases=False,
                         **kwargs):
@@ -3734,21 +3734,20 @@ class Module(CellCollection):
 
         Returns
         -------
-        Panel
+        DataFrame
             DataFrame containing the x- and y-components of the grid phase of
-            each cell relative to the template cell, under the keys given by
-            `BaseCell.phase`. The rows in the DataFrame are indexed by the Cell
-            objects.
+            each cell relative to each other cell. The DataFrame is indexed by
+            pairs `(cell1, cell2)` for the relative phase of `cell2` with
+            respect to `cell1`.
 
         """
         if from_absolute:
             kwargs.update(project_phases=project_phases)
             abs_phases = self.phases(**kwargs)
-            values = abs_phases.values
-            diff = values - values[:, numpy.newaxis, :]
-            return pandas.Panel(diff, items=abs_phases.index,
-                                major_axis=abs_phases.index,
-                                minor_axis=abs_phases.columns)
+            pl = [(cell1, cell2) for cell1 in self for cell2 in self]
+            return pandas.DataFrame(
+                {pair: abs_phases.loc[pair[1]] - abs_phases.loc[pair[0]]
+                 for pair in pl}).transpose().loc[pl]
 
         pairwise_phases = self._pairwise_phases(**kwargs)
         if project_phases:
@@ -3757,10 +3756,9 @@ class Module(CellCollection):
             basis = self.template(**kwargs).grid_peaks(**pkw)[:2]
             new_basis = REGULAR_GRID_PEAKS[:2]
             coeffs = project_vectors(pairwise_phases, basis)
-            pairwise_phases = pandas.Panel(
-                coeffs.dot(new_basis), items=pairwise_phases.items,
-                major_axis=pairwise_phases.major_axis,
-                minor_axis=pairwise_phases.minor_axis)
+            pairwise_phases = pandas.DataFrame(
+                coeffs.dot(new_basis), index=pairwise_phases.index,
+                columns=pairwise_phases.columns)
 
         return pairwise_phases
 
@@ -3865,11 +3863,13 @@ class Module(CellCollection):
             kwargs.update(from_absolute=from_absolute)
 
         pairwise_phases = self.pairwise_phases(**kwargs)
-        indices = numpy.triu_indices(len(self), k=1)
+        l = len(self)
+        unique_indices = [(self[i], self[j])
+                          for i in range(l - 1) for j in range(i + 1, l)]
 
         if not full_window:
             ppoints = PointPattern.wrap_into(
-                window, pairwise_phases.values[indices])
+                window, pairwise_phases.loc[unique_indices].values)
             half_window = window.diagonal_cut()
             good_points = half_window.intersection(ppoints)
             bad_points = ppoints.difference(good_points)
@@ -3878,19 +3878,18 @@ class Module(CellCollection):
             window = half_window
         elif sign in ('random', 'alternating'):
             if sign == 'random':
-                signs = numpy.random.randint(0, 2, size=indices[0].shape)
+                signs = numpy.random.randint(0, 2, size=len(unique_indices))
             else:
-                signs = numpy.mod(numpy.arange(indices[0].size), 2)
-            indices = (numpy.where(signs, indices[0], indices[1]),
-                       numpy.where(signs, indices[1], indices[0]))
+                signs = numpy.mod(numpy.arange(len(unique_indices)), 2)
+            signs = 2 * signs - 1
+            indices = [ui[::s] for (ui, s) in zip(unique_indices, signs)]
             phase_points = PointPattern.wrap_into(
-                window, pairwise_phases.values[indices])
+                window, pairwise_phases.loc[indices].values)
         elif sign == 'both':
-            indices = (numpy.hstack((indices[0], indices[1])),
-                       numpy.hstack((indices[1], indices[0])))
+            indices = unique_indices + [ui[::-1] for ui in unique_indices]
 
             phase_points = PointPattern.wrap_into(
-                window, pairwise_phases.values[indices])
+                window, pairwise_phases.loc[indices].values)
         else:
             raise ValueError("unknown sign: {}.".format(sign))
 
