@@ -2749,6 +2749,47 @@ class CellCollection(AlmostImmutable, MutableSequence):
 
         return cls(clist, **kwargs)
 
+    @classmethod
+    def from_labels(cls, cells, labels, min_length=4, **kwargs):
+        """
+        Use a list of keys and corresponding labels to instantiate several
+        CellCollection instances
+
+        Parameters
+        ----------
+        cells : sequence of cells
+            Sequence to pick cells for the CellCollections from.
+        labels : sequence
+            Sequence of labels with indices corresponding to the indices in
+            `cells`: all cells with the same label become a collection. The
+            special label `-1` denotes outliers.
+        min_length : integer, optional
+            The minimum number of cells in a collection. Potential collections
+            with fewer cells than this are merged into the outliers.
+        **kwargs : dict, optional
+            Keyword arguments passed to the `CellCollection` constructor.
+
+        Returns
+        -------
+        collections : list
+            List of new CellCollection instances.
+        outliers : CellCollection
+            Collection of outlier cells.
+
+        """
+        tentative_collections = [[] for _ in range(max(labels) + 2)]
+        for (cell, label) in zip(cells, labels):
+            coll = tentative_collections[label].append(cell)
+        collections = []
+        outliers = CellCollection(tentative_collections.pop())
+        for coll in tentative_collections:
+            if len(coll) < min_length:
+                outliers += coll
+            else:
+                collections.append(cls(coll, **kwargs))
+
+        return collections, outliers
+
     def lookup(self, info):
         """
         Look up cells through their `info` attribute
@@ -3122,11 +3163,11 @@ class CellCollection(AlmostImmutable, MutableSequence):
         Returns
         -------
         labels : sequence
-            Sequence of labels with indices corresponding to the inndices in
-            `self`: all cells with the same label become a module. The special
-            label `-1` denotes outliers. This output can be fed directly to
-            `Module.from_labels` to instantiate new `Module` instances based on
-            the labels.
+            Sequence of labels with indices corresponding to the indices in
+            `self`: all cells with the same label belong to a module. The
+            special label `-1` denotes outliers. This output can be fed
+            directly to `CellCollection.from_labels` to instantiate new
+            `CellCollection` instances based on the labels.
 
         """
         if feat_kw is None:
@@ -3153,11 +3194,11 @@ class CellCollection(AlmostImmutable, MutableSequence):
         Returns
         -------
         labels : sequence
-            Sequence of labels with indices corresponding to the inndices in
-            `self`: all cells with the same label become a module. The special
-            label `-1` denotes outliers. This output can be fed directly to
-            `Module.from_labels` to instantiate new `Module` instances based on
-            the labels.
+            Sequence of labels with indices corresponding to the indices in
+            `self`: all cells with the same label belong to a module. The
+            special label `-1` denotes outliers. This output can be fed
+            directly to `CellCollection.from_labels` to instantiate new
+            `CellCollection` instances based on the labels.
 
         """
         if feat_kw is None:
@@ -3188,11 +3229,11 @@ class CellCollection(AlmostImmutable, MutableSequence):
         Returns
         -------
         labels : sequence
-            Sequence of labels with indices corresponding to the inndices in
-            `self`: all cells with the same label become a module. The special
-            label `-1` denotes outliers. This output can be fed directly to
-            `Module.from_labels` to instantiate new `Module` instances based on
-            the labels.
+            Sequence of labels with indices corresponding to the indices in
+            `self`: all cells with the same label belong to a module. The
+            special label `-1` denotes outliers. This output can be fed
+            directly to `CellCollection.from_labels` to instantiate new
+            `CellCollection` instances based on the labels.
 
         """
         if feat_kw is None:
@@ -3452,51 +3493,6 @@ class Module(CellCollection):
     See `CellCollection`.
 
     """
-
-    @classmethod
-    def from_labels(cls, cells, labels, min_length=4, **kwargs):
-        """
-        Use a list of keys and corresponding labels to instantiate several
-        Module instances
-
-        Parameters
-        ----------
-        cells : sequence of cells
-            Sequence to pick cells for the modules from.
-        labels : sequence
-            Sequence of labels with indices corresponding to the indices in
-            `cells`: all cells with the same label become a module. The special
-            label `-1` denotes outliers.
-        min_length : integer, optional
-            The minimum number of cells in a module. Potential modules with
-            fewer cells than this are merged into the outliers.
-        **kwargs : dict, optional
-            Keyword arguments passed to the `Module` constructor.
-
-        Returns
-        -------
-        modules : list
-            List of new Module instances. The modules are sorted by the grid
-            scale of the template cell.
-        outliers : CellCollection
-            Collection of outlier cells.
-
-        """
-        tentative_modules = [[] for _ in range(max(labels) + 2)]
-        for (cell, label) in zip(cells, labels):
-            mod = tentative_modules[label].append(cell)
-        modules = []
-        outliers = CellCollection(tentative_modules.pop())
-        for mod in tentative_modules:
-            if len(mod) < min_length:
-                outliers += mod
-            else:
-                modules.append(cls(mod, **kwargs))
-
-        modules.sort(key=lambda mod: mod.template().scale())
-
-        return modules, outliers
-
     def _template_bset(self, **kwargs):
         """
         Compute a BinnedSet2D for the template cell
