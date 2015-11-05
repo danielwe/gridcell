@@ -755,6 +755,7 @@ class BaseCell(AbstractAlmostImmutable):
         return self.ratemap(**kwargs).autocorrelate(mode=mode, pearson=pearson,
                                                     normalize=normalize_acorr)
 
+    @memoize_method
     def corr(self, other, mode='full', pearson='global', normalize_corr=True,
              **kwargs):
         """
@@ -780,6 +781,9 @@ class BaseCell(AbstractAlmostImmutable):
             See `IntensityMap2D.correlate`.
 
         """
+        # Register this cell for memoize cache clearance whenever this is
+        # performed on the other cell.
+        memoize_method.register_friend(other, self)
         return self.ratemap(**kwargs).correlate(other.ratemap(**kwargs),
                                                 mode=mode,
                                                 pearson=pearson,
