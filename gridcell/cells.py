@@ -1129,12 +1129,12 @@ class BaseCell(AbstractAlmostImmutable):
         scales = numpy.arange(scale_min, scale_max, scale_step)
 
         acorr_rot_peaks = [[acorr.rotate(a)
-                            for a in numpy.linspace(angle - 7.5, angle + 7.5,
-                                                    num=11, endpoint=True)]
+                            for a in numpy.linspace(angle - 6.0, angle + 6.0,
+                                                    num=5, endpoint=True)]
                            for angle in angles_peaks]
         acorr_rot_troughs = [[acorr.rotate(a)
-                              for a in numpy.linspace(angle - 7.5, angle + 7.5,
-                                                      num=11, endpoint=True)]
+                              for a in numpy.linspace(angle - 6.0, angle + 6.0,
+                                                      num=5, endpoint=True)]
                              for angle in angles_troughs]
 
         def _score(scale):
