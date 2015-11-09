@@ -29,7 +29,7 @@ from shapely import geometry, affinity, ops, speedups
 from matplotlib import pyplot, patches
 from collections import Sequence
 
-from .utils import AlmostImmutable, sensibly_divide
+from .utils import AlmostImmutable, sensibly_divide, project_vectors
 from .memoize.memoize import memoize_method
 
 if speedups.available:
@@ -90,8 +90,14 @@ class Window(geometry.Polygon):
                              "(a parallellogram, or a hexagon with reflection "
                              "symmetry through its center) to compute lattice "
                              "vectors.")
+        lattice = vertices + numpy.roll(vertices, 1, axis=0)
 
-        return vertices + numpy.roll(vertices, 1, axis=0)
+        # Sort by angle, starting with the one closest to the x axis
+        angles = numpy.arctan2(lattice[:, 1], lattice[:, 0])
+        asort = numpy.argsort(angles)
+        start_index = numpy.argmin(numpy.abs(angles[asort]))
+        asort = numpy.roll(asort, -start_index)
+        return lattice[asort]
 
     @memoize_method
     def inscribed_circle(self):
@@ -424,11 +430,12 @@ class Window(geometry.Polygon):
         :returns: the value of the area p-function
 
         """
-        try:
-            num = numpy.asarray([self.intersection(point.buffer(rval)).area
-                                 for rval in r])
-        except TypeError:
-            num = self.intersection(point.buffer(r)).area
+        r = numpy.asarray(r)
+        num = numpy.empty_like(r)
+        r_ravel = r.ravel()
+        num_ravel = num.ravel()
+        for (i, rval) in enumerate(r_ravel):
+            num_ravel[i] = self.intersection(point.buffer(rval)).area
 
         return sensibly_divide(num, self.pvdenom(r))
 
@@ -444,12 +451,13 @@ class Window(geometry.Polygon):
         :returns: the value of the perimeter p-function
 
         """
-        try:
-            num = numpy.asarray(
-                [self.intersection(point.buffer(rval).boundary).length
-                 for rval in r])
-        except TypeError:
-            num = self.intersection(point.buffer(r).boundary).length
+        r = numpy.asarray(r)
+        num = numpy.empty_like(r)
+        r_ravel = r.ravel()
+        num_ravel = num.ravel()
+        for (i, rval) in enumerate(r_ravel):
+            num_ravel[i] = self.intersection(
+                point.buffer(rval).boundary).length
 
         denom = _2PI * r * self.isotropised_set_covariance(r)
 
@@ -572,14 +580,6 @@ class PointPattern(AlmostImmutable, Sequence):
         if not isinstance(window, Window):
             window = Window(window)
         self.window = window
-
-        flname = memoize_method.friend_list_name
-        try:
-            friends = getattr(window, flname)
-        except AttributeError:
-            setattr(window, flname, [self])
-        else:
-            friends.append(self)
 
         points = geometry.MultiPoint(points)
 
@@ -764,7 +764,7 @@ class PointPattern(AlmostImmutable, Sequence):
     def union(self, other):
         return self._inherit_binary_operation(other, 'union')
 
-    def periodic_extension(self, levels):
+    def periodic_extension(self, periodic_levels):
         """
         Compute the periodic extension of this point pattern
 
@@ -773,7 +773,7 @@ class PointPattern(AlmostImmutable, Sequence):
 
         Returns
         -------
-        levels : integer
+        periodic_levels : integer
             The number of levels of periodic extensions to compute. A level
             roughly consists of all the lattice displacements that can be
             written as a sum of an equal number of lattice unit vectors.
@@ -786,7 +786,7 @@ class PointPattern(AlmostImmutable, Sequence):
         lattice = self.window.lattice()
         lattice_r1 = numpy.roll(lattice, 1, axis=0)
         dvec_list = []
-        for i in range(levels + 1):
+        for i in range(periodic_levels + 1):
             for l in range(i):
                 k = i - l
                 dvec_list.append(k * lattice + l * lattice_r1)
@@ -796,7 +796,7 @@ class PointPattern(AlmostImmutable, Sequence):
              for dvec in dvecs])
         return periodic_points
 
-    def points(self, mode='default', levels=2):
+    def points(self, mode='default', periodic_levels=2, project_points=False):
         """
         Return the points in the pattern
 
@@ -813,9 +813,16 @@ class PointPattern(AlmostImmutable, Sequence):
             ``plus``
                 The union of the pattern and the associated plus sampling
                 points in `self.pluspoints` is returned.
-        levels : integer, optional
+        periodic_levels : integer, optional
             The number of periodic levels to compute if `mode == 'periodic'`.
             See `PointPattern.periodic_extension` for explanation.
+        project_points : bool, optional
+            If True, the points will be projected into the unit square by
+            oblique projection onto the edges of the window of the point
+            pattern. The periodic extension points or plus sampling points will
+            of course take values outside the unit square, but will be subject
+            to the same transformation. If the window is not rhomboidal, an
+            error will be raised.
 
         Returns
         -------
@@ -824,13 +831,34 @@ class PointPattern(AlmostImmutable, Sequence):
 
         """
         if mode == 'default':
-            return self._points
+            points = self._points
         elif mode == 'periodic':
-            return self._points.union(self.periodic_extension(levels))
+            points = self._points.union(
+                self.periodic_extension(periodic_levels))
         elif mode == 'plus':
-            return self._points.union(self.pluspoints)
+            points = self._points.union(self.pluspoints)
         else:
             raise ValueError("unknown mode: {}".format(mode))
+
+        if project_points:
+            basis_vectors = self.window.lattice()
+            if len(basis_vectors) != 4:
+                raise ValueError("projection is only possible for point "
+                                 "patterns in rhomboidal windows.")
+            basis_vectors = basis_vectors[:2]
+
+            # Find the lower left corner (with respect to the basis vectors)
+            # of the window
+            boundary = numpy.asarray(self.window.boundary)[:-1]
+            boundary_coeffs = project_vectors(boundary, basis_vectors)
+            anchor_coeffs = min(boundary_coeffs, key=lambda bc: bc[0] + bc[1])
+
+            # Subtract anchor and project
+            parray = numpy.array(points) - anchor_coeffs.dot(basis_vectors)
+            point_coeffs = project_vectors(parray, basis_vectors)
+            points = geometry.MultiPoint(point_coeffs)
+
+        return points
 
     @staticmethod
     def pairwise_vectors(pp1, pp2=None):
@@ -1091,7 +1119,7 @@ class PointPattern(AlmostImmutable, Sequence):
         rvals = numpy.linspace(0.0, rmax, RSAMPLES)
 
         # Get step locations
-        rsteps, __ = self._estimator_base(edge_correction=edge_correction)
+        rsteps, __ = self._estimator_base(edge_correction)
         micrormax = 1.e-6 * rmax
         rstep_values = numpy.repeat(rsteps, 2)
         rstep_values[0::2] -= micrormax
@@ -1160,7 +1188,6 @@ class PointPattern(AlmostImmutable, Sequence):
 
                 ## Isotropic edge correction (to cancel corner effects that are
                 ## still present for large r)
-                #centroi
                 #for j in numpy.nonzero(vindex)[0]:
                 #    r = distances[i, j]
                 #    ring = centroid.buffer(r).boundary
@@ -1195,6 +1222,171 @@ class PointPattern(AlmostImmutable, Sequence):
             raise ValueError("unknown edge correction: {}"
                              .format(edge_correction))
 
+    @staticmethod
+    def range_tree_static(points):
+        """
+        Construct a range tree from a set of points
+
+        Parameters
+        ----------
+        points : sequence
+            Sequence of Point instances to build the range tree from.
+
+        Returns
+        -------
+        tuple
+            Root node of the range tree. The nodes are tuples in the
+            following format:
+            (median_point, left_child, right_child, associated_binary_tree).
+            The associated binary tree at each node points to the root node of
+            a binary tree with nodes in the following format:
+            (median_point, left_child, right_child). In both cases,
+            `median_points` is a coordinate tuple in the format (x, y).
+
+        """
+        def build_binary_tree(points, sort_index):
+            # Binary tree node format: (point, left, right)
+            l = len(sort_index)
+            mid = l // 2
+            p = points[sort_index[mid]]
+            if l == 1:
+                return (p, None, None)
+            left = build_binary_tree(points, sort_index[:mid])
+            right = build_binary_tree(points, sort_index[mid:])
+            return (p, left, right)
+
+        def build_range_tree(points, xsort_index, ysort_index):
+            # Build associated binary tree
+            broot = build_binary_tree(points, ysort_index)
+
+            # Range tree node format: (point, left, right,
+            #                          associated_binary_tree)
+            l = len(xsort_index)
+            mid = l // 2
+            p = points[xsort_index[mid]]
+            if l == 1:
+                return (p, None, None, broot)
+            xleft = xsort_index[:mid]
+            yleft = [yi for yi in ysort_index if yi in xleft]
+            xright = xsort_index[mid:]
+            yright = [yi for yi in ysort_index if yi in xright]
+            return (p,
+                    build_range_tree(points, xleft, yleft),
+                    build_range_tree(points, xright, yright),
+                    broot)
+
+        indices = range(len(points))
+        xsort_index = sorted(indices, key=lambda i: (points[i].x, points[i].y))
+        ysort_index = sorted(indices, key=lambda i: (points[i].y, points[i].x))
+        return build_range_tree(points, xsort_index, ysort_index)
+
+    @staticmethod
+    def range_tree_query(tree, xmin, xmax, ymin, ymax):
+        """
+        Return the points stored in a range tree that lie inside a rectangular
+        region
+
+        Parameters
+        ----------
+        root : tuple
+            Root node of the range tree, as returned from
+            `PointPattern.range_tree_static`.
+        xmin, xmax, ymin, ymax : scalars
+            Limits of the range in which to query the range tree for points.
+            Limits are inclusive in both ends.
+
+        Returns
+        -------
+        geometry.MultiPoint
+            Collection of all points from the tree inside the given range.
+
+        """
+        xmin, xmax = (xmin, -numpy.inf), (xmax, numpy.inf)
+        ymin, ymax = (ymin, -numpy.inf), (ymax, numpy.inf)
+
+        def isleaf(node):
+            return (node[1] is None) and (node[2] is None)
+
+        def query(root, min_, max_, key, report_func, points):
+            split = root
+            while not isleaf(split):
+                x = key(split[0])
+                if x > max_:
+                    split = split[1]
+                elif x <= min_:
+                    split = split[2]
+                else:
+                    break
+            else:
+                # Exited on a leaf node. Report if relevant and finish.
+                if min_ <= key(split[0]) <= max_:
+                    report_func(split, points)
+                return
+            # Exited on a non-leaf node: traverse and report from subtrees.
+            # Left subtree first.
+            node = split[1]
+            while not isleaf(node):
+                if key(node[0]) > min_:
+                    # The whole right subtree is relevant. Report it.
+                    report_func(node[2], points)
+                    node = node[1]
+                else:
+                    node = node[2]
+            # We end on a leaf node. Report if relevant.
+            if min_ <= key(node[0]) <= max_:
+                report_func(node, points)
+            # Then take the right subtree.
+            node = split[2]
+            while not isleaf(node):
+                if key(node[0]) <= max_:
+                    # The whole left subtree is relevant. Report it.
+                    report_func(node[1], points)
+                    node = node[2]
+                else:
+                    node = node[1]
+            # We end on a leaf node. Report if relevant.
+            if min_ <= key(node[0]) <= max_:
+                report_func(node, points)
+
+        def report_subtree(node, points):
+            if isleaf(node):
+                points.append(node[0])
+            else:
+                report_subtree(node[1], points)
+                report_subtree(node[2], points)
+
+        def report_yquery(node, points):
+            return query(node[3], ymin, ymax, lambda p: (p.y, p.x),
+                         report_subtree, points)
+
+        points = []
+        query(tree, xmin, xmax, lambda p: (p.x, p.y), report_yquery, points)
+
+        return geometry.MultiPoint(points)
+
+    @memoize_method
+    def range_tree(self, project_points=True):
+        """
+        Construct a range tree from the points in the pattern
+
+        Only the actual points in the pattern are added to the range tree --
+        plus sampling points or points from the periodic extension is never
+        used.
+
+        Parameters
+        ----------
+        project_points : bool, optional
+            Passed to `PointPattern.points`.
+
+        Returns
+        -------
+        Root node of the range tree. For details about the type and format, see
+        `PointPattern.range_tree_static`.
+
+        """
+        points = self.points(project_points=project_points)
+        return self.range_tree_static(points)
+
     @memoize_method
     def _estimator_base(self, edge_correction):
         """
@@ -1207,9 +1399,7 @@ class PointPattern(AlmostImmutable, Sequence):
         edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
                                'plus'}
             String to select the edge handling to apply in computations. See
-            the documentation for `PointPattern` for details.  If None, the
-            edge correction falls back to the default value (set at instance
-            initialization).
+            the documentation for `PointPattern` for details.
 
         Returns
         -------
@@ -1223,8 +1413,6 @@ class PointPattern(AlmostImmutable, Sequence):
             with distance r[i].
 
         """
-        if edge_correction is None:
-            edge_correction = self._edge_correction
         rmax = self.rmax(edge_correction=edge_correction)
         pmode = self._edge_config[edge_correction]['pmode']
 
@@ -1247,6 +1435,33 @@ class PointPattern(AlmostImmutable, Sequence):
         weights = weights[sort_ind]
 
         return r, weights
+
+    def _cumulative_base(self, edge_correction):
+        """
+        Compute the cumulative weight of the points in the pattern
+        Parameters
+        ----------
+        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
+                               'plus'}, optional
+            String to select the edge handling to apply in computations. See
+            the documentation for `PointPattern` for details.
+
+        Returns
+        -------
+        rsteps : ndarray
+            Array containing the r values between `rmin`and `rmax`  at which
+            the cumulative characteristics make jumps.
+        cweights : ndarray
+             Array of the same shape as `rsteps`, containing the value of the
+             cumulated weights just after each step.
+
+        """
+        rmax = self.rmax(edge_correction=edge_correction)
+        rsteps, weights = self._estimator_base(edge_correction)
+        rsteps = numpy.hstack((0.0, rsteps, rmax))
+        weights = numpy.hstack((0.0, weights, numpy.nan))
+        cweights = numpy.cumsum(weights)
+        return rsteps, cweights
 
     def kfunction(self, r, edge_correction=None):
         """
@@ -1272,17 +1487,14 @@ class PointPattern(AlmostImmutable, Sequence):
         if edge_correction is None:
             edge_correction = self._edge_correction
 
-        rmax = self.rmax(edge_correction=edge_correction)
-        rsteps, weights = self._estimator_base(edge_correction=edge_correction)
-        rsteps = numpy.hstack((0.0, rsteps, rmax))
-        weights = numpy.hstack((0.0, weights, numpy.nan))
-        numsteps = numpy.cumsum(weights)
+        rsteps, cweights = self._cumulative_base(
+            edge_correction=edge_correction)
 
         indices = numpy.searchsorted(rsteps, r, side='right') - 1
 
         imode = self._edge_config[edge_correction]['imode']
         lambda2 = self.squared_intensity(mode=imode, r=r)
-        return sensibly_divide(numsteps[indices], lambda2)
+        return sensibly_divide(cweights[indices], lambda2)
 
     def lfunction(self, r, edge_correction=None):
         """
@@ -1310,241 +1522,6 @@ class PointPattern(AlmostImmutable, Sequence):
 
         return numpy.sqrt(self.kfunction(r, edge_correction=edge_correction) /
                           _PI)
-
-    @staticmethod
-    def lfunction_std_static(r, window, intensity, edge_correction):
-        """
-        Compute the theoretical standard deviation of the empirical L-function
-        of a CSR pattern with a given number of points in a given window.
-
-        The ``theoretical'' standard deviation is really an empirically
-        validated formula, and should be a very good fit to the true standard
-        deviation within the interval given by
-        `PointPattern.lstatistic_interval`. It is currently only implemented
-        for periodic boundary conditions -- an array of ones is returned for
-        other edge corrections.
-
-        Parameters
-        ----------
-        r : array-like
-            array of values at which to evaluate the emprical L-function
-            standard deviation.
-        window : Polygon
-            Window for the assumed point pattern.
-        intensity : scalar
-            Intensity of the assumed point pattern.
-        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
-                               'plus'}, optional
-            String to select the edge handling to apply in computations. See
-            the documentation for `PointPattern` for details.
-
-        Returns
-        -------
-        array
-            Values of the standard deviation of the empirical L-function,
-            evaulated at `r`.
-
-        """
-        lstd = numpy.ones_like(r)
-
-        r_ravel = numpy.asarray(r).ravel()
-        lstd_ravel = lstd.ravel()
-        if edge_correction == 'periodic':
-            voronoi = window.voronoi()
-            npoints = voronoi.area * intensity
-            centroid = voronoi.centroid
-            for (i, rval) in enumerate(r_ravel):
-                lstd_ravel[i] = numpy.sqrt(voronoi.difference(
-                    centroid.buffer(rval)).area) / (2.48 * npoints)
-        return lstd
-
-    def lfunction_std(self, r, edge_correction=None):
-        """
-        Compute the theoretical standard deviation of the empirical L-function
-        of a point pattern like this one, under the CSR hypothesis.
-
-        Parameters
-        ----------
-        r : array-like
-            array of values at which to evaluate the emprical L-function
-            standard deviation.
-        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
-                               'plus'}, optional
-            String to select the edge handling to apply in computations. See
-            the documentation for `PointPattern` for details.  If None, the
-            edge correction falls back to the default value (set at instance
-            initialization).
-
-        Returns
-        -------
-        array
-            Values of the standard deviation of the empirical L-function,
-            evaulated at `r`.
-
-        """
-        if edge_correction is None:
-            edge_correction = self._edge_correction
-
-        imode = self._edge_config[edge_correction]['imode']
-        intensity = self.intensity(r=r, mode=imode)
-
-        return self.lfunction_std_static(r, self.window, intensity,
-                                         edge_correction=edge_correction)
-
-    def lstatistic(self, rmin=None, rmax=None, weight_function=None,
-                   edge_correction=None):
-        """
-        Compute the L test statistic for CSR
-
-        The test statstic is defined as max(abs(L(r) - r)) for r-values between
-        some minimum maximum radii. Note that if edge_correction == 'finite',
-        the power of the L test may depend heavily on the maximum r-value and
-        the number of points in the pattern, and the statistic computed by this
-        function may not be adequate.
-
-        Parameters
-        ----------
-        rmin : scalar
-            The minimum r value to consider when computing the statistic. If
-            None, the value is set by `PointPattern.lstatistic_interval`.
-        rmin : scalar
-            The maximum r value to consider when computing the statistic. If
-            None, the value is set by `PointPattern.lstatistic_interval`.
-        weight_function : callable, optional
-            If not None, the offset `L(r) - r` is weighted at by
-            `weight_function(r)`. The function should accept one array-like
-            argument of r values. A typical example of a relevant weight
-            function is `lambda r: 1.0 / pp.lfunction_std(r)`, where `pp` is
-            the `PointPattern` instance for which the L test statistic is
-            computed. This weight will compensate for the variation of the
-            variance of L(r) - r for different r.
-        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
-                               'plus'}, optional
-            String to select the edge handling to apply in computations. See
-            the documentation for `PointPattern` for details.  If None, the
-            edge correction falls back to the default value (set at instance
-            initialization).
-
-        Returns
-        -------
-        scalar
-            The L test statistic.
-
-        """
-        if edge_correction is None:
-            edge_correction = self._edge_correction
-
-        interval = self.lstatistic_interval(edge_correction=edge_correction)
-        if rmin is None:
-            rmin = interval[0]
-        if rmax is None:
-            rmax = interval[1]
-
-        # The largest deviation between L(r) and r is bound to be at a vertical
-        # step. We go manual instead of using self.lfunction, in order to get
-        # it as exactly and cheaply as possible.
-        rend = self.rmax(edge_correction=edge_correction)
-        rsteps, weights = self._estimator_base(edge_correction=edge_correction)
-        rsteps = numpy.hstack((0.0, rsteps, rend))
-        valid = numpy.logical_and(rsteps > rmin, rsteps < rmax)
-        rsteps = rsteps[valid]
-        weights = numpy.hstack((0.0, weights, numpy.nan))
-        numsteps = numpy.cumsum(weights)
-        numsteps_high = numsteps[valid]
-        numsteps_low = numsteps[numpy.roll(valid, -1)]
-
-        # Compute the L-values just before and after each step
-        imode = self._edge_config[edge_correction]['imode']
-        lambda2 = self.squared_intensity(mode=imode, r=rsteps)
-        lvals_high = numpy.sqrt(sensibly_divide(numsteps_high, _PI * lambda2))
-        lvals_low = numpy.sqrt(sensibly_divide(numsteps_low, _PI * lambda2))
-
-        # Compute the offset
-        offset = numpy.hstack((lvals_high - rsteps, lvals_low - rsteps))
-
-        # Weight the offsets by the theoretical standard deviation at the
-        # corresponding r values.
-        if weight_function is not None:
-            weight = weight_function(rsteps)
-            weight = numpy.hstack((weight, weight))
-            offset *= weight
-        return numpy.nanmax(numpy.abs(offset))
-
-    @staticmethod
-    def lstatistic_interval_static(window, intensity, edge_correction):
-        """
-        Compute an appropriate interval over which to evaluate the L test
-        statistic for a point pattern with a given intensity in a given window
-
-        The interval is defined as [rmin, rmax], where rmin equals :math:`2.0
-        / (\\lambda \\sqrt{\\nu(W)})`, where :math:`\lambda` is the intensity
-        of the process and :math:`\\sqrt{\\nu(W)}` is the area of the window,
-        and rmax is the minimum of the following two alternatives:
-        - the radius of the largest inscribed circle in the window of the point
-          pattern, as computed by `Window.inscribed_circle` (if using periodic
-          edge correction, the radius of the largest inscribed circle in the
-          Voronoi unit cell of the periodic lattice is used instead),
-        - the maximum relevant interpoint distance in the point pattern, as
-          computed by `PointPattern.rmax`.
-
-        Parameters
-        ----------
-        window : Polygon
-            Window for the assumed point pattern.
-        intensity : scalar
-            Intensity of the assumed point pattern.
-        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
-                               'plus'}, optional
-            String to select the edge handling to apply in computations. See
-            the documentation for `PointPattern` for details.
-
-        Returns
-        -------
-        rmin : scalar
-            The minimum end of the L test statistic interval
-        rmax : scalar
-            The maximum end of the L test statistic interval
-
-        """
-        rmax_absolute = PointPattern.rmax_static(window, edge_correction)
-        if edge_correction == 'periodic':
-            rmax_standard = window.voronoi().inscribed_circle()['r']
-        else:
-            rmax_standard = window.inscribed_circle()['r']
-        rmax = min(rmax_standard, rmax_absolute)
-
-        rmin = 2.0 / (intensity * numpy.sqrt(window.area))
-
-        return rmin, rmax
-
-    def lstatistic_interval(self, edge_correction=None):
-        """
-        Compute the an appropriate interval over which to evaluate the L test
-        statistic for this pattern
-
-        Parameters
-        ----------
-        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
-                               'plus'}, optional
-            String to select the edge handling to apply in computations. See
-            the documentation for `PointPattern` for details.  If None, the
-            edge correction falls back to the default value (set at instance
-            initialization).
-
-        Returns
-        -------
-        rmin : scalar
-            The minimum end of the L test statistic interval
-        rmax : scalar
-            The maximum end of the L test statistic interval
-
-        """
-        if edge_correction is None:
-            edge_correction = self._edge_correction
-
-        intensity = self.intensity()
-        return self.lstatistic_interval_static(self.window, intensity,
-                                               edge_correction)
 
     def pair_corr_function(self, r, bandwidth=None, edge_correction=None):
         """
@@ -1579,18 +1556,585 @@ class PointPattern(AlmostImmutable, Sequence):
         if bandwidth is None:
             bandwidth = 0.2 / numpy.sqrt(self.intensity())
 
-        rpairs, weights = self._estimator_base(edge_correction=edge_correction)
+        rpairs, weights = self._estimator_base(edge_correction)
 
         # Find the contribution from each pair to each element in `r`
         d = numpy.abs(r[numpy.newaxis, ...] - rpairs[..., numpy.newaxis])
-        num = numpy.sum((d < bandwidth) * weights[..., numpy.newaxis], axis=0)
-        num *= 1.0 / (2.0 * _2PI * r * bandwidth)
+        w = numpy.sum((d < bandwidth) * weights[..., numpy.newaxis], axis=0)
+        w *= 1.0 / (2.0 * _2PI * r * bandwidth)
 
         imode = self._edge_config[edge_correction]['imode']
         lambda2 = self.squared_intensity(mode=imode, r=r)
-        return sensibly_divide(num, lambda2)
+        return sensibly_divide(w, lambda2)
+
+    @staticmethod
+    def kfunction_std_static(r, window, squared_intensity, edge_correction):
+        """
+        Compute the theoretical standard deviation of the empirical K-function
+        of a CSR pattern with a given number of points in a given window.
+
+        The ``theoretical'' standard deviation is really an empirically
+        validated formula, and should be a very good fit to the true standard
+        deviation within the interval given by
+        `PointPattern.lstatistic_interval`. It is currently only implemented
+        for periodic boundary conditions -- an array of ones is returned for
+        other edge corrections.
+
+        Parameters
+        ----------
+        r : array-like
+            array of values at which to evaluate the emprical K-function
+            standard deviation.
+        window : Polygon
+            Window for the assumed point pattern.
+        squared_intensity : scalar
+            Squared intensity of the assumed point pattern.
+        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
+                               'plus'}, optional
+            String to select the edge handling to apply in computations. See
+            the documentation for `PointPattern` for details.
+
+        Returns
+        -------
+        array
+            Values of the standard deviation of the empirical K-function,
+            evaulated at `r`.
+
+        """
+        kstd = numpy.ones_like(r)
+
+        r_ravel = numpy.asarray(r).ravel()
+        kstd_ravel = kstd.ravel()
+        if edge_correction == 'periodic':
+            voronoi = window.voronoi()
+            area = voronoi.area
+            npnp_1 = area * area * squared_intensity
+            centroid = voronoi.centroid
+            for (i, rval) in enumerate(r_ravel):
+                disc = centroid.buffer(rval)
+                kstd_ravel[i] = rval * (
+                    numpy.sqrt(2 * _PI * voronoi.difference(disc).area))
+            kstd /= numpy.sqrt(npnp_1)
+
+        return kstd
+
+    def kfunction_std(self, r, edge_correction=None):
+        """
+        Compute the theoretical standard deviation of the empirical k-function
+        of a point pattern like this one, under the CSR hypothesis.
+
+        Parameters
+        ----------
+        r : array-like
+            array of values at which to evaluate the emprical K-function
+            standard deviation.
+        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
+                               'plus'}, optional
+            String to select the edge handling to apply in computations. See
+            the documentation for `PointPattern` for details.  If None, the
+            edge correction falls back to the default value (set at instance
+            initialization).
+
+        Returns
+        -------
+        array
+            Values of the standard deviation of the empirical K-function,
+            evaulated at `r`.
+
+        """
+        if edge_correction is None:
+            edge_correction = self._edge_correction
+
+        imode = self._edge_config[edge_correction]['imode']
+        squared_intensity = self.squared_intensity(r=r, mode=imode)
+
+        return self.kfunction_std_static(r, self.window, squared_intensity,
+                                         edge_correction=edge_correction)
+
+    def kfunction_std_inv(self, r, edge_correction=None):
+        """
+        Compute the inverse of the theoretical standard deviation of the
+        empirical k-function of a point pattern like this one, under the CSR
+        hypothesis.
+
+        Parameters
+        ----------
+        r, edge_correction
+            See `PointPattern.kfunction_std`.
+
+        Returns
+        -------
+        array
+            Values of the inverse of the standard deviation of the empirical
+            K-function, evaulated at `r`.
+
+        """
+        return 1.0 / self.kfunction_std(r, edge_correction=edge_correction)
+
+    @staticmethod
+    def lfunction_std_static(r, window, squared_intensity, edge_correction):
+        """
+        Compute the theoretical standard deviation of the empirical L-function
+        of a CSR pattern with a given number of points in a given window.
+
+        The ``theoretical'' standard deviation is really an empirically
+        validated formula, and should be a very good fit to the true standard
+        deviation within the interval given by
+        `PointPattern.lstatistic_interval`. It is currently only implemented
+        for periodic boundary conditions -- an array of ones is returned for
+        other edge corrections.
+
+        Parameters
+        ----------
+        r : array-like
+            array of values at which to evaluate the emprical L-function
+            standard deviation.
+        window : Polygon
+            Window for the assumed point pattern.
+        squared_intensity : scalar
+            Squared intensity of the assumed point pattern.
+        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
+                               'plus'}, optional
+            String to select the edge handling to apply in computations. See
+            the documentation for `PointPattern` for details.
+
+        Returns
+        -------
+        array
+            Values of the standard deviation of the empirical L-function,
+            evaulated at `r`.
+
+        """
+        if edge_correction == 'periodic':
+            r = numpy.asarray(r)
+            lstd = (PointPattern.kfunction_std_static(
+                r, window, squared_intensity, edge_correction) /
+                (2.0 * _PI * r))
+        else:
+            lstd = numpy.ones_like(r)
+        return lstd
+
+    def lfunction_std(self, r, edge_correction=None):
+        """
+        Compute the theoretical standard deviation of the empirical L-function
+        of a point pattern like this one, under the CSR hypothesis.
+
+        Parameters
+        ----------
+        r : array-like
+            array of values at which to evaluate the emprical L-function
+            standard deviation.
+        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
+                               'plus'}, optional
+            String to select the edge handling to apply in computations. See
+            the documentation for `PointPattern` for details.  If None, the
+            edge correction falls back to the default value (set at instance
+            initialization).
+
+        Returns
+        -------
+        array
+            Values of the standard deviation of the empirical L-function,
+            evaulated at `r`.
+
+        """
+        if edge_correction is None:
+            edge_correction = self._edge_correction
+
+        imode = self._edge_config[edge_correction]['imode']
+        squared_intensity = self.squared_intensity(r=r, mode=imode)
+
+        return self.lfunction_std_static(r, self.window, squared_intensity,
+                                         edge_correction=edge_correction)
+
+    def lfunction_std_inv(self, r, edge_correction=None):
+        """
+        Compute the inverse of the theoretical standard deviation of the
+        empirical L-function of a point pattern like this one, under the CSR
+        hypothesis.
+
+        Parameters
+        ----------
+        r, edge_correction
+            See `PointPattern.lfunction_std`.
+
+        Returns
+        -------
+        array
+            Values of the inverse of the standard deviation of the empirical
+            L-function, evaulated at `r`.
+
+        """
+        return 1.0 / self.lfunction_std(r, edge_correction=edge_correction)
 
     @memoize_method
+    def kstatistic(self, rmin=None, rmax=None, weight_function=None,
+                   edge_correction=None):
+        """
+        Compute the K test statistic for CSR
+
+        The test statstic is defined as max(abs(K(r) - pi * r ** 2)) for
+        r-values between some minimum and maximum radii.
+
+        Parameters
+        ----------
+        rmin : scalar
+            The minimum r value to consider when computing the statistic. If
+            None, the value is set to 0.0.
+        rmin : scalar
+            The maximum r value to consider when computing the statistic. If
+            None, the value is set by the upper limit from
+            `PointPattern.lstatistic_interval`.
+        weight_function : callable, optional
+            If not None, the offset `K(r) - pi * r ** 2` is weighted by
+            `weight_function(r)`. The function should accept one array-like
+            argument of r values. A typical example of a relevant weight
+            function is `pp.kfunction_std_inv(r)`, where `pp` is the
+            `PointPattern` instance for which the K test statistic is computed.
+            This weight will compensate for the variation of the variance of
+            K(r) for different r.
+        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
+                               'plus'}, optional
+            String to select the edge handling to apply in computations. See
+            the documentation for `PointPattern` for details.  If None, the
+            edge correction falls back to the default value (set at instance
+            initialization).
+
+        Returns
+        -------
+        scalar
+            The K test statistic.
+
+        """
+        if edge_correction is None:
+            edge_correction = self._edge_correction
+
+        interval = self.kstatistic_interval(edge_correction=edge_correction)
+        if rmin is None:
+            rmin = interval[0]
+        if rmax is None:
+            rmax = interval[1]
+
+        # The largest deviation between K(r) and r is bound to be at a vertical
+        # step. We go manual instead of using self.kfunction, in order to get
+        # it as exactly and cheaply as possible.
+        rsteps, cweights = self._cumulative_base(
+            edge_correction=edge_correction)
+        valid = numpy.logical_and(rsteps >= rmin, rsteps < rmax)
+        rsteps = rsteps[valid]
+        cweights_high = cweights[valid]
+        cweights_low = cweights[numpy.roll(valid, -1)]
+
+        # Compute the K-values just before and after each step
+        imode = self._edge_config[edge_correction]['imode']
+        lambda2 = self.squared_intensity(mode=imode, r=rsteps)
+        kvals_high = sensibly_divide(cweights_high, lambda2)
+        kvals_low = sensibly_divide(cweights_low, lambda2)
+
+        # Compute the offset
+        pi_rsteps_sq = _PI * rsteps * rsteps
+        offset = numpy.hstack((kvals_high - pi_rsteps_sq,
+                               kvals_low - pi_rsteps_sq))
+
+        # Weight the offsets by the theoretical standard deviation at the
+        # corresponding r values.
+        if weight_function is not None:
+            weight = weight_function(rsteps)
+            weight = numpy.hstack((weight, weight))
+            offset *= weight
+        return numpy.nanmax(numpy.abs(offset))
+
+    @memoize_method
+    def lstatistic(self, rmin=None, rmax=None, weight_function=None,
+                   edge_correction=None):
+        """
+        Compute the L test statistic for CSR
+
+        The test statstic is defined as max(abs(L(r) - r)) for r-values between
+        some minimum and maximum radii. Note that if edge_correction ==
+        'finite', the power of the L test may depend heavily on the maximum
+        r-value and the number of points in the pattern, and the statistic
+        computed by this function may not be adequate.
+
+        Parameters
+        ----------
+        rmin : scalar
+            The minimum r value to consider when computing the statistic. If
+            None, the value is set by `PointPattern.lstatistic_interval`.
+        rmin : scalar
+            The maximum r value to consider when computing the statistic. If
+            None, the value is set by `PointPattern.lstatistic_interval`.
+        weight_function : callable, optional
+            If not None, the offset `L(r) - r` is weighted by
+            `weight_function(r)`. The function should accept one array-like
+            argument of r values. A typical example of a relevant weight
+            function is `pp.lfunction_std_inv(r)`, where `pp` is the
+            `PointPattern` instance for which the L test statistic is computed.
+            This weight will compensate for the variation of the variance of
+            L(r) for different r.
+        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
+                               'plus'}, optional
+            String to select the edge handling to apply in computations. See
+            the documentation for `PointPattern` for details.  If None, the
+            edge correction falls back to the default value (set at instance
+            initialization).
+
+        Returns
+        -------
+        scalar
+            The L test statistic.
+
+        """
+        if edge_correction is None:
+            edge_correction = self._edge_correction
+
+        interval = self.lstatistic_interval(edge_correction=edge_correction)
+        if rmin is None:
+            rmin = interval[0]
+        if rmax is None:
+            rmax = interval[1]
+
+        # The largest deviation between L(r) and r is bound to be at a vertical
+        # step. We go manual instead of using self.lfunction, in order to get
+        # it as exactly and cheaply as possible.
+        rsteps, cweights = self._cumulative_base(
+            edge_correction=edge_correction)
+        valid = numpy.logical_and(rsteps >= rmin, rsteps < rmax)
+        rsteps = rsteps[valid]
+        cweights_high = cweights[valid]
+        cweights_low = cweights[numpy.roll(valid, -1)]
+
+        # Compute the L-values just before and after each step
+        imode = self._edge_config[edge_correction]['imode']
+        lambda2 = self.squared_intensity(mode=imode, r=rsteps)
+        lvals_high = numpy.sqrt(sensibly_divide(cweights_high, _PI * lambda2))
+        lvals_low = numpy.sqrt(sensibly_divide(cweights_low, _PI * lambda2))
+
+        # Compute the offset
+        offset = numpy.hstack((lvals_high - rsteps, lvals_low - rsteps))
+
+        # Weight the offsets by the theoretical standard deviation at the
+        # corresponding r values.
+        if weight_function is not None:
+            weight = weight_function(rsteps)
+            weight = numpy.hstack((weight, weight))
+            offset *= weight
+        return numpy.nanmax(numpy.abs(offset))
+
+    @memoize_method
+    def ksstatistic(self, variation='fasano', edge_correction=None):
+        """
+        Compute the 2D Kolmogorov-Smirnov test statistic for CSR
+
+        Parameters
+        ----------
+        variation : {'fasano', 'peacock'}
+            Flag to select which definition of the 2D extension of the test
+            statistic to use. See Lopes, R., Reid, I., & Hobson, P. (2007). The
+            two-dimensional Kolmogorov-Smirnov test. Proceedings of Science.
+            Retrieved from http://bura.brunel.ac.uk/handle/2438/1166.
+        edge_correction
+            Not in use.
+
+        Returns
+        -------
+        scalar
+            The value of the KS test statistic.
+
+        """
+        if variation == 'fasano':
+            def xyiter(points):
+                for p in points:
+                    yield p.x, p.y, True
+        elif variation == 'peacock':
+            def xyiter(points):
+                for p in points:
+                    for q in points:
+                        yield p.x, q.y, p is q
+        else:
+            raise ValueError("Unknown 'variation': {}".format(variation))
+
+        tree = self.range_tree(project_points=True)
+        points = self.points(project_points=True)
+        n = len(points)
+        ks = 0.0
+        for x, y, ispoint in xyiter(points):
+            for (xmin, xmax) in ((0.0, x), (x, 1.0)):
+                for (ymin, ymax) in ((0.0, y), (y, 1.0)):
+                    np = len(self.range_tree_query(tree, xmin, xmax,
+                                                   ymin, ymax))
+
+                    #rect = geometry.Polygon(((xmin, ymin), (xmax, ymin),
+                    #                         (xmax, ymax), (xmin, ymax)))
+                    #ps = rect.intersection(points)
+                    #if isinstance(ps, geometry.Point):
+                    #    np = 1
+                    #else:
+                    #    np = len(ps)
+
+                    new_ks = numpy.abs(n * (xmax - xmin) * (ymax - ymin) - np)
+                    ks = max(ks, new_ks)
+
+                    # If x, y corresponds to an actual point location, the EDF
+                    # has a jump here, and we should also check the other
+                    # possible value.
+                    if ispoint:
+                        new_ks = numpy.abs(n * (xmax - xmin) * (ymax - ymin) -
+                                           (np - 1))
+                        ks = max(ks, new_ks)
+        return ks / numpy.sqrt(n)
+
+    @staticmethod
+    def kstatistic_interval_static(window, intensity, edge_correction):
+        """
+        Compute an appropriate interval over which to evaluate the K test
+        statistic for a point pattern with a given intensity in a given window
+
+        The interval is defined as [0.0, rmax], where rmax is the minimum of
+        the following two alternatives:
+        - the radius of the largest inscribed circle in the window of the point
+          pattern, as computed by `Window.inscribed_circle` (if using periodic
+          edge correction, the radius of the largest inscribed circle in the
+          Voronoi unit cell of the periodic lattice is used instead),
+        - the maximum relevant interpoint distance in the point pattern, as
+          computed by `PointPattern.rmax`.
+
+        Parameters
+        ----------
+        window : Polygon
+            Window for the assumed point pattern.
+        intensity : scalar
+            Intensity of the assumed point pattern.
+        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
+                               'plus'}, optional
+            String to select the edge handling to apply in computations. See
+            the documentation for `PointPattern` for details.
+
+        Returns
+        -------
+        rmin : scalar
+            The minimum end of the K test statistic interval
+        rmax : scalar
+            The maximum end of the K test statistic interval
+
+        """
+        rmax_absolute = PointPattern.rmax_static(window, edge_correction)
+        if edge_correction == 'periodic':
+            rmax_standard = window.voronoi().inscribed_circle()['r']
+        else:
+            rmax_standard = window.inscribed_circle()['r']
+        rmax = min(rmax_standard, rmax_absolute)
+        rmin = 0.5 / intensity * numpy.sqrt(window.area)
+        return rmin, rmax
+
+    def kstatistic_interval(self, edge_correction=None):
+        """
+        Compute the an appropriate interval over which to evaluate the K test
+        statistic for this pattern
+
+        Parameters
+        ----------
+        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
+                               'plus'}, optional
+            String to select the edge handling to apply in computations. See
+            the documentation for `PointPattern` for details.  If None, the
+            edge correction falls back to the default value (set at instance
+            initialization).
+
+        Returns
+        -------
+        rmin : scalar
+            The minimum end of the K test statistic interval
+        rmax : scalar
+            The maximum end of the K test statistic interval
+
+        """
+        if edge_correction is None:
+            edge_correction = self._edge_correction
+
+        intensity = self.intensity()
+        return self.kstatistic_interval_static(self.window, intensity,
+                                               edge_correction)
+
+    @staticmethod
+    def lstatistic_interval_static(window, intensity, edge_correction):
+        """
+        Compute an appropriate interval over which to evaluate the L test
+        statistic for a point pattern with a given intensity in a given window
+
+        The interval is defined as [rmin, rmax], where rmin equals :math:`2.0
+        / (\\lambda \\sqrt{\\nu(W)})`, where :math:`\lambda` is the intensity
+        of the process and :math:`\\sqrt{\\nu(W)}` is the area of the window,
+        and rmax is the same as in `PointPattern.kstatistic_interval_static`.
+
+        Parameters
+        ----------
+        window : Polygon
+            Window for the assumed point pattern.
+        intensity : scalar
+            Squared intensity of the assumed point pattern.
+        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
+                               'plus'}, optional
+            String to select the edge handling to apply in computations. See
+            the documentation for `PointPattern` for details.
+
+        Returns
+        -------
+        rmin : scalar
+            The minimum end of the L test statistic interval
+        rmax : scalar
+            The maximum end of the L test statistic interval
+
+        """
+        rmin, rmax = PointPattern.kstatistic_interval_static(window,
+                                                             intensity,
+                                                             edge_correction)
+        rmin *= 4.0
+        return rmin, rmax
+
+    def lstatistic_interval(self, edge_correction=None):
+        """
+        Compute the an appropriate interval over which to evaluate the L test
+        statistic for this pattern
+
+        Parameters
+        ----------
+        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
+                               'plus'}, optional
+            String to select the edge handling to apply in computations. See
+            the documentation for `PointPattern` for details.  If None, the
+            edge correction falls back to the default value (set at instance
+            initialization).
+
+        Returns
+        -------
+        rmin : scalar
+            The minimum end of the L test statistic interval
+        rmax : scalar
+            The maximum end of the L test statistic interval
+
+        """
+        if edge_correction is None:
+            edge_correction = self._edge_correction
+
+        intensity = self.intensity()
+        return self.lstatistic_interval_static(self.window, intensity,
+                                               edge_correction)
+
+    @memoize_method
+    def _simulate(self, nsims, process, edge_correction):
+        """
+        Simulate a number of point processes in the same window, and of the
+        same intensity, as this pattern
+
+        This part of `PointPattern.simulate` is factored out to optimize
+        memoization.
+
+        """
+        return PointPatternCollection.from_simulation(
+            nsims, self.window, self.intensity(), process=process,
+            edge_correction=edge_correction)
+
     def simulate(self, nsims=100, process='binomial', edge_correction=None):
         """
         Simulate a number of point processes in the same window, and of the
@@ -1598,7 +2142,7 @@ class PointPattern(AlmostImmutable, Sequence):
 
         Parameters
         ----------
-        nsims : int
+        nsims : int, optional
             The number of point patterns to generate.
         process : str {'binomial', 'poisson'}, optional
             String to select the kind of process to simulate.
@@ -1616,9 +2160,7 @@ class PointPattern(AlmostImmutable, Sequence):
         """
         if edge_correction is None:
             edge_correction = self._edge_correction
-        return PointPatternCollection.from_simulation(
-            nsims, self.window, self.intensity(), process=process,
-            edge_correction=edge_correction)
+        return self._simulate(nsims, process, edge_correction)
 
     def plot_kfunction(self, axes=None, edge_correction=None, linewidth=2.0,
                        csr=False, csr_kw=None, **kwargs):
@@ -1814,21 +2356,24 @@ class PointPattern(AlmostImmutable, Sequence):
             explanation.
         :plus: if True, add plus sampling points to the plot.
         :window: if True, the window boundaries are added to the plot.
-        :periodic_kw: dict of keyword arguments to pass to the axes.plot()
+        :periodic_kw: dict of keyword arguments to pass to the axes.scatter()
                       method used to plot the periodic extension. Default: None
                       (empty dict)
-        :plus_kw: dict of keyword arguments to pass to the axes.plot()
+        :plus_kw: dict of keyword arguments to pass to the axes.scatter()
                   method used to plot the plus sampling points. Default: None
                   (empty dict)
         :window_kw: dict of keyword arguments to pass to the Window.plot()
                     method. Default: None (empty dict)
-        :kwargs: additional keyword arguments passed on to axes.plot() method
-                 used to plot the point pattern. Note especially the keywords
-                 'color', 's' (marker size) and 'label'.
-        :returns: list of the plotted objects: a Line2D instance with the point
-                  pattern, and optionally another Line2D instance for the plus
-                  sampling points, and a matplotlib.patches.Polygon instance
-                  for the window.
+        :kwargs: additional keyword arguments passed on to axes.scatter()
+                 method used to plot the point pattern. Note especially the
+                 keywords 'c' (colors), 's' (marker sizes) and 'label'.
+        :returns: list of the artists added to the plot:
+                  a matplotlib.collections.PathCollection instance for the
+                  point pattern, and optionally another
+                  matplotlib.collections.PathCollection instance for each of
+                  the periodic extension and the plus sampling points, and
+                  finally a a matplotlib.patches.Polygon instance for the
+                  window.
 
         """
         if axes is None:
@@ -1839,22 +2384,21 @@ class PointPattern(AlmostImmutable, Sequence):
                      ylim=(cent.y - diag, cent.y + diag))
 
         pp = numpy.asarray(self._points)
-        h = axes.plot(pp[:, 0], pp[:, 1], linestyle='None', marker=marker,
-                      **kwargs)
+        h = [axes.scatter(pp[:, 0], pp[:, 1], marker=marker, **kwargs)]
 
         if periodic_levels > 0:
             if periodic_kw is None:
                 periodic_kw = {}
             pp = numpy.asarray(self.periodic_extension(periodic_levels))
-            h += axes.plot(pp[:, 0], pp[:, 1], linestyle='None', marker=marker,
-                           **periodic_kw)
+            h.append(axes.scatter(pp[:, 0], pp[:, 1], marker=marker,
+                                  **periodic_kw))
 
         if plus:
             if plus_kw is None:
                 plus_kw = {}
             pp = numpy.asarray(self.pluspoints)
-            h += axes.plot(pp[:, 0], pp[:, 1], linestyle='None', marker=marker,
-                           **plus_kw)
+            h.append(axes.scatter(pp[:, 0], pp[:, 1], marker=marker,
+                                  **plus_kw))
 
         if window:
             if window_kw is None:
@@ -2777,6 +3321,66 @@ class PointPatternCollection(AlmostImmutable, Sequence):
         return self._pp_attr_series('lstatistic',
                                     edge_correction=edge_correction, **kwargs)
 
+    def kstatistics(self, edge_correction=None, **kwargs):
+        """
+        Compute the K test statistic for CSR for each pattern in the collection
+
+        See `PointPattern.kstatistic` for details about the K test statistic.
+
+        Parameters
+        ----------
+        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
+                               'plus'}, optional
+            String to select the edge handling to apply in computations. See
+            the documentation for `PointPattern` for details.  If None, the
+            edge correction falls back to the default value (set at instance
+            initialization).
+        **kwargs : dict, optional
+            Additional keyword arguments are passed to
+            `PointPattern.kstatstic`.
+
+
+        Returns
+        -------
+        Series
+            Series containing the K test statistic for each pattern in the
+            collection.
+
+        """
+        return self._pp_attr_series('kstatistic',
+                                    edge_correction=edge_correction, **kwargs)
+
+    def ksstatistics(self, edge_correction=None, **kwargs):
+        """
+        Compute the Kolmogorov-Smirnov test statistic for CSR for each pattern
+        in the collection
+
+        See `PointPattern.ksstatistic` for details about the Kolmogorov-Smirnov
+        test statistic.
+
+        Parameters
+        ----------
+        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
+                               'plus'}, optional
+            String to select the edge handling to apply in computations. See
+            the documentation for `PointPattern` for details.  If None, the
+            edge correction falls back to the default value (set at instance
+            initialization).
+        **kwargs : dict, optional
+            Additional keyword arguments are passed to
+            `PointPattern.ksstatstic`.
+
+
+        Returns
+        -------
+        Series
+            Series containing the Kolmogorov-Smirnov test statistic for each
+            pattern in the collection.
+
+        """
+        return self._pp_attr_series('ksstatistic',
+                                    edge_correction=edge_correction, **kwargs)
+
     def ltest(self, pattern, edge_correction=None, **kwargs):
         """
         Perform an L test for CSR on a PointPattern, based on the distribution
@@ -2785,7 +3389,7 @@ class PointPatternCollection(AlmostImmutable, Sequence):
         Parameters
         ----------
         pattern : PointPattern
-            PointPattern to perform the L test on.
+            PointPattern to perform the test on.
         edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
                                'plus'}, optional
             String to select the edge handling to apply in computations. See
@@ -2803,6 +3407,63 @@ class PointPatternCollection(AlmostImmutable, Sequence):
 
         """
         return self._pp_attr_test('lstatistic', pattern,
+                                  edge_correction=edge_correction, **kwargs)
+
+    def ktest(self, pattern, edge_correction=None, **kwargs):
+        """
+        Perform a K test for CSR on a PointPattern, based on the distribution
+        of K test statictics from the patterns in this collection.
+
+        Parameters
+        ----------
+        pattern : PointPattern
+            PointPattern to perform the test on.
+        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
+                               'plus'}, optional
+            String to select the edge handling to apply in computations. See
+            the documentation for `PointPattern` for details.  If None, the
+            edge correction falls back to the default value (set at instance
+            initialization).
+        **kwargs : dict, optional
+            Additional keyword arguments are passed to
+            `PointPattern.kstatstic`.
+
+        Returns
+        -------
+        scalar
+            The p-value of the K test statistic for `pattern`.
+
+        """
+        return self._pp_attr_test('kstatistic', pattern,
+                                  edge_correction=edge_correction, **kwargs)
+
+    def kstest(self, pattern, edge_correction=None, **kwargs):
+        """
+        Perform a Kolmogorov-Smirnov test for CSR on a PointPattern, based on
+        the distribution of Kolmogorov-Smirnov test statictics from the
+        patterns in this collection.
+
+        Parameters
+        ----------
+        pattern : PointPattern
+            PointPattern to perform the test on.
+        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
+                               'plus'}, optional
+            String to select the edge handling to apply in computations. See
+            the documentation for `PointPattern` for details.  If None, the
+            edge correction falls back to the default value (set at instance
+            initialization).
+        **kwargs : dict, optional
+            Additional keyword arguments are passed to
+            `PointPattern.ksstatstic`.
+
+        Returns
+        -------
+        scalar
+            The p-value of the Komogorov-Smirnov test statistic for `pattern`.
+
+        """
+        return self._pp_attr_test('ksstatistic', pattern,
                                   edge_correction=edge_correction, **kwargs)
 
     def histogram(self, attribute, edge_correction=None, **kwargs):

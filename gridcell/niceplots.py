@@ -22,7 +22,10 @@ plots of gridcell stuff
 from __future__ import (absolute_import, division, print_function,
                         unicode_literals)
 from .utils import distplot
-from matplotlib import pyplot, patches, ticker
+from matplotlib import pyplot, patches, ticker, rcParams
+
+
+COLOR_CYCLE = rcParams['axes.color_cycle']
 
 
 def pos_and_spikes(cell, alpha_path=0.5, alpha_spikes=0.25, length_unit='cm',
@@ -39,7 +42,8 @@ def pos_and_spikes(cell, alpha_path=0.5, alpha_spikes=0.25, length_unit='cm',
     alpha_spikes : scalar in [0.0, 1.0], optional
         The opacity of the spike markers.
     length_unit : string, optional
-        The length unit to add to the axis labels.
+        The length unit to add to the axis labels. If None, no length unit is
+        printed.
     palette : sequence, optional
         Color palette to use for the position and spikes: the first color is
         used for the position, the second for the spikes.
@@ -51,7 +55,7 @@ def pos_and_spikes(cell, alpha_path=0.5, alpha_spikes=0.25, length_unit='cm',
 
     """
     if palette is None:
-        palette = (None, None)
+        palette = COLOR_CYCLE
 
     pos = cell.position
     if palette[0] is None:
@@ -69,8 +73,12 @@ def pos_and_spikes(cell, alpha_path=0.5, alpha_spikes=0.25, length_unit='cm',
     range_ = cell.params['range_']
     axes.set(xlim=range_[0], ylim=range_[1],
              xticks=range_[0], yticks=range_[1])
-    axes.set(xlabel=r"$x \ / \ \mathrm{{{}}}$".format(length_unit),
-             ylabel=r"$y \ / \ \mathrm{{{}}}$".format(length_unit))
+    if length_unit is None:
+        axes.set(xlabel=r"$x$",
+                 ylabel=r"$y$")
+    else:
+        axes.set(xlabel=r"$x \ / \ \mathrm{{{}}}$".format(length_unit),
+                 ylabel=r"$y \ / \ \mathrm{{{}}}$".format(length_unit))
 
     return artists
 
@@ -86,7 +94,8 @@ def ratemap(cell, cmap='YlGnBu_r', length_unit='cm', rate_unit='Hz'):
     cmap : Colormap or registered colormap name, optional
         Colormap to use for the plot.
     length_unit : string, optional
-        The length unit to add to the axis labels.
+        The length unit to add to the axis labels. If None, no length unit is
+        printed.
     rate_unit : string, optional
         The frequency unit to add to the colorbar label.
 
@@ -106,8 +115,12 @@ def ratemap(cell, cmap='YlGnBu_r', length_unit='cm', rate_unit='Hz'):
 
     range_ = cell.params['range_']
     axes.set(xticks=range_[0], yticks=range_[1])
-    axes.set(xlabel=r"$x \ / \ \mathrm{{{}}}$".format(length_unit),
-             ylabel=r"$y \ / \ \mathrm{{{}}}$".format(length_unit))
+    if length_unit is None:
+        axes.set(xlabel=r"$x$",
+                 ylabel=r"$y$")
+    else:
+        axes.set(xlabel=r"$x \ / \ \mathrm{{{}}}$".format(length_unit),
+                 ylabel=r"$y \ / \ \mathrm{{{}}}$".format(length_unit))
     return axes, cbar
 
 
@@ -123,7 +136,8 @@ def template_ratemap(module, cmap='YlGnBu_r', length_unit='cm', box=True,
     cmap : Colormap or registered colormap name, optional
         Colormap to use for the plot.
     length_unit : string, optional
-        The length unit to add to the axis labels.
+        The length unit to add to the axis labels. If None, no length unit is
+        printed.
     box : bool, optional
         If True, a box representning the environment where the true recordings
         were done is added to the plot.
@@ -147,17 +161,21 @@ def template_ratemap(module, cmap='YlGnBu_r', length_unit='cm', box=True,
                                    )
 
     cbar.solids.set(edgecolor='face')
-    cbar.set_label(r"$f \ / \ f_\mathrm{{max}}$")
+    cbar.set_label(r"$f \ / \ \bar{f}$")
     cbar.locator = ticker.MaxNLocator(nbins=2)
     cbar.update_ticks()
 
     range_ = next(iter(module)).params['range_']
     axes.set(xticks=range_[0], yticks=range_[1])
-    axes.set(xlabel=r"$x \ / \ \mathrm{{{}}}$".format(length_unit),
-             ylabel=r"$y \ / \ \mathrm{{{}}}$".format(length_unit))
+    if length_unit is None:
+        axes.set(xlabel=r"$x$",
+                 ylabel=r"$y$")
+    else:
+        axes.set(xlabel=r"$x \ / \ \mathrm{{{}}}$".format(length_unit),
+                 ylabel=r"$y \ / \ \mathrm{{{}}}$".format(length_unit))
 
     if palette is None:
-        palette = (None, None)
+        palette = COLOR_CYCLE
 
     if box:
         xy = (range_[0][0], range_[1][0])
@@ -186,7 +204,8 @@ def imap(imap, vmin=None, vmax=None, cmap='YlGnBu_r', length_unit='cm'):
     cmap : Colormap or registered colormap name, optional
         Colormap to use for the plot.
     length_unit : string, optional
-        The length unit to add to the axis labels.
+        The length unit to add to the axis labels. If None, no length unit is
+        printed.
 
     Returns
     -------
@@ -199,8 +218,12 @@ def imap(imap, vmin=None, vmax=None, cmap='YlGnBu_r', length_unit='cm'):
 
     range_ = imap.range_
     axes.set(xticks=range_[0], yticks=range_[1])
-    axes.set(xlabel=r"$x \ / \ \mathrm{{{}}}$".format(length_unit),
-             ylabel=r"$y \ / \ \mathrm{{{}}}$".format(length_unit))
+    if length_unit is None:
+        axes.set(xlabel=r"$x$",
+                 ylabel=r"$y$")
+    else:
+        axes.set(xlabel=r"$x \ / \ \mathrm{{{}}}$".format(length_unit),
+                 ylabel=r"$y \ / \ \mathrm{{{}}}$".format(length_unit))
 
     return axes, cbar
 
@@ -217,7 +240,8 @@ def acorr(cell, cmap='coolwarm', length_unit='cm', threshold=False,
     cmap : Colormap or registered colormap name, optional
         Colormap to use for the plot.
     length_unit : string, optional
-        The length unit to add to the axis labels.
+        The length unit to add to the axis labels. If None, no length unit is
+        printed.
     threshold : bool, optional
         See `BaseCell.plot_acorr`.
     grid_peaks : bool, optional
@@ -239,7 +263,7 @@ def acorr(cell, cmap='coolwarm', length_unit='cm', threshold=False,
                                  cbar_kw={'ticks': [-1, 0, 1]})
 
     if palette is None:
-        palette = (None, None)
+        palette = COLOR_CYCLE
 
     if grid_peaks:
         cell.plot_grid_peaks(axes=axes, markersize=8, color=palette[0])
@@ -251,8 +275,12 @@ def acorr(cell, cmap='coolwarm', length_unit='cm', threshold=False,
 
     range_ = cell.params['range_']
     axes.set(xticks=range_[0], yticks=range_[1])
-    axes.set(xlabel=r"$x \ / \ \mathrm{{{}}}$".format(length_unit),
-             ylabel=r"$y \ / \ \mathrm{{{}}}$".format(length_unit))
+    if length_unit is None:
+        axes.set(xlabel=r"$x$",
+                 ylabel=r"$y$")
+    else:
+        axes.set(xlabel=r"$x \ / \ \mathrm{{{}}}$".format(length_unit),
+                 ylabel=r"$y \ / \ \mathrm{{{}}}$".format(length_unit))
     return axes, cbar
 
 
@@ -267,7 +295,8 @@ def corr(cell1, cell2, cmap='coolwarm', length_unit='cm', center_peak=False):
     cmap : Colormap or registered colormap name, optional
         Colormap to use for the plot.
     length_unit : string, optional
-        The length unit to add to the axis labels.
+        The length unit to add to the axis labels. If None, no length unit is
+        printed.
     center_peak : bool, optional
         If True, the peak closest to the center is marked.
 
@@ -285,8 +314,12 @@ def corr(cell1, cell2, cmap='coolwarm', length_unit='cm', center_peak=False):
 
     range_ = cell1.params['range_']
     axes.set(xticks=range_[0], yticks=range_[1])
-    axes.set(xlabel=r"$x \ / \ \mathrm{{{}}}$".format(length_unit),
-             ylabel=r"$y \ / \ \mathrm{{{}}}$".format(length_unit))
+    if length_unit is None:
+        axes.set(xlabel=r"$x$",
+                 ylabel=r"$y$")
+    else:
+        axes.set(xlabel=r"$x \ / \ \mathrm{{{}}}$".format(length_unit),
+                 ylabel=r"$y \ / \ \mathrm{{{}}}$".format(length_unit))
     return axes, cbar
 
 
@@ -308,8 +341,8 @@ def phase_pattern(module, window_type='voronoi', project_phases=False,
         Add this many levels of periodic extension of the phase pattern to the
         plot.
     length_unit : string, optional
-        The length unit to add to the axis labels. This is ignored if
-        project_phases is True.
+        The length unit to add to the axis labels. If None, no length unit is
+        printed. This is ignored if project_phases is True.
     palette : sequence, optional
         Color palette to use for the artists: the first color is used for the
         window, the second for the points in the pattern, and the third for the
@@ -321,7 +354,7 @@ def phase_pattern(module, window_type='voronoi', project_phases=False,
 
     """
     if palette is None:
-        palette = (None,) * 3
+        palette = [None] + COLOR_CYCLE
 
     phase_pattern = module.phase_pattern(window_type=window_type,
                                          project_phases=project_phases)
@@ -338,8 +371,16 @@ def phase_pattern(module, window_type='voronoi', project_phases=False,
                  ylabel=r"$\delta_y$")
     else:
         range_ = next(iter(module)).params['range_']
-        axes.set(xlabel=r"$\delta_x \ / \ \mathrm{{{}}}$".format(length_unit),
-                 ylabel=r"$\delta_y \ / \ \mathrm{{{}}}$".format(length_unit))
+        if length_unit is None:
+            axes.set(xlabel=r"$\delta_x$",
+                     ylabel=r"$\delta_y$")
+        else:
+            axes.set(xlabel=r"$\delta_x \ / \ \mathrm{{{}}}$"
+                     .format(length_unit),
+                     ylabel=r"$\delta_y \ / \ \mathrm{{{}}}$"
+                     .format(length_unit))
+    if window_type == 'rhomboid':
+        range_ = ((0.0, range_[0][1]), (0.0, range_[1][1]))
     axes.set(xticks=range_[0], yticks=range_[1])
     return artists
 
@@ -370,8 +411,8 @@ def pairwise_phase_pattern(module, window_type='voronoi', from_absolute=True,
         Flag to select how to resolve the sin ambiguity when `full_window ==
         True`.
     length_unit : string, optional
-        The length unit to add to the axis labels. This is ignored if
-        project_phases is True.
+        The length unit to add to the axis labels. If None, no length unit is
+        printed. This is ignored if project_phases is True.
     palette : sequence, optional
         Color palette to use for the artists: the first color is used for the
         window, the second for the points in the pattern, and the third for the
@@ -383,7 +424,7 @@ def pairwise_phase_pattern(module, window_type='voronoi', from_absolute=True,
 
     """
     if palette is None:
-        palette = (None,) * 3
+        palette = [None] + COLOR_CYCLE
 
     phase_pattern = module.pairwise_phase_pattern(
         window_type=window_type,
@@ -403,8 +444,16 @@ def pairwise_phase_pattern(module, window_type='voronoi', from_absolute=True,
                  ylabel=r"$\delta_y$")
     else:
         range_ = next(iter(module)).params['range_']
-        axes.set(xlabel=r"$\delta_x \ / \ \mathrm{{{}}}$".format(length_unit),
-                 ylabel=r"$\delta_y \ / \ \mathrm{{{}}}$".format(length_unit))
+        if length_unit is None:
+            axes.set(xlabel=r"$\delta_x$",
+                     ylabel=r"$\delta_y$")
+        else:
+            axes.set(xlabel=r"$\delta_x \ / \ \mathrm{{{}}}$"
+                     .format(length_unit),
+                     ylabel=r"$\delta_y \ / \ \mathrm{{{}}}$"
+                     .format(length_unit))
+    if window_type == 'rhomboid':
+        range_ = ((-0.5, 0.5), (-0.5, 0.5))
     axes.set(xticks=range_[0], yticks=range_[1])
     return artists
 
@@ -422,7 +471,8 @@ def kfunction(pattern, nsims=1000, length_unit='cm', csr=True, interval=False,
         Number of simulated patterns to compute mean and envelope from. If 0,
         no mean or envelope is plotted.
     length_unit : string, optional
-        The length unit to add to the axis labels.
+        The length unit to add to the axis labels. If None, no length unit is
+        printed.
     csr : bool, optional
         If True, the theoretical CSR line is added to the plot.
     interval : bool, optional
@@ -442,7 +492,7 @@ def kfunction(pattern, nsims=1000, length_unit='cm', csr=True, interval=False,
 
     """
     if palette is None:
-        palette = (None,) * 5
+        palette = COLOR_CYCLE
 
     axes = pyplot.gca()
     if nsims > 0:
@@ -456,12 +506,16 @@ def kfunction(pattern, nsims=1000, length_unit='cm', csr=True, interval=False,
                                               'color': palette[1]},
                                       label='Estimator', zorder=10)
     if interval:
-        interval = pattern.lstatistic_interval()
+        interval = pattern.kstatistic_interval()
         axes.axvline(interval[0], color=palette[4])
         axes.axvline(interval[1], color=palette[4])
 
-    axes.set(xlabel=r"$r \ / \ \mathrm{{{}}}$".format(length_unit),
-             ylabel=r"$K(r) \ / \ \mathrm{{{}}}^2$".format(length_unit))
+    if length_unit is None:
+        axes.set(xlabel=r"$r$",
+                 ylabel=r"$K(r)$")
+    else:
+        axes.set(xlabel=r"$r \ / \ \mathrm{{{}}}$".format(length_unit),
+                 ylabel=r"$K(r) \ / \ \mathrm{{{}}}^2$".format(length_unit))
 
     return artists
 
@@ -479,7 +533,8 @@ def lfunction(pattern, nsims=1000, length_unit='cm', csr=True, interval=False,
         Number of simulated patterns to compute mean and envelope from. If 0,
         no mean or envelope is plotted.
     length_unit : string, optional
-        The length unit to add to the axis labels.
+        The length unit to add to the axis labels. If None, no length unit is
+        printed.
     csr : bool, optional
         If True, the theoretical CSR line is added to the plot.
     interval : bool, optional
@@ -513,8 +568,12 @@ def lfunction(pattern, nsims=1000, length_unit='cm', csr=True, interval=False,
         axes.axvline(interval[0], color=palette[4])
         axes.axvline(interval[1], color=palette[4])
 
-    axes.set(xlabel=r"$r \ / \ \mathrm{{{}}}$".format(length_unit),
-             ylabel=r"$L(r) \ / \ \mathrm{{{}}}$".format(length_unit))
+    if length_unit is None:
+        axes.set(xlabel=r"$r$",
+                 ylabel=r"$L(r)$")
+    else:
+        axes.set(xlabel=r"$r \ / \ \mathrm{{{}}}$".format(length_unit),
+                 ylabel=r"$L(r) \ / \ \mathrm{{{}}}$".format(length_unit))
 
     return artists
 
@@ -532,7 +591,8 @@ def pair_corr(pattern, nsims=1000, length_unit='cm', csr=True, interval=False,
         Number of simulated patterns to compute mean and envelope from. If 0,
         no mean or envelope is plotted.
     length_unit : string, optional
-        The length unit to add to the axis labels.
+        The length unit to add to the axis labels. If None, no length unit is
+        printed.
     csr : bool, optional
         If True, the theoretical CSR line is added to the plot.
     interval : bool, optional
@@ -568,8 +628,12 @@ def pair_corr(pattern, nsims=1000, length_unit='cm', csr=True, interval=False,
         axes.axvline(interval[0], color=palette[4])
         axes.axvline(interval[1], color=palette[4])
 
-    axes.set(xlabel=r"$r \ / \ \mathrm{{{}}}$".format(length_unit),
-             ylabel=r"$g(r)$")
+    if length_unit is None:
+        axes.set(xlabel=r"$r$",
+                 ylabel=r"$g(r)$")
+    else:
+        axes.set(xlabel=r"$r \ / \ \mathrm{{{}}}$".format(length_unit),
+                 ylabel=r"$g(r)$")
 
     return artists
 
@@ -584,11 +648,12 @@ def ldistplot(pattern, nsims=1000, weight_function=None, length_unit='cm',
     pattern : PointPattern
         Point pattern to plot a the L statistic estimator from.
     weight_function : callable
-        Weight function to use for the L statistic estimator
+        Weight function to use for the L statistic estimator.
     nsims : integer, optional
         Number of simulated patterns to compute distribution from.
     length_unit : string, optional
-        The length unit to add to the axis labels.
+        The length unit to add to the axis labels. If None, no length unit is
+        printed.
     palette : sequence, optional
         Color palette to use: the first color is used for histogram/KDE, the
         second for the pattern statistic.
@@ -601,7 +666,7 @@ def ldistplot(pattern, nsims=1000, weight_function=None, length_unit='cm',
     sims = pattern.simulate(nsims=nsims)
 
     if palette is None:
-        palette = (None, None)
+        palette = COLOR_CYCLE
 
     lstat = sims.lstatistics(weight_function=weight_function)
 
@@ -610,8 +675,98 @@ def ldistplot(pattern, nsims=1000, weight_function=None, length_unit='cm',
                               'label': 'Simulations'})
     axes.axvline(pattern.lstatistic(weight_function=weight_function),
                  color=palette[1], label='Pattern')
-    axes.set(xlabel=r"$\tau \ / \ \mathrm{{{}}}$".format(length_unit),
-             ylabel=r"$f(\tau) \ / \ \mathrm{{{}}}^{{-1}}$"
-             .format(length_unit))
+    if length_unit is None:
+        axes.set(xlabel=r"$\tau$",
+                 ylabel=r"$f(\tau)$")
+    else:
+        axes.set(xlabel=r"$\tau \ / \ \mathrm{{{}}}$".format(length_unit),
+                 ylabel=r"$f(\tau) \ / \ \mathrm{{{}}}^{{-1}}$"
+                 .format(length_unit))
+
+    return axes
+
+
+def kdistplot(pattern, nsims=1000, weight_function=None, length_unit='cm',
+              palette=None):
+    """
+    Convenience function to plot nice K statistic distribution plots
+
+    Parameters
+    ----------
+    pattern : PointPattern
+        Point pattern to plot a the K statistic estimator from.
+    weight_function : callable
+        Weight function to use for the K statistic estimator.
+    nsims : integer, optional
+        Number of simulated patterns to compute distribution from.
+    length_unit : string, optional
+        The length unit to add to the axis labels. If None, no length unit is
+        printed.
+    palette : sequence, optional
+        Color palette to use: the first color is used for histogram/KDE, the
+        second for the pattern statistic.
+
+    Returns
+    -------
+    See `seaborn.distplot`.
+
+    """
+    sims = pattern.simulate(nsims=nsims)
+
+    if palette is None:
+        palette = COLOR_CYCLE
+
+    kstat = sims.kstatistics(weight_function=weight_function)
+
+    axes = distplot(kstat, color=palette[0],
+                    hist_kws={'histtype': 'stepfilled',
+                              'label': 'Simulations'})
+    axes.axvline(pattern.kstatistic(weight_function=weight_function),
+                 color=palette[1], label='Pattern')
+    if length_unit is None:
+        axes.set(xlabel=r"$\tau$",
+                 ylabel=r"$f(\tau)$")
+    else:
+        axes.set(xlabel=r"$\tau \ / \ \mathrm{{{}}}$".format(length_unit),
+                 ylabel=r"$f(\tau) \ / \ \mathrm{{{}}}^{{-1}}$"
+                 .format(length_unit))
+
+    return axes
+
+
+def ksdistplot(pattern, nsims=1000, palette=None):
+    """
+    Convenience function to plot nice Kolmogorov Smirnov statistic distribution
+    plots
+
+    Parameters
+    ----------
+    pattern : PointPattern
+        Point pattern to plot a the KS statistic estimator from.
+    nsims : integer, optional
+        Number of simulated patterns to compute distribution from.
+    palette : sequence, optional
+        Color palette to use: the first color is used for histogram/KDE, the
+        second for the pattern statistic.
+
+    Returns
+    -------
+    See `seaborn.distplot`.
+
+    """
+    sims = pattern.simulate(nsims=nsims)
+
+    if palette is None:
+        palette = COLOR_CYCLE
+
+    lstat = sims.ksstatistics()
+
+    axes = distplot(lstat, color=palette[0],
+                    hist_kws={'histtype': 'stepfilled',
+                              'label': 'Simulations'})
+    axes.axvline(pattern.ksstatistic(),
+                 color=palette[1], label='Pattern')
+    axes.set(xlabel=r"$\tau$",
+             ylabel=r"$f(\tau)$")
 
     return axes
