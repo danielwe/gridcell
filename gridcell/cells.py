@@ -122,12 +122,16 @@ class FeatureNames(object):
             try:
                 index = cls.grid_features.index(key)
             except ValueError:
-                try:
-                    return "".join([r"$\textrm{",
-                                    key.replace("_", " "),
-                                    r"}$"])
-                except (TypeError, AttributeError):
+                if isinstance(key, str):
+                    return key.replace('_', ' ')
+                else:
                     return key
+                #try:
+                #    return "".join([r"$\textrm{",
+                #                    key.replace("_", " "),
+                #                    r"}$"])
+                #except (TypeError, AttributeError):
+                #    return key
             else:
                 return cls.grid_features_latex(**kwargs)[index]
         return _lm
