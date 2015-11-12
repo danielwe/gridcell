@@ -129,7 +129,7 @@ class Window(geometry.Polygon):
         x, y = optimize.minimize(d, (cent.x, cent.y)).x
         r = -d((x, y))
 
-        return pandas.Series((x, y, r), index=('x', 'y', 'r'))
+        return dict(x=x, y=y, r=r)
 
     @memoize_method
     def longest_diagonal(self):
@@ -649,14 +649,14 @@ class PointPattern(AlmostImmutable, Sequence):
 
         self.pluspoints = geometry.MultiPoint(pluspoints)
 
-        self._edge_correction = edge_correction
+        self.edge_correction = edge_correction
 
     # Implement abstract methods
     def __getitem__(self, index, *args, **kwargs):
         item = self._points.__getitem__(index, *args, **kwargs)
         if isinstance(index, slice):
             return type(self)(item, self.window, pluspoints=self.pluspoints,
-                              edge_correction=self._edge_correction)
+                              edge_correction=self.edge_correction)
         return item
 
     def __len__(self, *args, **kwargs):
@@ -669,7 +669,7 @@ class PointPattern(AlmostImmutable, Sequence):
     def __reversed__(self, *args, **kwargs):
         item = self._points.__reversed__(*args, **kwargs)
         return type(self)(item, self.window, pluspoints=self.pluspoints,
-                          edge_correction=self._edge_correction)
+                          edge_correction=self.edge_correction)
 
     def index(self, *args, **kwargs):
         return self._points.index(*args, **kwargs)
@@ -789,7 +789,7 @@ class PointPattern(AlmostImmutable, Sequence):
             new_points = bound_op(other._points)
             new_pluspoints = bound_op_plus(other.pluspoints)
             return type(self)(new_points, swindow, pluspoints=new_pluspoints,
-                              edge_correction=self._edge_correction)
+                              edge_correction=self.edge_correction)
 
         # Apparently, other is not a PointPattern. Do the easiest thing.
         new_geom = bound_op(other)
@@ -804,7 +804,7 @@ class PointPattern(AlmostImmutable, Sequence):
                 new_pluspoints = potential_pluspoints
             return type(self)(
                 new_geom, swindow, pluspoints=new_pluspoints,
-                edge_correction=self._edge_correction)
+                edge_correction=self.edge_correction)
         return new_geom
 
     def difference(self, other):
@@ -1090,7 +1090,7 @@ class PointPattern(AlmostImmutable, Sequence):
 
         return points
 
-    @memoize_method
+    #@memoize_method
     def range_tree(self, project_points=True):
         """
         Construct a range tree from the points in the pattern
@@ -1307,7 +1307,7 @@ class PointPattern(AlmostImmutable, Sequence):
 
         """
         if edge_correction is None:
-            edge_correction = self._edge_correction
+            edge_correction = self.edge_correction
 
         if edge_correction in ('finite', 'plus', 'isotropic'):
             return self.window.longest_diagonal()
@@ -1346,7 +1346,7 @@ class PointPattern(AlmostImmutable, Sequence):
 
         """
         if edge_correction is None:
-            edge_correction = self._edge_correction
+            edge_correction = self.edge_correction
         rmax = self.rmax(edge_correction=edge_correction)
         rvals = numpy.linspace(0.0, rmax, RSAMPLES)
 
@@ -1554,7 +1554,7 @@ class PointPattern(AlmostImmutable, Sequence):
 
         """
         if edge_correction is None:
-            edge_correction = self._edge_correction
+            edge_correction = self.edge_correction
 
         rsteps, cweights = self._cumulative_base(
             edge_correction=edge_correction)
@@ -1587,7 +1587,7 @@ class PointPattern(AlmostImmutable, Sequence):
 
         """
         if edge_correction is None:
-            edge_correction = self._edge_correction
+            edge_correction = self.edge_correction
 
         return numpy.sqrt(self.kfunction(r, edge_correction=edge_correction) /
                           _PI)
@@ -1620,7 +1620,7 @@ class PointPattern(AlmostImmutable, Sequence):
 
         """
         if edge_correction is None:
-            edge_correction = self._edge_correction
+            edge_correction = self.edge_correction
 
         if bandwidth is None:
             bandwidth = 0.2 / numpy.sqrt(self.intensity())
@@ -1668,7 +1668,7 @@ class PointPattern(AlmostImmutable, Sequence):
 
         """
         if edge_correction is None:
-            edge_correction = self._edge_correction
+            edge_correction = self.edge_correction
 
         r = numpy.asarray(r)
         if edge_correction == 'periodic':
@@ -1737,7 +1737,7 @@ class PointPattern(AlmostImmutable, Sequence):
 
         """
         if edge_correction is None:
-            edge_correction = self._edge_correction
+            edge_correction = self.edge_correction
 
         r = numpy.asarray(r)
         if edge_correction == 'periodic':
@@ -1806,7 +1806,7 @@ class PointPattern(AlmostImmutable, Sequence):
 
         """
         if edge_correction is None:
-            edge_correction = self._edge_correction
+            edge_correction = self.edge_correction
 
         interval = self.kstatistic_interval(edge_correction=edge_correction)
         if rmin is None:
@@ -1883,7 +1883,7 @@ class PointPattern(AlmostImmutable, Sequence):
 
         """
         if edge_correction is None:
-            edge_correction = self._edge_correction
+            edge_correction = self.edge_correction
 
         interval = self.lstatistic_interval(edge_correction=edge_correction)
         if rmin is None:
@@ -2015,7 +2015,7 @@ class PointPattern(AlmostImmutable, Sequence):
 
         """
         if edge_correction is None:
-            edge_correction = self._edge_correction
+            edge_correction = self.edge_correction
 
         intensity = self.intensity()
         window = self.window
@@ -2055,7 +2055,7 @@ class PointPattern(AlmostImmutable, Sequence):
 
         """
         if edge_correction is None:
-            edge_correction = self._edge_correction
+            edge_correction = self.edge_correction
 
         rmin, rmax = self.kstatistic_interval(edge_correction=edge_correction)
         rmin *= 4.0
@@ -2099,7 +2099,7 @@ class PointPattern(AlmostImmutable, Sequence):
 
         """
         if edge_correction is None:
-            edge_correction = self._edge_correction
+            edge_correction = self.edge_correction
         return self._simulate(nsims, process, edge_correction)
 
     def plot_kfunction(self, axes=None, edge_correction=None, linewidth=2.0,
@@ -2142,7 +2142,7 @@ class PointPattern(AlmostImmutable, Sequence):
             axes = pyplot.gca()
 
         if edge_correction is None:
-            edge_correction = self._edge_correction
+            edge_correction = self.edge_correction
 
         rvals = self.rvals(edge_correction=edge_correction)
         kvals = self.kfunction(rvals, edge_correction=edge_correction)
@@ -2198,7 +2198,7 @@ class PointPattern(AlmostImmutable, Sequence):
             axes = pyplot.gca()
 
         if edge_correction is None:
-            edge_correction = self._edge_correction
+            edge_correction = self.edge_correction
 
         rvals = self.rvals(edge_correction=edge_correction)
         lvals = self.lfunction(rvals, edge_correction=edge_correction)
@@ -2259,7 +2259,7 @@ class PointPattern(AlmostImmutable, Sequence):
             axes = pyplot.gca()
 
         if edge_correction is None:
-            edge_correction = self._edge_correction
+            edge_correction = self.edge_correction
 
         rmax = self.rmax(edge_correction=edge_correction)
         rvals = numpy.linspace(0.0, rmax, RSAMPLES)
@@ -2367,7 +2367,7 @@ class PointPatternCollection(AlmostImmutable, Sequence):
 
     def __init__(self, patterns, edge_correction='stationary'):
         self.patterns = list(patterns)
-        self._edge_correction = edge_correction
+        self.edge_correction = edge_correction
 
     @classmethod
     def from_simulation(cls, nsims, window, intensity, process='binomial',
@@ -2445,7 +2445,7 @@ class PointPatternCollection(AlmostImmutable, Sequence):
 
     def __reversed__(self, *args, **kwargs):
         item = self.patterns.__reversed__(*args, **kwargs)
-        return type(self)(item, edge_correction=self._edge_correction)
+        return type(self)(item, edge_correction=self.edge_correction)
 
     def index(self, *args, **kwargs):
         return self.patterns.index(*args, **kwargs)
@@ -2464,7 +2464,7 @@ class PointPatternCollection(AlmostImmutable, Sequence):
     #
     #                def aggregate(edge_correction=None):
     #                    if edge_correction is None:
-    #                        edge_correction = self._edge_correction
+    #                        edge_correction = self.edge_correction
     #                    return pandas.Series(
     #                        [ppattr(pp, edge_correction=edge_correction)
     #                         for pp in self.patterns])
@@ -2516,7 +2516,7 @@ class PointPatternCollection(AlmostImmutable, Sequence):
 
         """
         if edge_correction is None:
-            edge_correction = self._edge_correction
+            edge_correction = self.edge_correction
         return min(pp.rmax(edge_correction=edge_correction)
                    for pp in self.patterns)
 
@@ -2612,7 +2612,7 @@ class PointPatternCollection(AlmostImmutable, Sequence):
 
         """
         if edge_correction is None:
-            edge_correction = self._edge_correction
+            edge_correction = self.edge_correction
 
         kvalues = [pp.kfunction(r, edge_correction=edge_correction)
                    for pp in self.patterns]
@@ -2643,7 +2643,7 @@ class PointPatternCollection(AlmostImmutable, Sequence):
 
         """
         if edge_correction is None:
-            edge_correction = self._edge_correction
+            edge_correction = self.edge_correction
 
         return numpy.sqrt(self.aggregate_kfunction(
             r, edge_correction=edge_correction) / _PI)
@@ -2676,7 +2676,7 @@ class PointPatternCollection(AlmostImmutable, Sequence):
 
         """
         if edge_correction is None:
-            edge_correction = self._edge_correction
+            edge_correction = self.edge_correction
 
         return pandas.DataFrame(
             [getattr(pp, attr)(r, edge_correction=edge_correction, **kwargs)
@@ -2710,7 +2710,7 @@ class PointPatternCollection(AlmostImmutable, Sequence):
 
         """
         if edge_correction is None:
-            edge_correction = self._edge_correction
+            edge_correction = self.edge_correction
 
         attr_frame = self._pp_attr_r_frame(attr, r,
                                            edge_correction=edge_correction,
@@ -2741,7 +2741,7 @@ class PointPatternCollection(AlmostImmutable, Sequence):
 
         """
         if edge_correction is None:
-            edge_correction = self._edge_correction
+            edge_correction = self.edge_correction
 
         attr_frame = self._pp_attr_r_frame(attr, r,
                                            edge_correction=edge_correction,
@@ -2772,7 +2772,7 @@ class PointPatternCollection(AlmostImmutable, Sequence):
 
         """
         if edge_correction is None:
-            edge_correction = self._edge_correction
+            edge_correction = self.edge_correction
 
         attr_frame = self._pp_attr_r_frame(attr, r,
                                            edge_correction=edge_correction,
@@ -2804,7 +2804,7 @@ class PointPatternCollection(AlmostImmutable, Sequence):
 
         """
         if edge_correction is None:
-            edge_correction = self._edge_correction
+            edge_correction = self.edge_correction
 
         attr_frame = self._pp_attr_r_frame(attr, r,
                                            edge_correction=edge_correction,
@@ -3234,7 +3234,7 @@ class PointPatternCollection(AlmostImmutable, Sequence):
 
         """
         if edge_correction is None:
-            edge_correction = self._edge_correction
+            edge_correction = self.edge_correction
         return self._pp_attr_series('lstatistic',
                                     edge_correction=edge_correction, **kwargs)
 
@@ -3265,7 +3265,7 @@ class PointPatternCollection(AlmostImmutable, Sequence):
 
         """
         if edge_correction is None:
-            edge_correction = self._edge_correction
+            edge_correction = self.edge_correction
         return self._pp_attr_series('kstatistic',
                                     edge_correction=edge_correction, **kwargs)
 
@@ -3325,7 +3325,7 @@ class PointPatternCollection(AlmostImmutable, Sequence):
 
         """
         if edge_correction is None:
-            edge_correction = self._edge_correction
+            edge_correction = self.edge_correction
         return self._pp_attr_test('lstatistic', pattern,
                                   edge_correction=edge_correction, **kwargs)
 
@@ -3355,7 +3355,7 @@ class PointPatternCollection(AlmostImmutable, Sequence):
 
         """
         if edge_correction is None:
-            edge_correction = self._edge_correction
+            edge_correction = self.edge_correction
         return self._pp_attr_test('kstatistic', pattern,
                                   edge_correction=edge_correction, **kwargs)
 
@@ -3406,7 +3406,7 @@ class PointPatternCollection(AlmostImmutable, Sequence):
 
         """
         if edge_correction is None:
-            edge_correction = self._edge_correction
+            edge_correction = self.edge_correction
 
         plural_attr = attribute + 's'
         if hasattr(self, plural_attr):
@@ -3454,7 +3454,7 @@ class PointPatternCollection(AlmostImmutable, Sequence):
             axes = pyplot.gca()
 
         if edge_correction is None:
-            edge_correction = self._edge_correction
+            edge_correction = self.edge_correction
 
         rvals = numpy.linspace(0.0, self.rmax(edge_correction=edge_correction),
                                RSAMPLES)
@@ -3495,7 +3495,7 @@ class PointPatternCollection(AlmostImmutable, Sequence):
             axes = pyplot.gca()
 
         if edge_correction is None:
-            edge_correction = self._edge_correction
+            edge_correction = self.edge_correction
 
         rvals = numpy.linspace(0.0, self.rmax(edge_correction=edge_correction),
                                RSAMPLES)
@@ -3541,7 +3541,7 @@ class PointPatternCollection(AlmostImmutable, Sequence):
             axes = pyplot.gca()
 
         if edge_correction is None:
-            edge_correction = self._edge_correction
+            edge_correction = self.edge_correction
 
         rvals = numpy.linspace(0.0, self.rmax(edge_correction=edge_correction),
                                RSAMPLES)
@@ -3582,7 +3582,7 @@ class PointPatternCollection(AlmostImmutable, Sequence):
             axes = pyplot.gca()
 
         if edge_correction is None:
-            edge_correction = self._edge_correction
+            edge_correction = self.edge_correction
 
         rvals = numpy.linspace(0.0, self.rmax(edge_correction=edge_correction),
                                RSAMPLES)
@@ -3633,7 +3633,7 @@ class PointPatternCollection(AlmostImmutable, Sequence):
             axes = pyplot.gca()
 
         if edge_correction is None:
-            edge_correction = self._edge_correction
+            edge_correction = self.edge_correction
 
         rvals = numpy.linspace(0.0, self.rmax(edge_correction=edge_correction),
                                RSAMPLES)
@@ -3680,7 +3680,7 @@ class PointPatternCollection(AlmostImmutable, Sequence):
             axes = pyplot.gca()
 
         if edge_correction is None:
-            edge_correction = self._edge_correction
+            edge_correction = self.edge_correction
 
         rvals = numpy.linspace(0.0, self.rmax(edge_correction=edge_correction),
                                RSAMPLES)
@@ -3733,7 +3733,7 @@ class PointPatternCollection(AlmostImmutable, Sequence):
             axes = pyplot.gca()
 
         if edge_correction is None:
-            edge_correction = self._edge_correction
+            edge_correction = self.edge_correction
 
         rvals = numpy.linspace(0.0, self.rmax(edge_correction=edge_correction),
                                RSAMPLES)
@@ -3794,7 +3794,7 @@ class PointPatternCollection(AlmostImmutable, Sequence):
             axes = pyplot.gca()
 
         if edge_correction is None:
-            edge_correction = self._edge_correction
+            edge_correction = self.edge_correction
 
         rvals = numpy.linspace(0.0, self.rmax(edge_correction=edge_correction),
                                RSAMPLES)
@@ -3848,7 +3848,7 @@ class PointPatternCollection(AlmostImmutable, Sequence):
             axes = pyplot.gca()
 
         if edge_correction is None:
-            edge_correction = self._edge_correction
+            edge_correction = self.edge_correction
 
         plural_attr = attribute + 's'
         if hasattr(self, plural_attr):

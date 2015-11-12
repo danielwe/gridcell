@@ -753,7 +753,7 @@ class BaseCell(AbstractAlmostImmutable):
         return self.ratemap(**kwargs).autocorrelate(mode=mode, pearson=pearson,
                                                     normalize=normalize_acorr)
 
-    @memoize_method
+    #@memoize_method
     def corr(self, other, mode='full', pearson='global', normalize_corr=True,
              **kwargs):
         """
@@ -781,7 +781,7 @@ class BaseCell(AbstractAlmostImmutable):
         """
         # Register this cell for memoize cache clearance whenever this is
         # performed on the other cell.
-        memoize_method.register_friend(other, self)
+        #memoize_method.register_friend(other, self)
         return self.ratemap(**kwargs).correlate(other.ratemap(**kwargs),
                                                 mode=mode,
                                                 pearson=pearson,
@@ -863,6 +863,7 @@ class BaseCell(AbstractAlmostImmutable):
 
         return peaks, new_labels
 
+    @memoize_method
     def _peaks(self, threshold, **kwargs):
         acorr = self.acorr(**kwargs)
         peaks, __ = self.detect_central_peaks(acorr, threshold, 7)
@@ -870,7 +871,6 @@ class BaseCell(AbstractAlmostImmutable):
         # Discard center peak
         return peaks[1:]
 
-    @memoize_method
     def grid_peaks(self, threshold=None, polar_peaks=False, project_peaks=True,
                    normalize_peaks=False, **kwargs):
         """
