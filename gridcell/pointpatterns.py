@@ -39,8 +39,8 @@ _PI = numpy.pi
 _2PI = 2.0 * _PI
 _PI_4 = _PI / 4.0
 
-RSAMPLES = 75
-#QUADLIMIT = 480
+RSAMPLES = 49
+QUADLIMIT = 100
 ORIGIN = geometry.Point((0.0, 0.0))
 
 
@@ -286,15 +286,18 @@ class Window(geometry.Polygon):
 
         """
         ld = self.longest_diagonal()
-        xoffs = numpy.linspace(-ld, ld, 2 * RSAMPLES - 1)
-        yoffs = numpy.linspace(-ld, ld, 2 * RSAMPLES - 1)
+        rssqrt = int(numpy.sqrt(RSAMPLES))
+        xoffs = numpy.linspace(-ld, ld, 4 * (rssqrt + 1) - 1)
+        yoffs = numpy.linspace(-ld, ld, 4 * (rssqrt + 1) - 1)
         scarray = numpy.zeros((xoffs.size, yoffs.size))
         for (i, xoff) in enumerate(xoffs):
             for (j, yoff) in enumerate(yoffs):
                 scarray[i, j] = self.translated_intersection(xoff, yoff).area
-        return interpolate.RegularGridInterpolator((xoffs, yoffs), scarray,
-                                                   bounds_error=False,
-                                                   fill_value=0.0)
+        #return interpolate.RegularGridInterpolator((xoffs, yoffs), scarray,
+        #                                           bounds_error=False,
+        #                                           fill_value=0.0)
+        return interpolate.RectBivariateSpline(xoffs, yoffs, scarray,
+                                               kx=3, ky=3)
 
     def set_covariance(self, x, y):
         """
@@ -316,9 +319,10 @@ class Window(geometry.Polygon):
             covariance at each displacement.
 
         """
-        xi = numpy.concatenate((x[..., numpy.newaxis],
-                                y[..., numpy.newaxis]), axis=-1)
-        return self._set_covariance_interpolator()(xi)
+        #xi = numpy.concatenate((x[..., numpy.newaxis],
+        #                        y[..., numpy.newaxis]), axis=-1)
+        #return self._set_covariance_interpolator()(xi)
+        return self._set_covariance_interpolator()(x, y, grid=False)
 
     @memoize_method
     def _isotropised_set_covariance_interpolator(self):
@@ -332,7 +336,8 @@ class Window(geometry.Polygon):
             the window.
 
         """
-        rvals = numpy.linspace(0.0, self.longest_diagonal(), RSAMPLES)
+        rvals = numpy.linspace(0.0, self.longest_diagonal(),
+                               2 * (RSAMPLES + 1) - 1)
         iso_set_cov = numpy.zeros_like(rvals)
 
         # Identify potentially problematic angles and a safe starting- and
@@ -348,11 +353,11 @@ class Window(geometry.Polygon):
 
             iso_set_cov[i] = (integrate.quad(integrand, theta0,
                                              _2PI + theta0,
-                                             #limit=QUADLIMIT,
+                                             limit=QUADLIMIT,
                                              points=problem_angles)[0] / _2PI)
 
-        return interpolate.interp1d(rvals, iso_set_cov, bounds_error=False,
-                                    fill_value=0.0)
+        return interpolate.interp1d(rvals, iso_set_cov, kind='cubic',
+                                    bounds_error=False, fill_value=0.0)
 
     def isotropised_set_covariance(self, r):
         """
@@ -389,14 +394,14 @@ class Window(geometry.Polygon):
             window.
 
         """
-        rvals = numpy.linspace(0.0, self.longest_diagonal(), RSAMPLES)
+        rvals = numpy.linspace(0.0, .5 * self.longest_diagonal(), RSAMPLES)
         ball_diff_area = numpy.zeros_like(rvals)
         centroid = self.centroid
         for (i, r) in enumerate(rvals):
             disc = centroid.buffer(r)
             ball_diff_area[i] = self.difference(disc).area
-        return interpolate.interp1d(rvals, ball_diff_area, bounds_error=False,
-                                    fill_value=0.0)
+        return interpolate.interp1d(rvals, ball_diff_area, kind='cubic',
+                                    bounds_error=False, fill_value=0.0)
 
     def ball_difference_area(self, r):
         """
@@ -439,10 +444,11 @@ class Window(geometry.Polygon):
         dvals = numpy.empty_like(rvals)
         for (i, rval) in enumerate(rvals):
             dvals[i] = integrate.quad(integrand, 0.0, rval,
-                                      #limit=QUADLIMIT,
+                                      limit=QUADLIMIT,
                                       )[0]
 
-        return interpolate.interp1d(rvals, dvals, bounds_error=True)
+        return interpolate.interp1d(rvals, dvals, kind='cubic',
+                                    bounds_error=True)
 
     def pvdenom(self, r):
         """
