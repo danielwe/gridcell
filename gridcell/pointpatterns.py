@@ -691,12 +691,12 @@ class PointPattern(AlmostImmutable, Sequence):
             are not defined in `Window` instances that compare equal. If
             `other` is not a `PointPattern` instance, the binary operation is
             applied to `self._points` and `other`. The result of this operation
-            is returned directly, unless it is a `geometry.MultiPoint`
-            instance, in which case it is used to initialize a new
-            `PointPattern` instance in the same window as `self`. If applying
-            the binary operation to `self.pluspoints` and `other` also returns
-            a `geometry.MultiPoint` instance, this is used as the `pluspoints`
-            of the new `PointPattern`.
+            is returned directly, unless it is a `geometry.MultiPoint` or
+            `geometry.Point` instance, in which case it is used to initialize
+            a new `PointPattern` instance in the same window as `self`. If
+            applying the binary operation to `self.pluspoints` and `other` also
+            returns a `geometry.MultiPoint` or `geometry.Point` instance, this
+            is used as the `pluspoints` of the new `PointPattern`.
         op : string or callable
             Either a string naming the attribute of `self._points` that
             implements the binary operation, or a callable implementing the
@@ -711,10 +711,12 @@ class PointPattern(AlmostImmutable, Sequence):
         """
         spoints = self._points
         spluspoints = self.pluspoints
-        try:
+        if (isinstance(op, str) and
+                hasattr(spoints, op) and
+                hasattr(spluspoints, op)):
             bound_op = getattr(spoints, op)
             bound_op_plus = getattr(spluspoints, op)
-        except TypeError:
+        else:
             def bound_op(ogeom):
                 return op(spoints, ogeom)
 
@@ -722,35 +724,34 @@ class PointPattern(AlmostImmutable, Sequence):
                 return op(spluspoints, opluspoints)
 
         swindow = self.window
-        try:
+        if isinstance(other, type(self)) or isinstance(self, type(other)):
             owindow = other.window
-        except AttributeError:
-            # Apparently, other is not a PointPattern. Do the easiest thing.
-            new_geom = bound_op(other)
-            if isinstance(new_geom, geometry.MultiPoint):
-                new_pluspoints = bound_op_plus(other)
-                if isinstance(new_pluspoints, geometry.MultiPoint):
-                    return type(self)(
-                        new_geom, swindow, pluspoints=new_pluspoints,
-                        edge_correction=self._edge_correction)
-                else:
-                    return type(self)(
-                        new_geom, swindow, pluspoints=None,
-                        edge_correction=self._edge_correction)
-            else:
-                return new_geom
-        else:
             if not (swindow == owindow):
                 raise ValueError("instances of {} must be defined over "
                                  "instances of {} that compare equal for "
                                  "binary operations to be defined"
                                  .format(self.__class__.__name__,
                                          swindow.__class__.__name__))
+            new_points = bound_op(other._points)
+            new_pluspoints = bound_op_plus(other.pluspoints)
+            return type(self)(new_points, swindow, pluspoints=new_pluspoints,
+                              edge_correction=self._edge_correction)
 
-        new_points = bound_op(other._points)
-        new_pluspoints = bound_op_plus(other.pluspoints)
-        return type(self)(new_points, swindow, pluspoints=new_pluspoints,
-                          edge_correction=self._edge_correction)
+        # Apparently, other is not a PointPattern. Do the easiest thing.
+        new_geom = bound_op(other)
+        if isinstance(new_geom, geometry.Point):
+            new_geom = geometry.MultiPoint((new_geom,))
+        if isinstance(new_geom, geometry.MultiPoint):
+            new_pluspoints = None
+            potential_pluspoints = bound_op_plus(other)
+            if isinstance(potential_pluspoints, geometry.Point):
+                potential_pluspoints = geometry.MultiPoint((new_pluspoints,))
+            if isinstance(potential_pluspoints, geometry.MultiPoint):
+                new_pluspoints = potential_pluspoints
+            return type(self)(
+                new_geom, swindow, pluspoints=new_pluspoints,
+                edge_correction=self._edge_correction)
+        return new_geom
 
     def difference(self, other):
         return self._inherit_binary_operation(other, 'difference')
@@ -2471,34 +2472,30 @@ class PointPatternCollection(AlmostImmutable, Sequence):
 
         patterns = []
         for n in nlist:
-            points = geometry.MultiPoint(None)
+            points = []
             left = n
             while left > 0:
+                ndraw = int(area_factor * left)
                 draw = numpy.column_stack(
-                    (numpy.random.uniform(low=xmin, high=xmax, size=(left,)),
-                     numpy.random.uniform(low=ymin, high=ymax, size=(left,))))
+                    (numpy.random.uniform(low=xmin, high=xmax, size=ndraw),
+                     numpy.random.uniform(low=ymin, high=ymax, size=ndraw)))
                 new_points = geometry.MultiPoint(draw).intersection(window)
-                points = points.union(new_points)
-                try:
-                    new_l = len(new_points)
-                except TypeError:
-                    new_l = len(geometry.MultiPoint((new_points,)))
-                left -= new_l
+                if isinstance(new_points, geometry.Point):
+                    points.append(new_points)
+                    left -= 1
+                else:
+                    points.extend(new_points)
+                    left -= len(new_points)
 
-            if isinstance(points, geometry.Point):
-                points = geometry.MultiPoint((points,))
-
-            pp = PointPattern(points, window, edge_correction=edge_correction)
+            pp = PointPattern(points[:n], window,
+                              edge_correction=edge_correction)
             patterns.append(pp)
 
         return cls(patterns, edge_correction=edge_correction)
 
     # Implement abstract methods
     def __getitem__(self, index, *args, **kwargs):
-        item = self.patterns.__getitem__(index, *args, **kwargs)
-        if isinstance(index, slice):
-            return type(self)(item, edge_correction=self._edge_correction)
-        return item
+        return self.patterns.__getitem__(index, *args, **kwargs)
 
     def __len__(self, *args, **kwargs):
         return self.patterns.__len__(*args, **kwargs)
@@ -3493,10 +3490,10 @@ class PointPatternCollection(AlmostImmutable, Sequence):
         if edge_correction is None:
             edge_correction = self._edge_correction
 
-        try:
-            vals = getattr(self, attribute + 's')(
-                edge_correction=edge_correction)
-        except AttributeError:
+        plural_attr = attribute + 's'
+        if hasattr(self, plural_attr):
+            vals = getattr(self, plural_attr)(edge_correction=edge_correction)
+        else:
             vals = numpy.array(
                 [getattr(pp, attribute)(edge_correction=edge_correction)
                  for pp in self.patterns])
@@ -3935,10 +3932,10 @@ class PointPatternCollection(AlmostImmutable, Sequence):
         if edge_correction is None:
             edge_correction = self._edge_correction
 
-        try:
-            vals = getattr(self, attribute + 's')(
-                edge_correction=edge_correction)
-        except AttributeError:
+        plural_attr = attribute + 's'
+        if hasattr(self, plural_attr):
+            vals = getattr(self, plural_attr)(edge_correction=edge_correction)
+        else:
             vals = numpy.array(
                 [getattr(pp, attribute)(edge_correction=edge_correction)
                  for pp in self.patterns])

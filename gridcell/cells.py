@@ -119,21 +119,15 @@ class FeatureNames(object):
     @classmethod
     def latex_mapping(cls, **kwargs):
         def _lm(key):
-            try:
-                index = cls.grid_features.index(key)
-            except ValueError:
-                if isinstance(key, str):
-                    return key.replace('_', ' ')
-                else:
-                    return key
-                #try:
-                #    return "".join([r"$\textrm{",
-                #                    key.replace("_", " "),
-                #                    r"}$"])
-                #except (TypeError, AttributeError):
-                #    return key
-            else:
-                return cls.grid_features_latex(**kwargs)[index]
+            if key in cls.grid_features:
+                return cls.grid_features_latex(
+                    **kwargs)[cls.grid_features.index(key)]
+            if isinstance(key, str):
+                return key.replace('_', ' ')
+                #return "".join([r"$\textrm{",
+                #                key.replace("_", " "),
+                #                r"}$"])
+            return key
         return _lm
 
 
@@ -1456,15 +1450,13 @@ class BaseCell(AbstractAlmostImmutable):
                 return getattr(self, label)(**kwargs)
 
             try:
-                return self.params[label]
+                if label in self.params:
+                    return self.params[label]
+                if label in self.info:
+                    return self.info[label]
             except TypeError:
-                raise _indexerror(label)
-            except KeyError:
                 pass
-            try:
-                return self.info[label]
-            except (TypeError, KeyError):
-                raise _indexerror(label)
+            raise _indexerror(label)
 
         values = []
         if weights is None:
@@ -2564,10 +2556,7 @@ class CellCollection(AlmostImmutable, MutableSequence):
 
     # Implement abstract methods
     def __getitem__(self, index, *args, **kwargs):
-        item = self._cells.__getitem__(index, *args, **kwargs)
-        if isinstance(index, slice):
-            return type(self)(item, **self.info)
-        return item
+        return self._cells.__getitem__(index, *args, **kwargs)
 
     def __setitem__(self, *args, **kwargs):
         return self._cells.__setitem__(*args, **kwargs)
@@ -2611,10 +2600,8 @@ class CellCollection(AlmostImmutable, MutableSequence):
         """
         pkw = dict(position_kw)
         for key in ('info', 'params'):
-            try:
+            if key in session:
                 pkw.update(session[key])
-            except KeyError:
-                pass
 
         position = Position(session['t'], session['x'], session['y'], **pkw)
 
@@ -2623,10 +2610,8 @@ class CellCollection(AlmostImmutable, MutableSequence):
         for cell in cells:
             ckw = dict(cell_kw)
             for key in ('info', 'params'):
-                try:
+                if key in cell:
                     ckw.update(cell[key])
-                except KeyError:
-                    pass
 
             ckw.update(position=position, spike_t=cell['spike_t'], bins=bins,
                        range_=range_)
@@ -2746,10 +2731,8 @@ class CellCollection(AlmostImmutable, MutableSequence):
                                                  position_kw, cell_kw)
 
         for key in ('info', 'params'):
-            try:
+            if key in sessions:
                 kwargs.update(sessions[key])
-            except KeyError:
-                pass
 
         return cls(clist, **kwargs)
 
@@ -2813,21 +2796,20 @@ class CellCollection(AlmostImmutable, MutableSequence):
         clist = []
         for cell in self:
             for key, value in info.items():
-                try:
+                if key in cell.info:
                     cvalue = cell.info[key]
-                except KeyError:
-                    pass
-                else:
                     if cvalue == value:
                         clist.append(cell)
                         continue
                 try:
-                    cpvalue = cell.pos.info[key]
-                except (AttributeError, KeyError):
+                    posinfo = cell.pos.info
+                except AttributeError:
                     pass
                 else:
-                    if cpvalue == value:
-                        clist.append(cell)
+                    if key in posinfo:
+                        cpvalue = posinfo[key]
+                        if cpvalue == value:
+                            clist.append(cell)
 
         return type(self)(clist, **self.info)
 
@@ -3483,8 +3465,8 @@ REGULAR_GRID_PEAKS = numpy.array(
      [_COS_PI_3, _SIN_PI_3],
      [-_COS_PI_3, _SIN_PI_3],
      [-1.0, 0.0],
-     [_COS_PI_3, -_SIN_PI_3],
-     [-_COS_PI_3, -_SIN_PI_3]])
+     [-_COS_PI_3, -_SIN_PI_3],
+     [_COS_PI_3, -_SIN_PI_3]])
 
 
 class Module(CellCollection):
@@ -3792,10 +3774,8 @@ class Module(CellCollection):
         """
         window = self.window(**kwargs)
         # Avoid unneccesary spreading of keywords to memoized methods
-        try:
+        if 'window_type' in kwargs:
             del kwargs['window_type']
-        except KeyError:
-            pass
 
         phases = self.phases(**kwargs)
         phase_points = PointPattern.wrap_into(window, phases.values)
@@ -3848,19 +3828,15 @@ class Module(CellCollection):
         """
         # Avoid unneccesary spreading of keywords to memoized methods
         flag = False
-        try:
+        if 'from_absolute' in kwargs:
             from_absolute = kwargs.pop('from_absolute')
-        except KeyError:
-            pass
-        else:
             flag = True
 
         window = self.window(**kwargs).centered()
 
-        try:
+        if 'window_type' in kwargs:
             del kwargs['window_type']
-        except KeyError:
-            pass
+
         if flag:
             kwargs.update(from_absolute=from_absolute)
 

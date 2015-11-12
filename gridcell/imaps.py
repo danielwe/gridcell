@@ -760,19 +760,15 @@ class IntensityMap(AlmostImmutable):
 
         """
         sdata = self.data
-        try:
+        if isinstance(op, str) and hasattr(sdata, op):
             bound_op = getattr(sdata, op)
-        except TypeError:
+        else:
             def bound_op(odata):
                 return op(sdata, odata)
 
         bset = self.bset
-        try:
+        if isinstance(other, type(self)) or isinstance(self, type(other)):
             obset = other.bset
-        except AttributeError:
-            # Apparently, other is not an IntensityMap
-            new_data = bound_op(other)
-        else:
             if not ((bset == obset) or
                     bset.shape == () or
                     obset.shape == ()):
@@ -784,6 +780,8 @@ class IntensityMap(AlmostImmutable):
             new_data = bound_op(other.data)
             if bset.shape == ():
                 bset = obset
+        else:
+            new_data = bound_op(other)
 
         return type(self)(new_data, bset)
 
@@ -1340,9 +1338,9 @@ class IntensityMap(AlmostImmutable):
 
         """
         sdata = self.data
-        try:
+        if isinstance(other, type(self)) or isinstance(self, type(other)):
             odata = other.data
-        except AttributeError:
+        else:
             other = self.new_from_array(other)
             odata = other.data
 
@@ -1397,9 +1395,9 @@ class IntensityMap(AlmostImmutable):
 
         """
         sdata = self.data
-        try:
+        if isinstance(other, type(self)) or isinstance(self, type(other)):
             odata = other.data
-        except AttributeError:
+        else:
             other = self.new_from_array(other)
             odata = other.data
 
