@@ -39,8 +39,8 @@ _PI = numpy.pi
 _2PI = 2.0 * _PI
 _PI_4 = _PI / 4.0
 
-RSAMPLES = 80
-QUADLIMIT = 480
+RSAMPLES = 75
+#QUADLIMIT = 480
 ORIGIN = geometry.Point((0.0, 0.0))
 
 
@@ -63,6 +63,7 @@ class Window(geometry.Polygon):
         for key in state:
             setattr(self, key, state[key])
 
+    @memoize_method
     def lattice(self):
         """
         Compute lattice vectors of a Bravais lattice having the window as unit
@@ -152,6 +153,7 @@ class Window(geometry.Polygon):
 
         return dmax
 
+    @memoize_method
     def voronoi(self):
         """
         Compute the central Voronoi unit cell of the lattice defined by the
@@ -174,6 +176,7 @@ class Window(geometry.Polygon):
         window = voronoi.vertices[voronoi.regions[voronoi.point_region[0]]]
         return type(self)(window)
 
+    @memoize_method
     def centered(self):
         """
         Compute a translation of the window such that the centroid coincides
@@ -188,6 +191,7 @@ class Window(geometry.Polygon):
         cent = self.centroid
         return affinity.translate(self, xoff=-cent.x, yoff=-cent.y)
 
+    @memoize_method
     def diagonal_cut(self):
         """
         Compute the window obtained byt cutting this window in half along
@@ -220,7 +224,7 @@ class Window(geometry.Polygon):
         start_index = numpy.argmin(numpy.abs(angles[asort] + _PI_4))
         asort = numpy.roll(asort, -start_index)
         new_boundary = boundary[asort[:l_2 + 1]]
-        return Window(new_boundary)
+        return type(self)(new_boundary)
 
     def dilate_by_this(self, other):
         """
@@ -235,10 +239,10 @@ class Window(geometry.Polygon):
         plist = []
         sbpoints = geometry.MultiPoint(self.boundary)[:-1]
         obpoints = geometry.MultiPoint(other.boundary)[:-1]
-        for p in sbpoints:
-            plist.append(affinity.translate(other, xoff=p.x, yoff=p.y))
-        for p in obpoints:
-            plist.append(affinity.translate(self, xoff=p.x, yoff=p.y))
+        for p in numpy.asarray(sbpoints):
+            plist.append(affinity.translate(other, xoff=p[0], yoff=p[1]))
+        for p in numpy.asarray(obpoints):
+            plist.append(affinity.translate(self, xoff=p[0], yoff=p[1]))
         return ops.cascaded_union(plist)
 
     def erode_by_this(self, other):
@@ -253,9 +257,9 @@ class Window(geometry.Polygon):
         """
         eroded = type(self)(other)
         sbpoints = geometry.MultiPoint(self.boundary)[:-1]
-        for p in sbpoints:
-            eroded = eroded.intersection(affinity.translate(other, xoff=-p.x,
-                                                            yoff=-p.y))
+        for p in numpy.asarray(sbpoints):
+            eroded = eroded.intersection(affinity.translate(other, xoff=-p[0],
+                                                            yoff=-p[1]))
         return eroded
 
     def translated_intersection(self, xoff, yoff):
@@ -282,8 +286,8 @@ class Window(geometry.Polygon):
 
         """
         ld = self.longest_diagonal()
-        xoffs = numpy.linspace(-ld, ld, 3 * RSAMPLES)
-        yoffs = numpy.linspace(-ld, ld, 3 * RSAMPLES)
+        xoffs = numpy.linspace(-ld, ld, 2 * RSAMPLES - 1)
+        yoffs = numpy.linspace(-ld, ld, 2 * RSAMPLES - 1)
         scarray = numpy.zeros((xoffs.size, yoffs.size))
         for (i, xoff) in enumerate(xoffs):
             for (j, yoff) in enumerate(yoffs):
@@ -344,7 +348,7 @@ class Window(geometry.Polygon):
 
             iso_set_cov[i] = (integrate.quad(integrand, theta0,
                                              _2PI + theta0,
-                                             limit=QUADLIMIT,
+                                             #limit=QUADLIMIT,
                                              points=problem_angles)[0] / _2PI)
 
         return interpolate.interp1d(rvals, iso_set_cov, bounds_error=False,
@@ -374,6 +378,49 @@ class Window(geometry.Polygon):
         return self._isotropised_set_covariance_interpolator()(r)
 
     @memoize_method
+    def _ball_difference_area_interpolator(self):
+        """
+        Compute a ball difference area interpolator for the window
+
+        Returns
+        -------
+        interp1d
+            Interpolator that computes the the ball difference area for the
+            window.
+
+        """
+        rvals = numpy.linspace(0.0, self.longest_diagonal(), RSAMPLES)
+        ball_diff_area = numpy.zeros_like(rvals)
+        centroid = self.centroid
+        for (i, r) in enumerate(rvals):
+            disc = centroid.buffer(r)
+            ball_diff_area[i] = self.difference(disc).area
+        return interpolate.interp1d(rvals, ball_diff_area, bounds_error=False,
+                                    fill_value=0.0)
+
+    def ball_difference_area(self, r):
+        """
+        Compute the area of the set difference of the window and a ball of
+        a given radius centered on the window centroid
+
+        This function provides a speedup of this computation for multiple
+        values of the radius, by relying on an interpolator.
+
+        Parameters
+        ----------
+        r : array-like
+            Array giving the radii of the balls to subtract from the window.
+
+        Returns
+        ndarray
+            Array of the same shape as `r` containing for each value in `r` the
+            area of the set difference of the window and b(c, r), where c is
+            the centroid of the window.
+
+        """
+        return self._ball_difference_area_interpolator()(r)
+
+    @memoize_method
     def _pvdenom_interpolator(self):
         """
         Compute an interpolator for the denominator of the p-function for the
@@ -391,7 +438,9 @@ class Window(geometry.Polygon):
         rvals = numpy.linspace(0.0, self.longest_diagonal(), RSAMPLES)
         dvals = numpy.empty_like(rvals)
         for (i, rval) in enumerate(rvals):
-            dvals[i] = integrate.quad(integrand, 0.0, rval, limit=QUADLIMIT)[0]
+            dvals[i] = integrate.quad(integrand, 0.0, rval,
+                                      #limit=QUADLIMIT,
+                                      )[0]
 
         return interpolate.interp1d(rvals, dvals, bounds_error=True)
 
@@ -582,20 +631,15 @@ class PointPattern(AlmostImmutable, Sequence):
         self.window = window
 
         points = geometry.MultiPoint(points)
+        if len(set(map(tuple, numpy.asarray(points)))) != len(points):
+            raise ValueError("{} instances do not support point patterns "
+                             "with multiple exactly equal points"
+                             .format(type(self)))
 
         if not window.contains(points):
             raise ValueError("Not all points in 'points' are contained inside "
                              "'window'.")
         self._points = points
-
-        indices = list(range(len(self._points)))
-        while indices:
-            i = indices.pop()
-            for j in indices:
-                if self._points[i] == self._points[j]:
-                    raise ValueError("{} instances do not support point "
-                                     "patterns with multiple exactly equal "
-                                     "points".format(type(self)))
 
         self.pluspoints = geometry.MultiPoint(pluspoints)
 
@@ -656,27 +700,31 @@ class PointPattern(AlmostImmutable, Sequence):
             return points
 
         lattice = window.lattice()
-        lattice_r1 = numpy.roll(lattice, 1, axis=0)
+        basis = lattice[:2]
 
-        def coeff_pairs():
-            i = 1
-            while True:
-                for l in range(i):
-                    yield (i - l, l)
-                i += 1
+        # Wrap points directly into the concentric rhomboidal window
+        parray = numpy.asarray(points)
+        pcoeffs = project_vectors(parray, basis)
+        ccoeff = project_vectors(window.centroid, basis)
+        pcoeffs = numpy.mod(pcoeffs + 0.5 - ccoeff, 1.0) - 0.5 + ccoeff
+        parray = pcoeffs.dot(basis)
+        points = geometry.MultiPoint(parray)
 
-        def wrap(point):
-            if window.contains(point):
-                return point
-            for (k, l) in coeff_pairs():
-                disp = k * lattice + l * lattice_r1
-                for d in disp:
-                    wrapped = affinity.translate(point, xoff=d[0], yoff=d[1])
-                    if window.contains(wrapped):
-                        return wrapped
-
-        new_points = [wrap(p) for p in points]
-        return geometry.MultiPoint(new_points)
+        # If window is hexagonal, there may be some residual wrapping to do
+        if len(lattice) == 6 and not window.contains(points):
+            vectors = numpy.vstack((basis, -basis))
+            new_points = []
+            for p in points:
+                if window.contains(p):
+                    new_points.append(p)
+                    continue
+                for v in vectors:
+                    wp = affinity.translate(p, xoff=v[0], yoff=v[1])
+                    if window.contains(wp):
+                        new_points.append(wp)
+                        break
+            points = geometry.MultiPoint(new_points)
+        return points
 
     def _inherit_binary_operation(self, other, op):
         """
@@ -852,7 +900,7 @@ class PointPattern(AlmostImmutable, Sequence):
             # of the window
             boundary = numpy.asarray(self.window.boundary)[:-1]
             boundary_coeffs = project_vectors(boundary, basis_vectors)
-            anchor_coeffs = min(boundary_coeffs, key=lambda bc: bc[0] + bc[1])
+            anchor_coeffs = min(boundary_coeffs, key=numpy.sum)
 
             # Subtract anchor and project
             parray = numpy.array(points) - anchor_coeffs.dot(basis_vectors)
@@ -860,6 +908,205 @@ class PointPattern(AlmostImmutable, Sequence):
             points = geometry.MultiPoint(point_coeffs)
 
         return points
+
+    @staticmethod
+    def range_tree_build(points):
+        """
+        Construct a range tree from a set of points
+
+        Parameters
+        ----------
+        points : sequence
+            Sequence of coordinate tuples instances to build the range tree
+            from. ..note:: shapely Point instances are not supported.
+
+        Returns
+        -------
+        tuple
+            Root node of the range tree. The nodes are tuples in the
+            following format:
+            [median_point, left_child, right_child, associated_binary_tree].
+            The associated binary tree at each node points to the root node of
+            a binary tree with nodes in the following format:
+            [median_point_r, left_child, right_child]. Here, `median_point` is
+            a regular coordinate tuple, while `median_point_r` is a reversed
+            coordinate tuple.
+
+        """
+        def binary_node_stuff(points, sort_index):
+            # Binary tree node format: [point, left, right]
+            mid = len(sort_index) // 2
+            p = points[sort_index[mid]]
+            si_l, si_r = sort_index[:mid], sort_index[mid:]
+            return [p, None, None], si_l, si_r
+
+        def build_binary_tree(points, sort_index):
+            root_stuff = binary_node_stuff(points, sort_index)
+
+            stack = []
+            if len(sort_index) > 1:
+                stack.append(root_stuff)
+            while stack:
+                current, si_l, si_r = stack.pop()
+                left_stuff = binary_node_stuff(points, si_l)
+                current[1] = left_stuff[0]
+                if len(si_l) > 1:
+                    stack.append(left_stuff)
+                right_stuff = binary_node_stuff(points, si_r)
+                current[2] = right_stuff[0]
+                if len(si_r) > 1:
+                    stack.append(right_stuff)
+            return root_stuff[0]
+
+        def range_node_stuff(points, xsort_index, points_r, ysort_index):
+            # Range tree node format: [point, left, right,
+            #                          associated_binary_tree)
+            b = build_binary_tree(points_r, ysort_index)
+
+            mid = len(xsort_index) // 2
+            p = points[xsort_index[mid]]
+            xsi_l, xsi_r = xsort_index[:mid], xsort_index[mid:]
+            ysi_l = [yi for yi in ysort_index if yi in xsi_l]
+            ysi_r = [yi for yi in ysort_index if yi in xsi_r]
+            return [p, None, None, b], xsi_l, xsi_r, ysi_l, ysi_r
+
+        def build_range_tree(points, xsort_index, points_r, ysort_index):
+            root_stuff = range_node_stuff(points, xsort_index,
+                                          points_r, ysort_index)
+
+            stack = []
+            if len(xsort_index) > 1:
+                stack.append(root_stuff)
+            while stack:
+                current, xsi_l, xsi_r, ysi_l, ysi_r = stack.pop()
+                left_stuff = range_node_stuff(points, xsi_l, points_r, ysi_l)
+                current[1] = left_stuff[0]
+                if len(xsi_l) > 1:
+                    stack.append(left_stuff)
+                right_stuff = range_node_stuff(points, xsi_r, points_r, ysi_r)
+                current[2] = right_stuff[0]
+                if len(xsi_r) > 1:
+                    stack.append(right_stuff)
+
+            return root_stuff[0]
+
+        indices = range(len(points))
+        points_r = [p[::-1] for p in points]
+        xsort_index = sorted(indices, key=lambda i: points[i])
+        ysort_index = sorted(indices, key=lambda i: points_r[i])
+        return build_range_tree(points, xsort_index, points_r, ysort_index)
+
+    @staticmethod
+    def range_tree_query(tree, xmin, xmax, ymin, ymax):
+        """
+        Return the points stored in a range tree that lie inside a rectangular
+        region
+
+        Parameters
+        ----------
+        root : tuple
+            Root node of the range tree, as returned from
+            `PointPattern.range_tree_static`.
+        xmin, xmax, ymin, ymax : scalars
+            Limits of the range in which to query the range tree for points.
+            Limits are inclusive in both ends.
+
+        Returns
+        -------
+        list
+            List of coordinate tuples for all points from the tree inside the
+            given range.
+
+        """
+        xmin, xmax = (xmin, -numpy.inf), (xmax, numpy.inf)
+        ymin, ymax = (ymin, -numpy.inf), (ymax, numpy.inf)
+
+        def isleaf(node):
+            return (node[1] is None) and (node[2] is None)
+
+        def query(root, min_, max_, report, points):
+            # Find split node.
+            split = root
+            while not isleaf(split):
+                x = split[0]
+                if x > max_:
+                    split = split[1]
+                elif x <= min_:
+                    split = split[2]
+                else:
+                    break
+            else:
+                # The split node is a leaf node. Report if relevant and finish.
+                if min_ <= split[0] <= max_:
+                    report(split, points)
+                return
+            # The split node is a non-leaf node: traverse subtrees and report
+            # relevant nodes.
+            # First, take the left subtree.
+            node = split[1]
+            while not isleaf(node):
+                if node[0] > min_:
+                    # The whole right subtree is relevant. Report it.
+                    report(node[2], points)
+                    node = node[1]
+                else:
+                    node = node[2]
+            # We end on a leaf node. Report if relevant.
+            if min_ <= node[0] <= max_:
+                report(node, points)
+            # Then take the right subtree.
+            node = split[2]
+            while not isleaf(node):
+                if node[0] <= max_:
+                    # The whole left subtree is relevant. Report it.
+                    report(node[1], points)
+                    node = node[2]
+                else:
+                    node = node[1]
+            # We end on a leaf node. Report if relevant.
+            if min_ <= node[0] <= max_:
+                report(node, points)
+
+        def report_subtree_r(node, points):
+            stack = [node]
+            while stack:
+                node = stack.pop()
+                if isleaf(node):
+                    points.append(node[0][::-1])
+                else:
+                    stack.extend(node[1:3])
+
+        def report_yquery(node, points):
+            return query(node[3], ymin, ymax, report_subtree_r, points)
+
+        points = []
+        query(tree, xmin, xmax, report_yquery, points)
+
+        return points
+
+    @memoize_method
+    def range_tree(self, project_points=True):
+        """
+        Construct a range tree from the points in the pattern
+
+        Only the actual points in the pattern are added to the range tree --
+        plus sampling points or points from the periodic extension is never
+        used.
+
+        Parameters
+        ----------
+        project_points : bool, optional
+            Passed to `PointPattern.points`.
+
+        Returns
+        -------
+        Root node of the range tree. For details about the type and format, see
+        `PointPattern.range_tree_static`.
+
+        """
+        points = self.points(project_points=project_points)
+        return self.range_tree_build([tuple(p)
+                                      for p in numpy.asarray(points)])
 
     @staticmethod
     def pairwise_vectors(pp1, pp2=None):
@@ -875,9 +1122,9 @@ class PointPattern(AlmostImmutable, Sequence):
                   pp1[i] to pp2[j]
 
         """
-        ap1 = numpy.asarray(pp1)[:, :2]
+        ap1 = numpy.array(pp1)[:, :2]
         if pp2 is not None:
-            ap2 = numpy.asarray(pp2)[:, :2]
+            ap2 = numpy.array(pp2)[:, :2]
         else:
             ap2 = ap1
         return ap2 - ap1[:, numpy.newaxis, :]
@@ -898,9 +1145,9 @@ class PointPattern(AlmostImmutable, Sequence):
         """
         #diff = PointPattern.pairwise_vectors(pp1, pp2=pp2)
         #return numpy.sqrt(numpy.sum(diff * diff, axis=-1))
-        ap1 = numpy.asarray(pp1)[:, :2]
+        ap1 = numpy.array(pp1)[:, :2]
         if pp2 is not None:
-            ap2 = numpy.asarray(pp2)[:, :2]
+            ap2 = numpy.array(pp2)[:, :2]
         else:
             ap2 = ap1
         return distance.cdist(ap1, ap2)
@@ -1033,40 +1280,6 @@ class PointPattern(AlmostImmutable, Sequence):
         lambda_ = self.intensity(mode=mode, r=r)
         return lambda_ * lambda_ * (n - 1) / n
 
-    @staticmethod
-    def rmax_static(window, edge_correction):
-        """
-        Return the largest relevant interpoint distance when using a particular
-        edge correction in a particular window
-
-        Parameters
-        ----------
-        window : Window
-            Window in which the points take values.
-        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
-                               'plus'}
-            String to select the edge handling to apply in computations. See
-            the documentation for `PointPattern` for details.
-
-        Returns
-        -------
-        scalar
-            Largest relevant interpoint distance.
-
-        """
-        if edge_correction in ('finite', 'plus', 'isotropic'):
-            return window.longest_diagonal()
-
-        elif edge_correction == 'periodic':
-            return 0.5 * window.voronoi().longest_diagonal()
-
-        elif edge_correction == 'stationary':
-            return 2.0 * window.inscribed_circle()['r']
-
-        else:
-            raise ValueError("unknown edge correction: {}"
-                             .format(edge_correction))
-
     def rmax(self, edge_correction=None):
         """
         Return the largest relevant interpoint distance for a given edge
@@ -1089,7 +1302,19 @@ class PointPattern(AlmostImmutable, Sequence):
         """
         if edge_correction is None:
             edge_correction = self._edge_correction
-        return self.rmax_static(self.window, edge_correction=edge_correction)
+
+        if edge_correction in ('finite', 'plus', 'isotropic'):
+            return self.window.longest_diagonal()
+
+        elif edge_correction == 'periodic':
+            return 0.5 * self.window.voronoi().longest_diagonal()
+
+        elif edge_correction == 'stationary':
+            return 2.0 * self.window.inscribed_circle()['r']
+
+        else:
+            raise ValueError("unknown edge correction: {}"
+                             .format(edge_correction))
 
     def rvals(self, edge_correction=None):
         """
@@ -1175,15 +1400,17 @@ class PointPattern(AlmostImmutable, Sequence):
             area_inv = 1.0 / voronoi.area
             centroid = voronoi.centroid
             #distances = PointPattern.pairwise_distances(mp1, mp2)
-            for (i, p1) in enumerate(mp1):
-                dx, dy = p1.x - centroid.x, p1.y - centroid.y
+            pdisps = numpy.asarray(mp1) - numpy.asarray(centroid)
+            for (i, pd) in enumerate(pdisps):
                 translated_window = affinity.translate(voronoi,
-                                                       xoff=dx, yoff=dy)
+                                                       xoff=pd[0], yoff=pd[1])
                 valid_mp2 = mp2.intersection(translated_window)
-                vmp2_arr = numpy.asarray(valid_mp2)
-                vindex = numpy.any(
-                    PointPattern.pairwise_distances(mp2_arr, vmp2_arr) == 0.0,
-                    axis=-1)
+                vmp2_arr = numpy.atleast_2d(valid_mp2)
+                vindex = numpy.any(distance.cdist(mp2_arr, vmp2_arr) == 0.0,
+                                   axis=-1)
+                #vindex = numpy.any(
+                #    numpy.all(PointPattern.pairwise_vectors(
+                #        mp2_arr, vmp2_arr) == 0.0, axis=-1), axis=-1)
 
                 wview[i, vindex] = area_inv
 
@@ -1222,171 +1449,6 @@ class PointPattern(AlmostImmutable, Sequence):
         else:
             raise ValueError("unknown edge correction: {}"
                              .format(edge_correction))
-
-    @staticmethod
-    def range_tree_static(points):
-        """
-        Construct a range tree from a set of points
-
-        Parameters
-        ----------
-        points : sequence
-            Sequence of Point instances to build the range tree from.
-
-        Returns
-        -------
-        tuple
-            Root node of the range tree. The nodes are tuples in the
-            following format:
-            (median_point, left_child, right_child, associated_binary_tree).
-            The associated binary tree at each node points to the root node of
-            a binary tree with nodes in the following format:
-            (median_point, left_child, right_child). In both cases,
-            `median_points` is a coordinate tuple in the format (x, y).
-
-        """
-        def build_binary_tree(points, sort_index):
-            # Binary tree node format: (point, left, right)
-            l = len(sort_index)
-            mid = l // 2
-            p = points[sort_index[mid]]
-            if l == 1:
-                return (p, None, None)
-            left = build_binary_tree(points, sort_index[:mid])
-            right = build_binary_tree(points, sort_index[mid:])
-            return (p, left, right)
-
-        def build_range_tree(points, xsort_index, ysort_index):
-            # Build associated binary tree
-            broot = build_binary_tree(points, ysort_index)
-
-            # Range tree node format: (point, left, right,
-            #                          associated_binary_tree)
-            l = len(xsort_index)
-            mid = l // 2
-            p = points[xsort_index[mid]]
-            if l == 1:
-                return (p, None, None, broot)
-            xleft = xsort_index[:mid]
-            yleft = [yi for yi in ysort_index if yi in xleft]
-            xright = xsort_index[mid:]
-            yright = [yi for yi in ysort_index if yi in xright]
-            return (p,
-                    build_range_tree(points, xleft, yleft),
-                    build_range_tree(points, xright, yright),
-                    broot)
-
-        indices = range(len(points))
-        xsort_index = sorted(indices, key=lambda i: (points[i].x, points[i].y))
-        ysort_index = sorted(indices, key=lambda i: (points[i].y, points[i].x))
-        return build_range_tree(points, xsort_index, ysort_index)
-
-    @staticmethod
-    def range_tree_query(tree, xmin, xmax, ymin, ymax):
-        """
-        Return the points stored in a range tree that lie inside a rectangular
-        region
-
-        Parameters
-        ----------
-        root : tuple
-            Root node of the range tree, as returned from
-            `PointPattern.range_tree_static`.
-        xmin, xmax, ymin, ymax : scalars
-            Limits of the range in which to query the range tree for points.
-            Limits are inclusive in both ends.
-
-        Returns
-        -------
-        geometry.MultiPoint
-            Collection of all points from the tree inside the given range.
-
-        """
-        xmin, xmax = (xmin, -numpy.inf), (xmax, numpy.inf)
-        ymin, ymax = (ymin, -numpy.inf), (ymax, numpy.inf)
-
-        def isleaf(node):
-            return (node[1] is None) and (node[2] is None)
-
-        def query(root, min_, max_, key, report_func, points):
-            split = root
-            while not isleaf(split):
-                x = key(split[0])
-                if x > max_:
-                    split = split[1]
-                elif x <= min_:
-                    split = split[2]
-                else:
-                    break
-            else:
-                # Exited on a leaf node. Report if relevant and finish.
-                if min_ <= key(split[0]) <= max_:
-                    report_func(split, points)
-                return
-            # Exited on a non-leaf node: traverse and report from subtrees.
-            # Left subtree first.
-            node = split[1]
-            while not isleaf(node):
-                if key(node[0]) > min_:
-                    # The whole right subtree is relevant. Report it.
-                    report_func(node[2], points)
-                    node = node[1]
-                else:
-                    node = node[2]
-            # We end on a leaf node. Report if relevant.
-            if min_ <= key(node[0]) <= max_:
-                report_func(node, points)
-            # Then take the right subtree.
-            node = split[2]
-            while not isleaf(node):
-                if key(node[0]) <= max_:
-                    # The whole left subtree is relevant. Report it.
-                    report_func(node[1], points)
-                    node = node[2]
-                else:
-                    node = node[1]
-            # We end on a leaf node. Report if relevant.
-            if min_ <= key(node[0]) <= max_:
-                report_func(node, points)
-
-        def report_subtree(node, points):
-            if isleaf(node):
-                points.append(node[0])
-            else:
-                report_subtree(node[1], points)
-                report_subtree(node[2], points)
-
-        def report_yquery(node, points):
-            return query(node[3], ymin, ymax, lambda p: (p.y, p.x),
-                         report_subtree, points)
-
-        points = []
-        query(tree, xmin, xmax, lambda p: (p.x, p.y), report_yquery, points)
-
-        return geometry.MultiPoint(points)
-
-    @memoize_method
-    def range_tree(self, project_points=True):
-        """
-        Construct a range tree from the points in the pattern
-
-        Only the actual points in the pattern are added to the range tree --
-        plus sampling points or points from the periodic extension is never
-        used.
-
-        Parameters
-        ----------
-        project_points : bool, optional
-            Passed to `PointPattern.points`.
-
-        Returns
-        -------
-        Root node of the range tree. For details about the type and format, see
-        `PointPattern.range_tree_static`.
-
-        """
-        points = self.points(project_points=project_points)
-        return self.range_tree_static(points)
 
     @memoize_method
     def _estimator_base(self, edge_correction):
@@ -1568,61 +1630,17 @@ class PointPattern(AlmostImmutable, Sequence):
         lambda2 = self.squared_intensity(mode=imode, r=r)
         return sensibly_divide(w, lambda2)
 
-    @staticmethod
-    def kfunction_std_static(r, window, squared_intensity, edge_correction):
-        """
-        Compute the theoretical standard deviation of the empirical K-function
-        of a CSR pattern with a given number of points in a given window.
-
-        The ``theoretical'' standard deviation is really an empirically
-        validated formula, and should be a very good fit to the true standard
-        deviation within the interval given by
-        `PointPattern.lstatistic_interval`. It is currently only implemented
-        for periodic boundary conditions -- an array of ones is returned for
-        other edge corrections.
-
-        Parameters
-        ----------
-        r : array-like
-            array of values at which to evaluate the emprical K-function
-            standard deviation.
-        window : Polygon
-            Window for the assumed point pattern.
-        squared_intensity : scalar
-            Squared intensity of the assumed point pattern.
-        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
-                               'plus'}, optional
-            String to select the edge handling to apply in computations. See
-            the documentation for `PointPattern` for details.
-
-        Returns
-        -------
-        array
-            Values of the standard deviation of the empirical K-function,
-            evaulated at `r`.
-
-        """
-        kstd = numpy.ones_like(r)
-
-        r_ravel = numpy.asarray(r).ravel()
-        kstd_ravel = kstd.ravel()
-        if edge_correction == 'periodic':
-            voronoi = window.voronoi()
-            area = voronoi.area
-            npnp_1 = area * area * squared_intensity
-            centroid = voronoi.centroid
-            for (i, rval) in enumerate(r_ravel):
-                disc = centroid.buffer(rval)
-                kstd_ravel[i] = rval * (
-                    numpy.sqrt(2 * _PI * voronoi.difference(disc).area))
-            kstd /= numpy.sqrt(npnp_1)
-
-        return kstd
-
     def kfunction_std(self, r, edge_correction=None):
         """
         Compute the theoretical standard deviation of the empirical k-function
         of a point pattern like this one, under the CSR hypothesis.
+
+        The ``theoretical'' standard deviation is really an empirically
+        validated formula, and should be a very good fit to the true standard
+        deviation within the interval given by
+        `PointPattern.kstatistic_interval`. It is currently only implemented
+        for periodic boundary conditions -- an array of ones is returned for
+        other edge corrections.
 
         Parameters
         ----------
@@ -1646,11 +1664,20 @@ class PointPattern(AlmostImmutable, Sequence):
         if edge_correction is None:
             edge_correction = self._edge_correction
 
-        imode = self._edge_config[edge_correction]['imode']
-        squared_intensity = self.squared_intensity(r=r, mode=imode)
+        r = numpy.asarray(r)
+        if edge_correction == 'periodic':
+            imode = self._edge_config[edge_correction]['imode']
+            squared_intensity = self.squared_intensity(r=r, mode=imode)
+            voronoi = self.window.voronoi()
+            area = voronoi.area
+            npnp_1 = area * area * squared_intensity
+            kstd = r * numpy.sqrt(2.0 * _PI * voronoi.ball_difference_area(r) /
+                                  npnp_1)
+                                  #(npnp_1 + 0.5 + numpy.sqrt(npnp_1 + 0.25)))
+        else:
+            kstd = numpy.ones_like(r)
 
-        return self.kfunction_std_static(r, self.window, squared_intensity,
-                                         edge_correction=edge_correction)
+        return kstd
 
     def kfunction_std_inv(self, r, edge_correction=None):
         """
@@ -1672,11 +1699,10 @@ class PointPattern(AlmostImmutable, Sequence):
         """
         return 1.0 / self.kfunction_std(r, edge_correction=edge_correction)
 
-    @staticmethod
-    def lfunction_std_static(r, window, squared_intensity, edge_correction):
+    def lfunction_std(self, r, edge_correction=None):
         """
         Compute the theoretical standard deviation of the empirical L-function
-        of a CSR pattern with a given number of points in a given window.
+        of a point pattern like this one, under the CSR hypothesis.
 
         The ``theoretical'' standard deviation is really an empirically
         validated formula, and should be a very good fit to the true standard
@@ -1684,41 +1710,6 @@ class PointPattern(AlmostImmutable, Sequence):
         `PointPattern.lstatistic_interval`. It is currently only implemented
         for periodic boundary conditions -- an array of ones is returned for
         other edge corrections.
-
-        Parameters
-        ----------
-        r : array-like
-            array of values at which to evaluate the emprical L-function
-            standard deviation.
-        window : Polygon
-            Window for the assumed point pattern.
-        squared_intensity : scalar
-            Squared intensity of the assumed point pattern.
-        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
-                               'plus'}, optional
-            String to select the edge handling to apply in computations. See
-            the documentation for `PointPattern` for details.
-
-        Returns
-        -------
-        array
-            Values of the standard deviation of the empirical L-function,
-            evaulated at `r`.
-
-        """
-        if edge_correction == 'periodic':
-            r = numpy.asarray(r)
-            lstd = (PointPattern.kfunction_std_static(
-                r, window, squared_intensity, edge_correction) /
-                (2.0 * _PI * r))
-        else:
-            lstd = numpy.ones_like(r)
-        return lstd
-
-    def lfunction_std(self, r, edge_correction=None):
-        """
-        Compute the theoretical standard deviation of the empirical L-function
-        of a point pattern like this one, under the CSR hypothesis.
 
         Parameters
         ----------
@@ -1742,11 +1733,13 @@ class PointPattern(AlmostImmutable, Sequence):
         if edge_correction is None:
             edge_correction = self._edge_correction
 
-        imode = self._edge_config[edge_correction]['imode']
-        squared_intensity = self.squared_intensity(r=r, mode=imode)
-
-        return self.lfunction_std_static(r, self.window, squared_intensity,
-                                         edge_correction=edge_correction)
+        r = numpy.asarray(r)
+        if edge_correction == 'periodic':
+            lstd = (self.kfunction_std(r, edge_correction=edge_correction) /
+                    (2.0 * _PI * r))
+        else:
+            lstd = numpy.ones_likes(r)
+        return lstd
 
     def lfunction_std_inv(self, r, edge_correction=None):
         """
@@ -1768,7 +1761,6 @@ class PointPattern(AlmostImmutable, Sequence):
         """
         return 1.0 / self.lfunction_std(r, edge_correction=edge_correction)
 
-    @memoize_method
     def kstatistic(self, rmin=None, rmax=None, weight_function=None,
                    edge_correction=None):
         """
@@ -1837,15 +1829,13 @@ class PointPattern(AlmostImmutable, Sequence):
         offset = numpy.hstack((kvals_high - pi_rsteps_sq,
                                kvals_low - pi_rsteps_sq))
 
-        # Weight the offsets by the theoretical standard deviation at the
-        # corresponding r values.
+        # Weight the offsets by the weight function
         if weight_function is not None:
             weight = weight_function(rsteps)
             weight = numpy.hstack((weight, weight))
             offset *= weight
         return numpy.nanmax(numpy.abs(offset))
 
-    @memoize_method
     def lstatistic(self, rmin=None, rmax=None, weight_function=None,
                    edge_correction=None):
         """
@@ -1923,7 +1913,7 @@ class PointPattern(AlmostImmutable, Sequence):
         return numpy.nanmax(numpy.abs(offset))
 
     @memoize_method
-    def ksstatistic(self, variation='fasano', edge_correction=None):
+    def ksstatistic(self, variation='fasano'):
         """
         Compute the 2D Kolmogorov-Smirnov test statistic for CSR
 
@@ -1934,8 +1924,6 @@ class PointPattern(AlmostImmutable, Sequence):
             statistic to use. See Lopes, R., Reid, I., & Hobson, P. (2007). The
             two-dimensional Kolmogorov-Smirnov test. Proceedings of Science.
             Retrieved from http://bura.brunel.ac.uk/handle/2438/1166.
-        edge_correction
-            Not in use.
 
         Returns
         -------
@@ -1944,14 +1932,15 @@ class PointPattern(AlmostImmutable, Sequence):
 
         """
         if variation == 'fasano':
-            def xyiter(points):
-                for p in points:
-                    yield p.x, p.y, True
+            def piter(points):
+                for p in numpy.asarray(points):
+                    yield p[0], p[1], True
         elif variation == 'peacock':
-            def xyiter(points):
-                for p in points:
-                    for q in points:
-                        yield p.x, q.y, p is q
+            def piter(points):
+                parray = numpy.asarray(points)
+                for (i, p) in enumerate(parray):
+                    for (j, q) in enumerate(parray):
+                        yield p[0], q[1], i == j
         else:
             raise ValueError("Unknown 'variation': {}".format(variation))
 
@@ -1959,7 +1948,7 @@ class PointPattern(AlmostImmutable, Sequence):
         points = self.points(project_points=True)
         n = len(points)
         ks = 0.0
-        for x, y, ispoint in xyiter(points):
+        for x, y, ispoint in piter(points):
             for (xmin, xmax) in ((0.0, x), (x, 1.0)):
                 for (ymin, ymax) in ((0.0, y), (y, 1.0)):
                     np = len(self.range_tree_query(tree, xmin, xmax,
@@ -1985,13 +1974,12 @@ class PointPattern(AlmostImmutable, Sequence):
                         ks = max(ks, new_ks)
         return ks / numpy.sqrt(n)
 
-    @staticmethod
-    def kstatistic_interval_static(window, intensity, edge_correction):
+    def kstatistic_interval(self, edge_correction=None):
         """
-        Compute an appropriate interval over which to evaluate the K test
-        statistic for a point pattern with a given intensity in a given window
+        Compute the an appropriate interval over which to evaluate the K test
+        statistic for this pattern
 
-        The interval is defined as [0.0, rmax], where rmax is the minimum of
+        The interval is defined as [rmin, rmax], where rmax is the minimum of
         the following two alternatives:
         - the radius of the largest inscribed circle in the window of the point
           pattern, as computed by `Window.inscribed_circle` (if using periodic
@@ -1999,39 +1987,9 @@ class PointPattern(AlmostImmutable, Sequence):
           Voronoi unit cell of the periodic lattice is used instead),
         - the maximum relevant interpoint distance in the point pattern, as
           computed by `PointPattern.rmax`.
-
-        Parameters
-        ----------
-        window : Polygon
-            Window for the assumed point pattern.
-        intensity : scalar
-            Intensity of the assumed point pattern.
-        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
-                               'plus'}, optional
-            String to select the edge handling to apply in computations. See
-            the documentation for `PointPattern` for details.
-
-        Returns
-        -------
-        rmin : scalar
-            The minimum end of the K test statistic interval
-        rmax : scalar
-            The maximum end of the K test statistic interval
-
-        """
-        rmax_absolute = PointPattern.rmax_static(window, edge_correction)
-        if edge_correction == 'periodic':
-            rmax_standard = window.voronoi().inscribed_circle()['r']
-        else:
-            rmax_standard = window.inscribed_circle()['r']
-        rmax = min(rmax_standard, rmax_absolute)
-        rmin = 0.5 / intensity * numpy.sqrt(window.area)
-        return rmin, rmax
-
-    def kstatistic_interval(self, edge_correction=None):
-        """
-        Compute the an appropriate interval over which to evaluate the K test
-        statistic for this pattern
+        The value of rmin is set to `0.5 * sqrt(area) / intensity`, where
+        `area` is the area of the window of the point pattern, and `intensity`
+        is the standard intensity estimate of the point pattern.
 
         Parameters
         ----------
@@ -2054,43 +2012,14 @@ class PointPattern(AlmostImmutable, Sequence):
             edge_correction = self._edge_correction
 
         intensity = self.intensity()
-        return self.kstatistic_interval_static(self.window, intensity,
-                                               edge_correction)
-
-    @staticmethod
-    def lstatistic_interval_static(window, intensity, edge_correction):
-        """
-        Compute an appropriate interval over which to evaluate the L test
-        statistic for a point pattern with a given intensity in a given window
-
-        The interval is defined as [rmin, rmax], where rmin equals :math:`2.0
-        / (\\lambda \\sqrt{\\nu(W)})`, where :math:`\lambda` is the intensity
-        of the process and :math:`\\sqrt{\\nu(W)}` is the area of the window,
-        and rmax is the same as in `PointPattern.kstatistic_interval_static`.
-
-        Parameters
-        ----------
-        window : Polygon
-            Window for the assumed point pattern.
-        intensity : scalar
-            Squared intensity of the assumed point pattern.
-        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
-                               'plus'}, optional
-            String to select the edge handling to apply in computations. See
-            the documentation for `PointPattern` for details.
-
-        Returns
-        -------
-        rmin : scalar
-            The minimum end of the L test statistic interval
-        rmax : scalar
-            The maximum end of the L test statistic interval
-
-        """
-        rmin, rmax = PointPattern.kstatistic_interval_static(window,
-                                                             intensity,
-                                                             edge_correction)
-        rmin *= 4.0
+        window = self.window
+        rmax_absolute = self.rmax(edge_correction=edge_correction)
+        if edge_correction == 'periodic':
+            rmax_standard = self.window.voronoi().inscribed_circle()['r']
+        else:
+            rmax_standard = self.window.inscribed_circle()['r']
+        rmax = min(rmax_standard, rmax_absolute)
+        rmin = 0.5 * numpy.sqrt(window.area) / intensity
         return rmin, rmax
 
     def lstatistic_interval(self, edge_correction=None):
@@ -2098,6 +2027,10 @@ class PointPattern(AlmostImmutable, Sequence):
         Compute the an appropriate interval over which to evaluate the L test
         statistic for this pattern
 
+        The interval is defined as [rmin, rmax], where rmax is the the same as
+        for `PointPattern.kstatistic_interval`, and rmin is 4 times the rmin
+        from `PointPattern.kstatistic_interval`.
+
         Parameters
         ----------
         edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
@@ -2118,9 +2051,9 @@ class PointPattern(AlmostImmutable, Sequence):
         if edge_correction is None:
             edge_correction = self._edge_correction
 
-        intensity = self.intensity()
-        return self.lstatistic_interval_static(self.window, intensity,
-                                               edge_correction)
+        rmin, rmax = self.kstatistic_interval(edge_correction=edge_correction)
+        rmin *= 4.0
+        return rmin, rmax
 
     @memoize_method
     def _simulate(self, nsims, process, edge_correction):
@@ -2459,8 +2392,8 @@ class PointPatternCollection(AlmostImmutable, Sequence):
 
         """
         xmin, ymin, xmax, ymax = window.bounds
+        area_factor = (xmax - xmin) * (ymax - ymin) / window.area
         nmean = intensity * window.area
-        process = process.lower()
 
         if process == 'poisson':
             nlist = numpy.random.poisson(nmean, nsims)
@@ -3220,7 +3153,7 @@ class PointPatternCollection(AlmostImmutable, Sequence):
         return self._pp_attr_r_mean('pair_corr_function', r,
                                     edge_correction=edge_correction, **kwargs)
 
-    def _pp_attr_series(self, attr, edge_correction, **kwargs):
+    def _pp_attr_series(self, attr, **kwargs):
         """
         Compute a Series containing values of some scalar PointPattern
         attribute.
@@ -3229,12 +3162,6 @@ class PointPatternCollection(AlmostImmutable, Sequence):
         ----------
         attr : string
             Name of `PointPattern` attribute to use.
-        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
-                               'plus'}, optional
-            String to select the edge handling to apply in computations. See
-            the documentation for `PointPattern` for details.  If None, the
-            edge correction falls back to the default value (set at instance
-            initialization).
         **kwargs : dict, optional
             Other arguments to pass to the `PointPattern` attribute.
 
@@ -3245,14 +3172,10 @@ class PointPatternCollection(AlmostImmutable, Sequence):
             pattern.
 
         """
-        if edge_correction is None:
-            edge_correction = self._edge_correction
-
         return pandas.Series(
-            [getattr(pp, attr)(edge_correction=edge_correction, **kwargs)
-             for pp in self.patterns])
+            [getattr(pp, attr)(**kwargs) for pp in self.patterns])
 
-    def _pp_attr_test(self, attr, pattern, edge_correction, **kwargs):
+    def _pp_attr_test(self, attr, pattern, **kwargs):
         """
         Perform a statistical test on a PointPattern, based on the distribution
         of a PointPattern attribute over the patterns in this collection.
@@ -3263,12 +3186,6 @@ class PointPatternCollection(AlmostImmutable, Sequence):
             Name of `PointPattern` attribute to use.
         pattern : PointPattern
             PointPattern to perform the test on.
-        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
-                               'plus'}, optional
-            String to select the edge handling to apply in computations. See
-            the documentation for `PointPattern` for details.  If None, the
-            edge correction falls back to the default value (set at instance
-            initialization).
         **kwargs : dict, optional
             Other arguments to pass to the `PointPattern` attribute.
 
@@ -3280,13 +3197,8 @@ class PointPatternCollection(AlmostImmutable, Sequence):
             as the null distribution.
 
         """
-        if edge_correction is None:
-            edge_correction = self._edge_correction
-
-        tsdist = self._pp_attr_series(attr, edge_correction=edge_correction,
-                                      **kwargs).dropna()
-        teststat = getattr(pattern, attr)(edge_correction=edge_correction,
-                                          **kwargs)
+        tsdist = self._pp_attr_series(attr, **kwargs).dropna()
+        teststat = getattr(pattern, attr)(**kwargs)
         return 1.0 - 0.01 * percentileofscore(tsdist, teststat, kind='mean')
 
     def lstatistics(self, edge_correction=None, **kwargs):
@@ -3315,6 +3227,8 @@ class PointPatternCollection(AlmostImmutable, Sequence):
             collection.
 
         """
+        if edge_correction is None:
+            edge_correction = self._edge_correction
         return self._pp_attr_series('lstatistic',
                                     edge_correction=edge_correction, **kwargs)
 
@@ -3344,10 +3258,12 @@ class PointPatternCollection(AlmostImmutable, Sequence):
             collection.
 
         """
+        if edge_correction is None:
+            edge_correction = self._edge_correction
         return self._pp_attr_series('kstatistic',
                                     edge_correction=edge_correction, **kwargs)
 
-    def ksstatistics(self, edge_correction=None, **kwargs):
+    def ksstatistics(self, **kwargs):
         """
         Compute the Kolmogorov-Smirnov test statistic for CSR for each pattern
         in the collection
@@ -3375,8 +3291,7 @@ class PointPatternCollection(AlmostImmutable, Sequence):
             pattern in the collection.
 
         """
-        return self._pp_attr_series('ksstatistic',
-                                    edge_correction=edge_correction, **kwargs)
+        return self._pp_attr_series('ksstatistic', **kwargs)
 
     def ltest(self, pattern, edge_correction=None, **kwargs):
         """
@@ -3403,6 +3318,8 @@ class PointPatternCollection(AlmostImmutable, Sequence):
             The p-value of the L test statistic for `pattern`.
 
         """
+        if edge_correction is None:
+            edge_correction = self._edge_correction
         return self._pp_attr_test('lstatistic', pattern,
                                   edge_correction=edge_correction, **kwargs)
 
@@ -3431,10 +3348,12 @@ class PointPatternCollection(AlmostImmutable, Sequence):
             The p-value of the K test statistic for `pattern`.
 
         """
+        if edge_correction is None:
+            edge_correction = self._edge_correction
         return self._pp_attr_test('kstatistic', pattern,
                                   edge_correction=edge_correction, **kwargs)
 
-    def kstest(self, pattern, edge_correction=None, **kwargs):
+    def kstest(self, pattern, **kwargs):
         """
         Perform a Kolmogorov-Smirnov test for CSR on a PointPattern, based on
         the distribution of Kolmogorov-Smirnov test statictics from the
@@ -3444,12 +3363,6 @@ class PointPatternCollection(AlmostImmutable, Sequence):
         ----------
         pattern : PointPattern
             PointPattern to perform the test on.
-        edge_correction : str {'stationary', 'finite', 'isotropic', 'periodic',
-                               'plus'}, optional
-            String to select the edge handling to apply in computations. See
-            the documentation for `PointPattern` for details.  If None, the
-            edge correction falls back to the default value (set at instance
-            initialization).
         **kwargs : dict, optional
             Additional keyword arguments are passed to
             `PointPattern.ksstatstic`.
@@ -3460,8 +3373,7 @@ class PointPatternCollection(AlmostImmutable, Sequence):
             The p-value of the Komogorov-Smirnov test statistic for `pattern`.
 
         """
-        return self._pp_attr_test('ksstatistic', pattern,
-                                  edge_correction=edge_correction, **kwargs)
+        return self._pp_attr_test('ksstatistic', pattern, **kwargs)
 
     def histogram(self, attribute, edge_correction=None, **kwargs):
         """
