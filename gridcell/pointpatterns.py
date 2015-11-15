@@ -1819,26 +1819,27 @@ class PointPattern(AlmostImmutable, Sequence):
         # it as exactly and cheaply as possible.
         rsteps, cweights = self._cumulative_base(
             edge_correction=edge_correction)
-        valid = numpy.logical_and(rsteps >= rmin, rsteps < rmax)
-        rsteps = rsteps[valid]
-        cweights_high = cweights[valid]
-        cweights_low = cweights[numpy.roll(valid, -1)]
+        valid = numpy.nonzero((rsteps > rmin) & (rsteps < rmax))
+        # Include endpoints, and extract cweights for the in-between intervals
+        rsteps = numpy.hstack((rmin, rsteps[valid], rmax))
+        cweights = numpy.hstack((cweights[valid[0][0] - 1], cweights[valid]))
 
         # Compute the K-values just before and after each step
         imode = self._edge_config[edge_correction]['imode']
-        lambda2 = self.squared_intensity(mode=imode, r=rsteps)
-        kvals_high = sensibly_divide(cweights_high, lambda2)
-        kvals_low = sensibly_divide(cweights_low, lambda2)
+        lambda2 = numpy.ones_like(rsteps)
+        lambda2[:] = self.squared_intensity(mode=imode, r=rsteps)
+        kvals_low = sensibly_divide(cweights, lambda2[:-1])
+        kvals_high = sensibly_divide(cweights, lambda2[1:])
 
         # Compute the offset
         pi_rsteps_sq = _PI * rsteps * rsteps
-        offset = numpy.hstack((kvals_high - pi_rsteps_sq,
-                               kvals_low - pi_rsteps_sq))
+        offset = numpy.hstack((kvals_low - pi_rsteps_sq[:-1],
+                               kvals_high - pi_rsteps_sq[1:]))
 
         # Weight the offsets by the weight function
         if weight_function is not None:
             weight = weight_function(rsteps)
-            weight = numpy.hstack((weight, weight))
+            weight = numpy.hstack((weight[:-1], weight[1:]))
             offset *= weight
         return numpy.nanmax(numpy.abs(offset))
 
@@ -1896,25 +1897,27 @@ class PointPattern(AlmostImmutable, Sequence):
         # it as exactly and cheaply as possible.
         rsteps, cweights = self._cumulative_base(
             edge_correction=edge_correction)
-        valid = numpy.logical_and(rsteps >= rmin, rsteps < rmax)
-        rsteps = rsteps[valid]
-        cweights_high = cweights[valid]
-        cweights_low = cweights[numpy.roll(valid, -1)]
+        valid = numpy.nonzero((rsteps > rmin) & (rsteps < rmax))
+        # Include endpoints, and extract cweights for the in-between intervals
+        rsteps = numpy.hstack((rmin, rsteps[valid], rmax))
+        cweights = numpy.hstack((cweights[valid[0][0] - 1], cweights[valid]))
 
         # Compute the L-values just before and after each step
         imode = self._edge_config[edge_correction]['imode']
-        lambda2 = self.squared_intensity(mode=imode, r=rsteps)
-        lvals_high = numpy.sqrt(sensibly_divide(cweights_high, _PI * lambda2))
-        lvals_low = numpy.sqrt(sensibly_divide(cweights_low, _PI * lambda2))
+        lambda2 = numpy.ones_like(rsteps)
+        lambda2[:] = self.squared_intensity(mode=imode, r=rsteps)
+        lvals_low = numpy.sqrt(sensibly_divide(cweights, _PI * lambda2[:-1]))
+        lvals_high = numpy.sqrt(sensibly_divide(cweights, _PI * lambda2[1:]))
 
         # Compute the offset
-        offset = numpy.hstack((lvals_high - rsteps, lvals_low - rsteps))
+        offset = numpy.hstack((lvals_high - rsteps[:-1],
+                               lvals_low - rsteps[1:]))
 
         # Weight the offsets by the theoretical standard deviation at the
         # corresponding r values.
         if weight_function is not None:
             weight = weight_function(rsteps)
-            weight = numpy.hstack((weight, weight))
+            weight = numpy.hstack((weight[:-1], weight[1:]))
             offset *= weight
         return numpy.nanmax(numpy.abs(offset))
 
