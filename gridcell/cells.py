@@ -2777,13 +2777,13 @@ class CellCollection(AlmostImmutable, MutableSequence):
 
         return collections, outliers
 
-    def lookup(self, info):
+    def lookup(self, **kwargs):
         """
         Look up cells through their `info` attribute
 
         Parameters
         ----------
-        info : dict
+        kwargs : dict
             Dict containing fields that should be matched in either `cell.info`
             or `cell.pos.info` in all returned Cell instances `cell`.
 
@@ -2795,21 +2795,11 @@ class CellCollection(AlmostImmutable, MutableSequence):
         """
         clist = []
         for cell in self:
-            for key, value in info.items():
-                if key in cell.info:
-                    cvalue = cell.info[key]
-                    if cvalue == value:
-                        clist.append(cell)
-                        continue
-                try:
-                    posinfo = cell.pos.info
-                except AttributeError:
-                    pass
-                else:
-                    if key in posinfo:
-                        cpvalue = posinfo[key]
-                        if cpvalue == value:
-                            clist.append(cell)
+            for key, value in kwargs.items():
+                if ((key in cell.info and cell.info[key] == value) or
+                        (key in cell.position.info and
+                         cell.position.info[key] == value)):
+                    clist.append(cell)
 
         return type(self)(clist, **self.info)
 
@@ -3903,11 +3893,11 @@ class Module(CellCollection):
         l = len(self)
         dmatrix = numpy.zeros((l, l))
         w = self.window(window_type='voronoi', project_phases=True).centered()
-        ph = PointPattern.wrap_into(
-            w, self.pairwise_phases(project_phases=True).values)
+        ph = numpy.array(PointPattern.wrap_into(
+            w, self.pairwise_phases(project_phases=True).values))
         for i in range(l):
             for j in range(l):
                 p = ph[i * l + j]
-                dmatrix[i, j] = numpy.sqrt(p.x * p.x + p.y * p.y)
+                dmatrix[i, j] = numpy.sqrt(numpy.sum(p * p))
         kwargs.update(eps=eps, min_samples=min_samples)
         return cluster.dbscan(dmatrix, metric='precomputed', **kwargs)[1]
