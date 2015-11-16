@@ -2789,17 +2789,20 @@ class CellCollection(AlmostImmutable, MutableSequence):
 
         Returns
         -------
-        CellCollection
-            Collection of Cell instances mathcing `info`.
+        list
+            List of Cell instances mathcing `info`.
 
         """
         clist = []
         for cell in self:
             for key, value in kwargs.items():
-                if ((key in cell.info and cell.info[key] == value) or
+                if not ((key in cell.info and cell.info[key] == value) or
                         (key in cell.position.info and
                          cell.position.info[key] == value)):
-                    clist.append(cell)
+                    break
+            else:
+                # If loop exited without breaking, include this cell
+                clist.append(cell)
 
         return type(self)(clist, **self.info)
 
