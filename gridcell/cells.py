@@ -2575,8 +2575,7 @@ class CellCollection(AlmostImmutable, MutableSequence):
         return self._cells.__iter__(*args, **kwargs)
 
     def __reversed__(self, *args, **kwargs):
-        item = self._cells.__reversed__(*args, **kwargs)
-        return type(self)(item, **self.info)
+        return self._cells.__reversed__(*args, **kwargs)
 
     def index(self, *args, **kwargs):
         return self._cells.index(*args, **kwargs)
@@ -2804,7 +2803,7 @@ class CellCollection(AlmostImmutable, MutableSequence):
                 # If loop exited without breaking, include this cell
                 clist.append(cell)
 
-        return type(self)(clist, **self.info)
+        return clist
 
     def _mean_attribute(self, attr, **kwargs):
         """

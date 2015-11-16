@@ -653,11 +653,7 @@ class PointPattern(AlmostImmutable, Sequence):
 
     # Implement abstract methods
     def __getitem__(self, index, *args, **kwargs):
-        item = self._points.__getitem__(index, *args, **kwargs)
-        if isinstance(index, slice):
-            return type(self)(item, self.window, pluspoints=self.pluspoints,
-                              edge_correction=self.edge_correction)
-        return item
+        return self._points.__getitem__(index, *args, **kwargs)
 
     def __len__(self, *args, **kwargs):
         return self._points.__len__(*args, **kwargs)
@@ -667,9 +663,7 @@ class PointPattern(AlmostImmutable, Sequence):
         return self._points.__iter__(*args, **kwargs)
 
     def __reversed__(self, *args, **kwargs):
-        item = self._points.__reversed__(*args, **kwargs)
-        return type(self)(item, self.window, pluspoints=self.pluspoints,
-                          edge_correction=self.edge_correction)
+        return self._points.__reversed__(*args, **kwargs)
 
     def index(self, *args, **kwargs):
         return self._points.index(*args, **kwargs)
@@ -2447,8 +2441,7 @@ class PointPatternCollection(AlmostImmutable, Sequence):
         return self.patterns.__iter__(*args, **kwargs)
 
     def __reversed__(self, *args, **kwargs):
-        item = self.patterns.__reversed__(*args, **kwargs)
-        return type(self)(item, edge_correction=self.edge_correction)
+        return self.patterns.__reversed__(*args, **kwargs)
 
     def index(self, *args, **kwargs):
         return self.patterns.index(*args, **kwargs)
