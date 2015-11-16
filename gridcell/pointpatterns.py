@@ -1988,17 +1988,9 @@ class PointPattern(AlmostImmutable, Sequence):
         Compute the an appropriate interval over which to evaluate the K test
         statistic for this pattern
 
-        The interval is defined as [rmin, rmax], where rmax is the minimum of
-        the following two alternatives:
-        - the radius of the largest inscribed circle in the window of the point
-          pattern, as computed by `Window.inscribed_circle` (if using periodic
-          edge correction, the radius of the largest inscribed circle in the
-          Voronoi unit cell of the periodic lattice is used instead),
-        - the maximum relevant interpoint distance in the point pattern, as
-          computed by `PointPattern.rmax`.
-        The value of rmin is set to `0.5 * sqrt(area) / intensity`, where
-        `area` is the area of the window of the point pattern, and `intensity`
-        is the standard intensity estimate of the point pattern.
+        The interval is defined as [rmin, rmax], where rmax is the the same as
+        for `PointPattern.lstatistic_interval`, and rmin is a third of the rmin
+        from `PointPattern.lstatistic_interval`.
 
         Parameters
         ----------
@@ -2020,15 +2012,8 @@ class PointPattern(AlmostImmutable, Sequence):
         if edge_correction is None:
             edge_correction = self.edge_correction
 
-        intensity = self.intensity()
-        window = self.window
-        rmax_absolute = self.rmax(edge_correction=edge_correction)
-        if edge_correction == 'periodic':
-            rmax_standard = self.window.voronoi().inscribed_circle()['r']
-        else:
-            rmax_standard = self.window.inscribed_circle()['r']
-        rmax = min(rmax_standard, rmax_absolute)
-        rmin = 0.5 * numpy.sqrt(window.area) / intensity
+        rmin, rmax = self.lstatistic_interval(edge_correction=edge_correction)
+        rmin /= 3.0
         return rmin, rmax
 
     def lstatistic_interval(self, edge_correction=None):
@@ -2036,9 +2021,17 @@ class PointPattern(AlmostImmutable, Sequence):
         Compute the an appropriate interval over which to evaluate the L test
         statistic for this pattern
 
-        The interval is defined as [rmin, rmax], where rmax is the the same as
-        for `PointPattern.kstatistic_interval`, and rmin is 4 times the rmin
-        from `PointPattern.kstatistic_interval`.
+        The interval is defined as [rmin, rmax], where rmax is the minimum of
+        the following two alternatives:
+        - the radius of the largest inscribed circle in the window of the point
+          pattern, as computed by `Window.inscribed_circle` (if using periodic
+          edge correction, the radius of the largest inscribed circle in the
+          Voronoi unit cell of the periodic lattice is used instead),
+        - the maximum relevant interpoint distance in the point pattern, as
+          computed by `PointPattern.rmax`.
+        The value of rmin is set to `1.8 / (intensity * sqrt(area))`, where
+        `area` is the area of the window of the point pattern, and `intensity`
+        is the standard intensity estimate of the point pattern.
 
         Parameters
         ----------
@@ -2060,8 +2053,15 @@ class PointPattern(AlmostImmutable, Sequence):
         if edge_correction is None:
             edge_correction = self.edge_correction
 
-        rmin, rmax = self.kstatistic_interval(edge_correction=edge_correction)
-        rmin *= 4.0
+        intensity = self.intensity()
+        window = self.window
+        rmax_absolute = self.rmax(edge_correction=edge_correction)
+        if edge_correction == 'periodic':
+            rmax_standard = self.window.voronoi().inscribed_circle()['r']
+        else:
+            rmax_standard = self.window.inscribed_circle()['r']
+        rmax = min(rmax_standard, rmax_absolute)
+        rmin = 1.8 / (intensity * numpy.sqrt(window.area))
         return rmin, rmax
 
     @memoize_method
