@@ -1807,16 +1807,19 @@ class PointPattern(AlmostImmutable, Sequence):
             rmin = interval[0]
         if rmax is None:
             rmax = interval[1]
+        if rmin > rmax:
+            raise ValueError("'rmin' is smaller than 'rmax'.")
 
         # The largest deviation between K(r) and r is bound to be at a vertical
         # step. We go manual instead of using self.kfunction, in order to get
         # it as exactly and cheaply as possible.
         rsteps, cweights = self._cumulative_base(
             edge_correction=edge_correction)
-        valid = numpy.nonzero((rsteps > rmin) & (rsteps < rmax))
+        left = numpy.searchsorted(rsteps, rmin, side='right')
+        right = numpy.searchsorted(rsteps, rmax, side='left')
         # Include endpoints, and extract cweights for the in-between intervals
-        rsteps = numpy.hstack((rmin, rsteps[valid], rmax))
-        cweights = numpy.hstack((cweights[valid[0][0] - 1], cweights[valid]))
+        rsteps = numpy.hstack((rmin, rsteps[left:right], rmax))
+        cweights = cweights[left - 1:right]
 
         # Compute the K-values just before and after each step
         imode = self._edge_config[edge_correction]['imode']
