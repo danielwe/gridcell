@@ -31,6 +31,11 @@ from matplotlib import pyplot
 from .utils import AlmostImmutable, sensibly_divide, pearson_correlogram
 from .ndfit import fit_ndgaussian
 
+try:
+    __ = basestring
+except NameError:
+    basestring = str
+
 
 class BinnedSet(AlmostImmutable):
     """

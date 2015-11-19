@@ -41,6 +41,10 @@ from .imaps import IntensityMap2D
 from .pointpatterns import PointPattern, Window
 from .memoize.memoize import memoize_method, Memparams
 
+try:
+    __ = basestring
+except NameError:
+    basestring = str
 
 _PI = numpy.pi
 _2PI = 2.0 * _PI

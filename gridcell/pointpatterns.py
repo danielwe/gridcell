@@ -32,6 +32,11 @@ from collections import Sequence
 from .utils import AlmostImmutable, sensibly_divide, project_vectors
 from .memoize.memoize import memoize_method
 
+try:
+    __ = basestring
+except NameError:
+    basestring = str
+
 if speedups.available:
     speedups.enable()
 
