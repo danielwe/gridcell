@@ -759,7 +759,7 @@ class PointPattern(AlmostImmutable, Sequence):
         """
         spoints = self._points
         spluspoints = self.pluspoints
-        if (isinstance(op, str) and
+        if (isinstance(op, basestring) and
                 hasattr(spoints, op) and
                 hasattr(spluspoints, op)):
             bound_op = getattr(spoints, op)

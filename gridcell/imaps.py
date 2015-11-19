@@ -760,7 +760,7 @@ class IntensityMap(AlmostImmutable):
 
         """
         sdata = self.data
-        if isinstance(op, str) and hasattr(sdata, op):
+        if isinstance(op, basestring) and hasattr(sdata, op):
             bound_op = getattr(sdata, op)
         else:
             def bound_op(odata):

@@ -122,7 +122,7 @@ class FeatureNames(object):
             if key in cls.grid_features:
                 return cls.grid_features_latex(
                     **kwargs)[cls.grid_features.index(key)]
-            if isinstance(key, str):
+            if isinstance(key, basestring):
                 return key.replace('_', ' ')
                 #return "".join([r"$\textrm{",
                 #                key.replace("_", " "),
