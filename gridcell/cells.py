@@ -485,7 +485,7 @@ class Position(AlmostImmutable):
             axes = pyplot.gca()
 
         data = self.filtered_data()
-        t, speed = (data['t'], data['speed'])
+        t, speed = (data['t'], self.speed())
 
         start_index, end_index = 0, -1
         if tstart is not None:
