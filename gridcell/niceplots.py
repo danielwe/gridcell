@@ -25,7 +25,10 @@ from .utils import distplot
 from matplotlib import pyplot, patches, ticker, rcParams
 
 
-COLOR_CYCLE = rcParams['axes.color_cycle']
+try:
+    COLOR_CYCLE = rcParams['axes.prop_cycle']
+except KeyError:
+    COLOR_CYCLE = rcParams['axes.color_cycle']
 
 
 def pos_and_spikes(cell, alpha_path=0.5, alpha_spikes=0.25, length_unit='cm',
@@ -63,7 +66,7 @@ def pos_and_spikes(cell, alpha_path=0.5, alpha_spikes=0.25, length_unit='cm',
     else:
         artists = pos.plot_path(alpha=alpha_path, color=palette[0])
 
-    axes = artists[0].get_axes()
+    axes = artists[0].axes
     if palette[1] is None:
         artists += cell.plot_spikes(axes=axes, alpha=alpha_spikes)
     else:
@@ -364,7 +367,7 @@ def phase_pattern(module, window_type='voronoi', project_phases=False,
                                          periodic_kw={'color': palette[2]},
                                          color=palette[1])
 
-    axes = artists[0].get_axes()
+    axes = artists[0].axes
     if project_phases:
         range_ = ((-1.0, 1.0), (-1.0, 1.0))
         axes.set(xlabel=r"$\delta_x$",
@@ -437,7 +440,7 @@ def pairwise_phase_pattern(module, window_type='voronoi', from_absolute=True,
                                          periodic_kw={'color': palette[2]},
                                          color=palette[1])
 
-    axes = artists[0].get_axes()
+    axes = artists[0].axes
     if project_phases:
         range_ = ((-1.0, 1.0), (-1.0, 1.0))
         axes.set(xlabel=r"$\delta_x$",
