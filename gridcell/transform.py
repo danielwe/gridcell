@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 
 """File: formats.py
-Module to read .mat-files of various compositions containing simultaneous
-tetrode and spatial position recordings, and return the position and spike data
-in a standardized format.
+Module containing convenience functions for formatting raw data in a way that
+the gridcell module understands, and transforming positions from raw to
+physical coordinates.
 
 """
 # Copyright 2015 Daniel Wennberg
@@ -33,11 +33,13 @@ def sessions(positions, spike_times, param_dicts=None, info_dicts=None):
 
     Parameters
     ----------
-    pos : sequence
+    positions : sequence
         Sequence containing the position samples corresponding to each cell.
-        Each element should be a sequence similar to `(t, x, y)`, where `x` and
-        `y` are arrays containing the position samples and `t` is an array
-        containing the corresponding sample times.
+        Each element should be a sequence similar to `(t, x, y)` or `(t, x, y,
+        x2, y2)`, where `x` and `y` are arrays containing the position samples,
+        `t` is an array containing the corresponding sample times, and `x2`and
+        `y2` are optional arrays containing and extra set of position samples.
+        Both standards may be present simultaneously.
     spike_ts : sequence
         Sequence containing the spike times corresponding to each cell.
         Each element should be an array of spike times.
@@ -63,15 +65,23 @@ def sessions(positions, spike_times, param_dicts=None, info_dicts=None):
 
     sessions = {'sessions': [], 'params': {}, 'info': {}}
     for ind in session_indices:
-        t, x, y = positions[ind[0]]
+        pos = positions[ind[0]]
         spike_ts = [spike_times[i] for i in ind]
         st_indices = _equal_items(spike_ts)
         cells = [{'spike_t': spike_times[ind[sti[0]]],
                   'params': param_dicts[ind[sti[0]]],
                   'info': info_dicts[ind[sti[0]]]}
                  for sti in st_indices]
-        sessions['sessions'].append({'t': t, 'x': x, 'y': y, 'cells': cells,
-                                     'params': {}, 'info': {}})
+        if len(pos) > 3:
+            t, x, y, x2, y2 = pos
+            sessions['sessions'].append({'t': t, 'x': x, 'y': y, 'x2': x2,
+                                         'y2': y2, 'cells': cells,
+                                         'params': {}, 'info': {}})
+        else:
+            t, x, y = pos
+            sessions['sessions'].append({'t': t, 'x': x, 'y': y,
+                                         'cells': cells, 'params': {},
+                                         'info': {}})
 
     return sessions
 
@@ -102,7 +112,7 @@ def transform_sessions(sessions, global_=False, **kwargs):
     new_sessions = dict(sessions)
 
     if global_:
-        xarrs, yarrs, lengths = [], [], []
+        xarrs, yarrs, lengths = [], [], [], [], []
         for session in sessions['sessions']:
             xarrs.append(session['x'])
             yarrs.append(session['y'])
@@ -118,9 +128,18 @@ def transform_sessions(sessions, global_=False, **kwargs):
             xall, yall = xall[l:], yall[l:]
 
             new_session = dict(session)
-            new_session.update(
-                x=x, y=y,
-                info=_update_info(new_session['info'], info))
+            if 'x2' in session:
+                if 'y2' not in session:
+                    raise ValueError("'x2' and 'y2' must either both be given "
+                                     "or both left out")
+                x2, y2 = _transform(session['x2'], session['y2'], info)
+                new_session.update(
+                    x=x, y=y, x2=x2, y2=y2,
+                    info=_update_info(new_session['info'], info))
+            else:
+                new_session.update(
+                    x=x, y=y,
+                    info=_update_info(new_session['info'], info))
             new_sessions['sessions'].append(new_session)
     else:
         new_sessions['sessions'] = [transform_session(session, **kwargs)
@@ -151,14 +170,24 @@ def transform_session(session, **kwargs):
 
     """
     x, y = session['x'], session['y']
-    x, y, info = transform(x, y, **kwargs)
     new_session = dict(session)
-    new_session.update(x=x, y=y,
-                       info=_update_info(new_session['info'], info))
+    if 'x2' in session:
+        if 'y2' not in session:
+            raise ValueError("'x2' and 'y2' must either both be given or both "
+                             "left out")
+        x2, y2 = session['x2'], session['y2']
+        x, y, x2, y2, info = transform(x, y, x2=x2, y2=y2, **kwargs)
+        new_session.update(x=x, y=y, x2=x2, y2=y2,
+                           info=_update_info(new_session['info'], info))
+    else:
+        x, y, info = transform(x, y, **kwargs)
+        new_session.update(x=x, y=y,
+                           info=_update_info(new_session['info'], info))
     return new_session
 
 
-def transform(x, y, range_=None, translate=False, rotate=False):
+def transform(x, y, x2=None, y2=None, range_=None, translate=False,
+              rotate=False):
     """
     Scale, rotate and translate a set of coordinates
 
@@ -166,6 +195,10 @@ def transform(x, y, range_=None, translate=False, rotate=False):
     ----------
     x, y : array-like
         Arrays containing the coordinates.
+    x2, y2 : array-like, optional
+        Arrays containing the coordinates of a second set of position
+        samples. These arrays will be transformed, but will not affect the
+        transform parameters.
     range : ((xmin, xmax), (ymin, ymax)), optional
         Range specification giving the x and y values of the edges within which
         to fit the transformed coordinates. The coordinates will be rescaled
@@ -189,6 +222,9 @@ def transform(x, y, range_=None, translate=False, rotate=False):
     -------
     x, y : ndarray
         Arrays containing the transformed coordinates.
+    x2, y2 : ndarray
+        Arrays containing the transformed coordinates of the second set of
+        samples. Only returned if `x2` and `y2` are not `None`.
     info : dict
         Information about the transformation. Contains the following key-value
         pairs:
@@ -224,17 +260,21 @@ def transform(x, y, range_=None, translate=False, rotate=False):
         old_xc, old_yc = _rotate(new_xc, new_yc, -angle)
         # Reset centroid
         x, y = x - new_xc + old_xc, y - new_yc + old_yc
-        info['rotation_angle'] = angle
-        info['rotation_anchor'] = (old_xc, old_yc)
+    else:
+        angle = 0.0
+        old_xc, old_yc = _midpoint(x), _midpoint(y)
+    info['rotation_angle'] = angle
+    info['rotation_anchor'] = (old_xc, old_yc)
 
     if translate:
         xc, yc = _midpoint(x), _midpoint(y)
         xtrans, ytrans = xo - xc, yo - yc
 
         # Beware! Using += would modify the original arrays if rotate=False!
-        x = x + xtrans
-        y = y + ytrans
-        info['translation_vector'] = (xtrans, ytrans)
+        x, y = x + xtrans, y + ytrans
+    else:
+        xtrans, ytrans = 0.0, 0.0
+    info['translation_vector'] = (xtrans, ytrans)
 
     if range_ is not None:
         dxo, dyo = x - xo, y - yo
@@ -255,10 +295,71 @@ def transform(x, y, range_=None, translate=False, rotate=False):
         dxo *= scaling_factor
         dyo *= scaling_factor
         x, y = xo + dxo, yo + dyo
-        info['scaling_factor'] = scaling_factor
-        info['scaling_anchor'] = (xo, yo)
+    else:
+        scaling_factor = 1.0
+    info['scaling_factor'] = scaling_factor
+    info['scaling_anchor'] = (xo, yo)
 
+    if x2 is not None:
+        if y2 is None:
+            raise ValueError("'x2' and 'y2' must either both be given or "
+                             "both left out")
+        x2, y2 = _transform(x2, y2, info)
+        return x, y, x2, y2, info
     return x, y, info
+
+
+def _transform(x, y, info):
+    """
+    Scale, rotate and translate a set of coordinates using preset
+    parameters
+
+    Parameters
+    ----------
+    x, y : array-like
+        Arrays containing the coordinates.
+    info : dict
+        Information about the transformation. Contains the following key-value
+        pairs:
+
+        ``'rotation_angle': scalar``
+            The rotation angle in radians.
+        ``'rotation_anchor': (xanchor, yanchor)``
+            Anchor point for the rotation.
+        ``'translation_vector': (xdisp, ydisp)``
+            The x and y translation displacement. If `range_` is not None, this
+            value is scaled along with the samples, such that it refers to the
+            same units as `range_`.
+        ``'scaling_factor': scalar``
+            Scaling factor.
+        ``'scaling_anchor': (xanchor, yanchor)``
+            Anchor point for the scaling transformation.
+
+    Returns
+    -------
+    x, y : ndarray
+        Arrays containing the transformed coordinates.
+
+    """
+    angle = info.get('rotation_angle', 0.0)
+    xc, yc = info.get('rotation_anchor', (0.0, 0.0))
+    xtrans, ytrans = info.get('translation_vector', (0.0, 0.0))
+    scaling_factor = info.get('scaling_factor', 1.0)
+    xo, yo = info.get('scaling_anchor', (0.0, 0.0))
+
+    dxc, dyc = x - xc, y - yc
+    dxc, dyc = _rotate(dxc, dyc, angle)
+    x, y = xc + dxc, yc + dyc
+
+    # Beware! Using += could modify the original arrays
+    x, y = x + xtrans, y + ytrans
+
+    dxo, dyo = x - xo, y - yo
+    dxo *= scaling_factor
+    dyo *= scaling_factor
+    x, y = xo + dxo, yo + dyo
+
+    return x, y
 
 
 def _equal_items(container):

@@ -1262,18 +1262,18 @@ class IntensityMap(AlmostImmutable):
 
         return type(self)(new_data, new_bset)
 
-    def smooth(self, size, filter_='gaussian', normalize=False):
+    def smooth(self, bandwidth, kernel='gaussian', normalize=False):
         """
         Return a new IntensityMap instance which is a smoothed version of this
 
-        :size: characteristic smoothing length. This is a physical length
+        :bandwidth: smoothing filter bandwidth. This is a physical length
                in the same units as the lengths in the BinnedSet instance over
                which the IntensityMap is defined. The exact interpretation of
-               'size' will vary with 'filter_'.
-        :filter_: choice of smoothing filter. Supported values:
+               'bandwidth' will vary with 'kernel'.
+        :kernel: choice of smoothing filter kernel. Supported values:
             'gaussian': an isotropic gaussian filter with standard deviation
                         'size'
-            'uniform': a (hyper)square box filter with side lengths 'size'
+            'tophat': a (hyper)square box filter with side lengths 'size'
                  If a more general smoothing filter is needed, the user should
                  construct the desired kernel manually and use the
                  IntensityMap.convolve() method. Remember to take into account
@@ -1298,23 +1298,23 @@ class IntensityMap(AlmostImmutable):
                              .format(self.__class__.__name__,
                                      self.bset.__class__.__name__))
 
-        if size == 0.0:
+        if bandwidth == 0.0:
             return self
 
-        size_b = [size / numpy.mean(w) for w in self.bset.binwidths]
+        size = [bandwidth / numpy.mean(w) for w in self.bset.binwidths]
 
         options = {'mode': 'constant', 'cval': 0.0}
-        if filter_ == 'gaussian':
+        if kernel == 'gaussian':
             def smoothfunc(arr):
-                return filters.gaussian_filter(arr, size_b, **options)
-        elif filter_ == 'uniform':
+                return filters.gaussian_filter(arr, size, **options)
+        elif kernel == 'tophat':
             # Round bin size to nearest odd integer
-            size_b = [2 * int(0.5 * s) + 1 for s in size_b]
+            size = [2 * int(0.5 * s) + 1 for s in size]
 
             def smoothfunc(arr):
-                return filters.uniform_filter(arr, size_b, **options)
+                return filters.uniform_filter(arr, size, **options)
         else:
-            raise ValueError("unknown filter {}".format(filter_))
+            raise ValueError("unknown filter {}".format(kernel))
 
         new_data = _safe_mmap(normalize, smoothfunc, (self.data,))
 
@@ -1783,10 +1783,10 @@ class IntensityMap2D(IntensityMap):
 
         data = self.unmasked_data
         if ignore_missing:
-            size = 0.125 * numpy.amax(self.bset.binwidths)
+            bandwidth = 0.125 * numpy.amax(self.bset.binwidths)
             filled = self
             while numpy.isnan(data).any():
-                filled = filled.smooth(size, filter_='gaussian',
+                filled = filled.smooth(bandwidth, kernel='gaussian',
                                        normalize=True)
                 data = filled.data
         elif numpy.isnan(data).any():

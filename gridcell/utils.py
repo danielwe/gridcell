@@ -313,7 +313,7 @@ def pearson_correlogram(in1, in2, mode='full'):
     return corr
 
 
-def kde_bw(data, n_folds=None, n_bw=100):
+def kde_bw(data, n_folds=10, n_bw=100):
     """
     Estimate the optimal KDE bandwiths for a dataset using cross validation
 
@@ -327,8 +327,7 @@ def kde_bw(data, n_folds=None, n_bw=100):
     data : array-like, shape (n_data, n_features)
         The dataset.
     n_folds : integer, optional
-        Number of folds to use for cross validation. If None, the default
-        number of folds in the underlying cross validation functions are used.
+        Number of folds to use for cross validation.
     n_bw : integer, optional
         Number of bandwidths to try out. Increasing this number increases the
         accuracy of the best bandwidth estimate, but also increases the
@@ -341,9 +340,7 @@ def kde_bw(data, n_folds=None, n_bw=100):
         dataset.
 
     """
-    cv_kw = {}
-    if n_folds is not None:
-        cv_kw.update(cv=n_folds)
+    cv_kw = dict(cv=n_folds)
 
     data = numpy.asarray(data)
     if data.ndim == 1:
@@ -380,7 +377,7 @@ def kdeplot(data, data2=None, n_folds=None, n_bw=None, **kwargs):
     data, data2, *args, **kwargs
         See the documentation for `seaborn.kdeplot`.
     n_folds, n_bw
-        See `kde_bw`.
+        See `kde_bw`. If `None`, the default value in `kde_bw` is used.
 
     Returns
     -------
@@ -417,8 +414,7 @@ def distplot(data, n_folds=None, n_bw=None, **kwargs):
     data, data2, *args, **kwargs
         See the documentation for `seaborn.kdeplot`.
     n_folds, n_bw
-        See `kde_bw`. To use the default value in the underlying function, let
-        the corresponding keyword be None in this function.
+        See `kde_bw`. If `None`, the default value in `kde_bw` is used.
 
     Returns
     -------

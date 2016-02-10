@@ -31,6 +31,8 @@ import numpy
 import pandas
 from scipy import signal, linalg, spatial
 from sklearn import cluster
+from sklearn.neighbors import KernelDensity
+from sklearn.grid_search import GridSearchCV
 from matplotlib import pyplot
 from collections import MutableSequence
 
@@ -147,40 +149,143 @@ class Position(AlmostImmutable):
         Arrays containing the x- and y-positions of the position samples.
         Missing samples can be represented by nans or by using a masked array
         for at least one of the arrays.
-    speed_window : non-negative scalar, optional
+    x2, y2 : array-like, optional
+        Arrays containing the x- and y-positions of a second set of position
+        samples. If given, the auxilliary positions are used to compute the
+        head direction of the animal at each location. The primary position
+        samples, (x, y), are still used as the position of the animal.
+    speed_bandwidth : non-negative scalar, optional
         Length of the time span over which to average the computed speed at
         each sample. Should be given in the same unit as the time samples in
         `t`.
-        ..note:: The window length is converted to a number of samples using
-        the mean time interval between samples, and rounded up to the nearest
-        odd number to get a symmetric interval. Hence, if the positions are
-        sampled very irregularly the averaging procedure doesn't make much
-        sense, and one should rather let `speed_window=0.0`.
     min_speed : non-negative scalar, optional
         Lower speed limit for samples to be considered valid. Should be given
         in the unit for speed derived from the position samples in `x, y` and
         the time samples in `t`.
+        ..note:: The speed computation assumes regularly sampled positions.
+        A split in the consecutive streak of samples is noted if a sampling
+        time step exceedes 1.5 times the average of the non-split time steps,
+        unless this jump is not compensated by shorter time steps within the
+        nearest `Position.WLENGTH` samples from the long step. Each consecutive
+        streak is treated and filtered as a separate time series. Any sampling
+        irregularities within each streak are disregarded.
     **kwargs : dict, optional
         Any additional keyword arguments are stored as a dict in the attribute
         `info`. They are not used for internal computations.
 
     """
     params = Memparams(dict, 'params')
+    WLENGTH = 5
 
-    def __init__(self, t, x, y, speed_window=0.0, min_speed=0.0, **kwargs):
-        self.params = dict(speed_window=speed_window, min_speed=min_speed)
+    def __init__(self, t, x, y, x2=None, y2=None, min_speed=0.0,
+                 speed_bandwidth=0.0, **kwargs):
+        self.params = dict(
+            speed_bandwidth=speed_bandwidth,
+            min_speed=min_speed,
+        )
         self.info = kwargs
 
         t = numpy.squeeze(t)
+        tsplit = self.split(t, self.WLENGTH)
+
         x = numpy.ma.squeeze(x)
         y = numpy.ma.squeeze(y)
-
         nanmask = numpy.logical_or(numpy.isnan(x), numpy.isnan(y))
         x = numpy.ma.masked_where(nanmask, x)
         y = numpy.ma.masked_where(nanmask, y)
-        tweights, dweights = self.time_and_distance_weights(t, x, y)
 
-        self.data = dict(t=t, x=x, y=y, tweights=tweights, dweights=dweights)
+        def xysplit(tsplit, x, y):
+            xsplit, ysplit = [], []
+
+            index = 0
+            for ts in tsplit:
+                l = ts.size
+                xsplit.append(x[index:index + l])
+                ysplit.append(y[index:index + l])
+                index += l
+            return xsplit, ysplit
+
+        xsplit, ysplit = xysplit(tsplit, x, y)
+        self.data = dict(t=t, x=x, y=y, tsplit=tsplit, xsplit=xsplit,
+                         ysplit=ysplit)
+
+        if x2 is not None:
+            if y2 is None:
+                raise ValueError("'x2' and 'y2' must either both be given or "
+                                 "both left out")
+            x2 = numpy.ma.squeeze(x2)
+            y2 = numpy.ma.squeeze(y2)
+            nanmask2 = numpy.logical_or(numpy.isnan(x2), numpy.isnan(y2))
+            x2 = numpy.ma.masked_where(nanmask2, x2)
+            y2 = numpy.ma.masked_where(nanmask2, y2)
+            x2split, y2split = xysplit(tsplit, x2, y2)
+            self.data.update(x2=x2, y2=y2, x2split=x2split, y2split=y2split)
+
+    @staticmethod
+    def split(t, wlength):
+        """
+        Find leaps in an otherwise more or less regular series of samples, and
+        split the array at these points
+
+        Parameters
+        ----------
+        t : array-like, one-dimensional
+            Array containing the series of samples.
+        wlength : scalar
+            Number of samples over which the intervals must balance out if the
+            samples are irregular. If a step longer than 1.5 times the average
+            time step is not compensated by one or more shorter-than-average
+            time steps within this number of samples, the long time step is
+            identified as the end of one consecutive streak of samples and the
+            beginning of the next.
+
+        Returns
+        -------
+        tsplit : list
+            List where each element is a one-dimensional ndarray with
+            a consecutie streak of samples from the series, such that
+            `numpy.hstack(tsplit)` equals `t`.
+
+        """
+        t = numpy.asarray(t)
+        tsteps = numpy.diff(t)
+
+        window = numpy.ones(wlength)
+        average_tsteps = (signal.convolve(tsteps, window, mode='same') /
+                          signal.convolve(numpy.ones_like(tsteps), window,
+                                          mode='same'))
+        start_offset = 1 - (wlength + 1) // 2
+        stop_offset = 1 + wlength // 2
+
+        def find_splits(mean_dt):
+            potential_splits = tsteps > 1.5 * mean_dt
+            splits = numpy.zeros_like(potential_splits)
+            threshold = mean_dt * (2 * wlength + 1) / (2 * wlength)
+            for psplit in numpy.where(potential_splits)[0]:
+                pstart = psplit + start_offset
+                pstop = psplit + stop_offset
+                if numpy.all(average_tsteps[pstart:pstop] > threshold):
+                    splits[psplit + 1] = True
+            return splits
+
+        mean_dt = numpy.mean(tsteps)
+        old_splits = numpy.zeros_like(tsteps, dtype=numpy.bool_)
+        splits = find_splits(mean_dt)
+        while numpy.any(numpy.logical_and(splits, ~old_splits)):
+            mean_dt = numpy.mean(tsteps[~splits])
+            old_splits = splits
+            splits = find_splits(mean_dt)
+
+        splits = numpy.where(splits)[0]
+        fullsplits = numpy.hstack((0, splits, len(t)))
+        nsplits = len(splits)
+
+        tsplit = []
+        for i in range(nsplits + 1):
+            ts = t[fullsplits[i]:fullsplits[i + 1]]
+            tsplit.append(ts)
+
+        return tsplit
 
     @staticmethod
     def time_and_distance_weights(t, x, y):
@@ -201,69 +306,75 @@ class Position(AlmostImmutable):
         Returns
         -------
         tweights : ndarray
-            The length of time (time weight) associated with each position
-            sample.
-        dweights : masked ndarray
-            The covered distance (distance weight) associated with each
-            position sample.
+            Array containing the length of time (time weight) associated with
+            each position sample.
+        dweights : list
+            (Masked) array containing the covered distance (distance weight)
+            associated with each position sample.
 
         """
         tsteps = numpy.diff(t)
-        tweights = 0.5 * numpy.hstack((tsteps[0], tsteps[:-1] + tsteps[1:],
-                                       tsteps[-1]))
-
         xsteps = numpy.ma.diff(x)
         ysteps = numpy.ma.diff(y)
         dsteps = numpy.ma.sqrt(xsteps * xsteps + ysteps * ysteps)
-        dweights = 0.5 * numpy.ma.hstack((dsteps[0], dsteps[:-1] + dsteps[1:],
-                                          dsteps[-1]))
+
+        tweights = 0.5 * numpy.hstack([tsteps[0],
+                                       tsteps[:-1] + tsteps[1:],
+                                       tsteps[-1]])
+        dweights = 0.5 * numpy.ma.hstack([dsteps[0],
+                                          dsteps[:-1] + dsteps[1:],
+                                          dsteps[-1]])
 
         return tweights, dweights
 
-    def speed(self):
+    @staticmethod
+    def speed(tweights, dweights, speed_bandwidth):
         """
-        Compute the speed at each sample.
+        Compute the average speed over a certain interval around each sample
 
-        The length of time over which to average the computed speed around each
-        sample is given by `self.params['speed_window']`.
+        Parameters
+        ----------
+        tweights : ndarray
+            Array containing the length of time (time weight) associated with
+            each position sample.
+        dweights : list
+            (Masked) array containing the covered distance (distance weight)
+            associated with each position sample.
 
         Returns
         -------
-        speed : masked ndarray
-            The speed at each position sample.
+        speed : ndarray
+            (Masked) array containing the computed average speed at each
+            position sample.
 
         """
-        speed_window = self.params['speed_window']
-        if not speed_window >= 0.0:
-            raise ValueError("'speed_window' must be a non-negative number")
+        if not speed_bandwidth >= 0.0:
+            raise ValueError("'speed_bandwidth' must be a non-negative number")
 
-        data = self.data
+        fs = 1.0 / numpy.mean(tweights)
+        wl = 2 * int(0.5 * speed_bandwidth * fs) + 1
+        window_sequence = numpy.empty(wl)
+        window_sequence.fill(1.0 / wl)
 
-        t = data['t']
-        mean_tstep = numpy.mean(numpy.diff(t))
-
-        window_length = 2 * int(0.5 * speed_window / mean_tstep) + 1
-        window_sequence = numpy.empty(window_length)
-        window_sequence.fill(1.0 / window_length)
-
-        tweights, dweights = data['tweights'], data['dweights']
-        dw_mask = numpy.ma.getmaskarray(dweights)
-        dw_filled = numpy.ma.filled(dweights, fill_value=0.0)
-
-        tweights_filt = sensibly_divide(
+        twi = numpy.ones_like(tweights, dtype=numpy.int_)
+        twa = sensibly_divide(
             signal.convolve(tweights, window_sequence, mode='same'),
-            signal.convolve(numpy.ones_like(tweights), window_sequence,
-                            mode='same'))
-        dweights_filt = sensibly_divide(
-            signal.convolve(dw_filled, window_sequence, mode='same'),
-            signal.convolve((~dw_mask).astype(numpy.float_),
-                            window_sequence, mode='same'), masked=True)
+            signal.convolve(twi, window_sequence, mode='same'),
+        )
 
-        return dweights_filt / tweights_filt
+        dwm = numpy.ma.getmaskarray(dweights)
+        dwf = numpy.ma.filled(dweights, fill_value=0.0)
+        dwa = sensibly_divide(
+            signal.convolve(dwf, window_sequence, mode='same'),
+            signal.convolve((~dwm).astype(numpy.int_),
+                            window_sequence, mode='same'),
+            masked=True,
+        )
+        return dwa / twa
 
     def filtered_data(self):
         """
-        Apply a speed mask to the data in `self.data`
+        Apply a speed mask to the data
 
         Data at samples where the speed is below the minimum speed will be
         masked.
@@ -278,26 +389,77 @@ class Position(AlmostImmutable):
 
         """
         data = self.data
-        t, x, y = data['t'], data['x'], data['y']
-        tweights, dweights = data['tweights'], data['dweights']
-        speed = self.speed()
+        tsplit, xsplit, ysplit = data['tsplit'], data['xsplit'], data['ysplit']
 
-        min_speed = self.params['min_speed']
+        params = self.params
+        speed_bandwidth = params['speed_bandwidth']
+        min_speed = params['min_speed']
         if not min_speed >= 0.0:
-            raise ValueError("'speed_window' must be a non-negative number")
+            raise ValueError("'min_speed' must be a non-negative number")
 
-        speedmask = numpy.logical_or(speed < min_speed,
-                                     numpy.ma.getmaskarray(speed))
+        xsplitf, ysplitf, tweightssplit, dweightssplit = [], [], [], []
+        speedmasksplit, speedsplit = [], []
+        for ts, xs, ys in zip(tsplit, xsplit, ysplit):
+            tw, dw = self.time_and_distance_weights(ts, xs, ys)
+            s = self.speed(tw, dw, speed_bandwidth)
+            sm = numpy.logical_or(s < min_speed, numpy.ma.getmaskarray(s))
+            xs = numpy.ma.masked_where(sm, xs)
+            ys = numpy.ma.masked_where(sm, ys)
+            tw = numpy.ma.masked_where(sm, tw)
+            dw = numpy.ma.masked_where(sm, dw)
+            xsplitf.append(xs)
+            ysplitf.append(ys)
+            tweightssplit.append(tw)
+            dweightssplit.append(dw)
+            speedmasksplit.append(sm)
+            speedsplit.append(s)
 
-        x = numpy.ma.masked_where(speedmask, x)
-        y = numpy.ma.masked_where(speedmask, y)
-        dweights = numpy.ma.masked_where(speedmask, dweights)
-        tweights = numpy.ma.masked_where(speedmask, tweights)
+        t = data['t']
+        xf = numpy.ma.hstack(xsplitf)
+        yf = numpy.ma.hstack(ysplitf)
+        tweights = numpy.ma.hstack(tweightssplit)
+        dweights = numpy.ma.hstack(dweightssplit)
+        speed = numpy.ma.hstack(speedsplit)
+        speedmask = numpy.ma.hstack(speedmasksplit)
+        fdata = dict(
+            t=t,
+            x=xf,
+            y=yf,
+            tweights=tweights,
+            dweights=dweights,
+            speed=speed,
+            speedmask=speedmask,
+            tsplit=tsplit,
+            xsplit=xsplit,
+            ysplit=ysplit,
+            tweightssplit=tweightssplit,
+            dweightssplit=dweightssplit,
+            speedsplit=speedsplit,
+            speedmasksplit=speedmasksplit,
+        )
 
-        return dict(t=t, x=x, y=y, tweights=tweights, dweights=dweights)
+        if 'x2' in data:
+            x2split, y2split = data['x2split'], data['y2split']
+            x2splitf, y2splitf = [], []
+            for ts, x2s, y2s, sm in zip(tsplit, x2split, y2split,
+                                        speedmasksplit):
+                x2s = numpy.ma.masked_where(sm, x2s)
+                y2s = numpy.ma.masked_where(sm, y2s)
+                x2splitf.append(x2s)
+                y2splitf.append(y2s)
+            x2f = numpy.ma.hstack(x2splitf)
+            y2f = numpy.ma.hstack(y2splitf)
+            fdata.update(
+                x2=x2f,
+                y2=y2f,
+                x2split=x2split,
+                y2split=y2split,
+            )
+
+        return fdata
 
     @memoize_method
-    def _occupancy(self, bins, range_):
+    def _occupancy(self, bins, range_, mode, bandwidth, kernel):
         """
         Compute a map of occupancy times
 
@@ -305,19 +467,40 @@ class Position(AlmostImmutable):
         to optimize memoization.
 
         """
-        data = self.filtered_data()
-        x, y, tweights = data['x'], data['y'], data['tweights']
-        hist, xedges, yedges = numpy.histogram2d(
-            numpy.ma.compressed(x),
-            numpy.ma.compressed(y),
-            bins=bins,
-            range=range_,
-            normed=False,
-            weights=numpy.ma.compressed(tweights))
+        fdata = self.filtered_data()
+        x, y, tw = fdata['x'], fdata['y'], fdata['tweights']
+        mask = (numpy.ma.getmaskarray(x) | numpy.ma.getmaskarray(y) |
+                numpy.ma.getmaskarray(tw))
+        x = x[~mask]
+        y = y[~mask]
+        tw = tw[~mask]
+        values, xedges, yedges = numpy.histogram2d(
+            x, y, bins=bins, range=range_, normed=False, weights=tw)
 
-        return IntensityMap2D(hist, (xedges, yedges))
+        if mode == 'kde':
+            if bandwidth is None:
+                xwidth = numpy.mean(xedges[1:] - xedges[:-1])
+                ywidth = numpy.mean(yedges[1:] - yedges[:-1])
+                bandwidth = .5 * (xwidth + ywidth)
+            pkde = KernelDensity(bandwidth=bandwidth, kernel=kernel)
+            pdata = numpy.column_stack((x, y))
+            pkde.fit(pdata)
 
-    def occupancy(self, bins, range_=None, distribution=False):
+            xcenters = .5 * (xedges[1:] + xedges[:-1])
+            ycenters = .5 * (yedges[1:] + yedges[:-1])
+            yyc, xxc = numpy.meshgrid(ycenters, xcenters)
+            values = pkde.score_samples(
+                numpy.column_stack((xxc.ravel(),
+                                    yyc.ravel()))).reshape(xxc.shape)
+            values = numpy.exp(values)
+            values *= (self.total_time() / numpy.sum(values))
+        elif mode != 'histogram':
+            raise ValueError("Unknown 'mode': {}".format(mode))
+
+        return IntensityMap2D(values, (xedges, yedges))
+
+    def occupancy(self, bins, range_=None, mode='kde', bandwidth=None,
+                  kernel='gaussian', normalize=False):
         """
         Compute a map of occupancy times
 
@@ -332,14 +515,29 @@ class Position(AlmostImmutable):
             nbins_y)`, giving the number of bins of equal widths in each
             direction. For information about other valid formats, see the
             documentation for `numpy.histogram2d`.
-        range_ : array-like, shape(2,2), optional
+        range_ : array-like, shape (2, 2), optional
             Range specification giving the x and y values of the outermost bin
             edges. The format is `[[xmin, xmax], [ymin, ymax]]`. Samples
             outside this region will be discarded.
-        distribution : bool, optional
+        mode : {'histogram', 'kde'}, optional
+            String to select how occupancy map is computed. If `'histogram'`
+            the map is computed by counting the time spent in each bin. If
+            `'kde'`, the value in the center of each bin is computed using
+            Gaussian kernel density estimation width bandwidth given by
+            `bandwidth`.
+        bandwidth : scalar, optional
+            Kernel bandwidth if `mode='kde'`. If None, the (average) bin width
+            is used as bandwidth. If `mode` is different from `'kde'`, this
+            parameter has no effect.
+        kernel : string, optional
+            The kernel to use if `mode='kde'`. See
+            `sklearn.neighbors.KernelDensity` for details.
+        normalize : bool, optional
             If True, the occupancy map will be normalized to have sum 1, such
             that it can be interpreted as a frequency distribution for the
-            occupancy.
+            occupancy. Otherwise, the occupancy map gives the total time spent
+            in each bin, such that it sums up to the total time of the
+            experiment.
 
         Returns
         -------
@@ -347,12 +545,38 @@ class Position(AlmostImmutable):
             Occupancy map.
 
         """
-        occupancy = self._occupancy(bins, range_)
+        occupancy = self._occupancy(bins, range_, mode, bandwidth, kernel)
 
-        if distribution:
+        if normalize:
             occupancy /= self.total_time()
 
         return occupancy
+
+    def head_direction(self):
+        """
+        Compute the head direction at each position sample
+
+        This requires that `x2`and `y2` were provided at instance
+        initialization.
+
+        Returns
+        -------
+        hd : ndarray
+            Array of the head direction angle, in the interval `[0, 2 * pi]`,
+            for each position sample. The angle is computed under the
+            assumption that the vector from (x, y) to (x2, y2) points from left
+            to right across the head of the animal.
+
+        """
+        fdata = self.filtered_data()
+        if 'x2' not in fdata:
+            raise ValueError("'x2' and 'y2' must be provided at instance "
+                             "initialization to be able to compute head "
+                             "direction")
+        x, y, x2, y2 = fdata['x'], fdata['y'], fdata['x2'], fdata['y2']
+        xdiff, ydiff = x2 - x, y2 - y
+        angle = numpy.ma.arctan2(ydiff, xdiff)
+        return numpy.ma.mod(angle + 0.5 * numpy.pi, 2.0 * numpy.pi)
 
     def total_time(self):
         """
@@ -395,8 +619,8 @@ class Position(AlmostImmutable):
         if axes is None:
             axes = pyplot.gca(aspect='equal')
 
-        data = self.filtered_data()
-        x, y = data['x'], data['y']
+        fdata = self.filtered_data()
+        x, y = fdata['x'], fdata['y']
 
         kwargs.update(linewidth=linewidth, color=color, alpha=alpha)
         return axes.plot(x, y, **kwargs)
@@ -435,11 +659,11 @@ class Position(AlmostImmutable):
         if axes is None:
             axes = pyplot.gca(aspect='equal')
 
-        data = self.filtered_data()
-        x, y, tweights = data['x'], data['y'], data['tweights']
+        fdata = self.filtered_data()
+        x, y, tw = fdata['x'], fdata['y'], fdata['tweights']
 
         if c is None:
-            c = 1.0 - (tweights / tweights.max())
+            c = 1.0 - (tw / numpy.nanmax(tw))
 
         kwargs.update(marker=marker, s=s, c=c, alpha=alpha)
         return axes.scatter(x, y, **kwargs)
@@ -484,14 +708,14 @@ class Position(AlmostImmutable):
         if axes is None:
             axes = pyplot.gca()
 
-        data = self.filtered_data()
-        t, speed = (data['t'], self.speed())
+        fdata = self.filtered_data()
+        t, speed = fdata['t'], fdata['speed']
 
-        start_index, end_index = 0, -1
+        start_index, end_index = 0, len(t)
         if tstart is not None:
             start_index = numpy.argmin(numpy.abs(t - tstart))
         if tend is not None:
-            end_index = numpy.argmin(numpy.abs(t - tend))
+            end_index = numpy.argmin(numpy.abs(t - tend)) + 1
         t = t[start_index:end_index]
         speed = speed[start_index:end_index]
 
@@ -542,7 +766,7 @@ class BaseCell(AbstractAlmostImmutable):
         self.params = dict(threshold=threshold)
         self.info = kwargs
 
-    def spikemap(self, distribution_spikemap=False, **kwargs):
+    def spikemap(self, normalize_spikemap=False, **kwargs):
         """
         Compute a map of the spatial spike distribution
 
@@ -554,10 +778,10 @@ class BaseCell(AbstractAlmostImmutable):
 
         Parameters
         ----------
-        distribution_spikemap : bool, optional
+        normalize_spikemap : bool, optional
             This purpose of this parameter is to distinguish between the
-            distribution of spikes and the normalized distribution of spatial
-            spike frequency. It has no effect here, since no temporal
+            density of spikes and the normalized distribution of spatial
+            spiking fractions. It has no effect here, since no spiking
             information is available, but is included in the argument list to
             transparently avoid passing the keyword further.
         **kwargs : dict, optional
@@ -570,10 +794,10 @@ class BaseCell(AbstractAlmostImmutable):
             Spike map.
 
         """
-        kwargs.update(distribution_occupancy=False)
+        kwargs.update(normalize_occupancy=False)
         return (self.ratemap(**kwargs) * self.occupancy(**kwargs))
 
-    def occupancy(self, distribution_occupancy=False, **kwargs):
+    def occupancy(self, normalize_occupancy=False, **kwargs):
         """
         Compute a map of occupancy times
 
@@ -584,10 +808,9 @@ class BaseCell(AbstractAlmostImmutable):
 
         Parameters
         ----------
-        distribution_occupancy : bool, optional
+        normalize_occupancy : bool, optional
             If True, the occupancy map will be normalized to have sum 1, such
-            that it can be interpreted as a frequency distribution for the
-            occupancy.
+            that it can be interpreted as an occupancy fraction distribution.
         **kwargs : dict, optional
             Keyword arguments are passed to `BaseCell.ratemap`.
 
@@ -598,7 +821,7 @@ class BaseCell(AbstractAlmostImmutable):
 
         """
         occupancy = self.ratemap(**kwargs).indicator
-        if distribution_occupancy:
+        if normalize_occupancy:
             occupancy /= self.total_time(**kwargs)
         return occupancy
 
@@ -623,7 +846,7 @@ class BaseCell(AbstractAlmostImmutable):
             Total time.
 
         """
-        kwargs.update(distribution_occupancy=False)
+        kwargs.update(normalize_occupancy=False)
         return self.occupancy(**kwargs).sum()
 
     @abstractmethod
@@ -676,7 +899,7 @@ class BaseCell(AbstractAlmostImmutable):
         """
         if normalize_ratemean:
             return 1.0
-        kwargs.update(distribution_spikemap=False)
+        kwargs.update(normalize_spikemap=False)
         return (self.spikemap(**kwargs).sum() / self.total_time(**kwargs))
 
     def rate_std(self, **kwargs):
@@ -723,7 +946,7 @@ class BaseCell(AbstractAlmostImmutable):
             The spatial variance of the firing rate.
 
         """
-        kwargs.update(distribution_occupancy=False)
+        kwargs.update(normalize_occupancy=False)
         ratemap = self.ratemap(**kwargs)
         dev = ratemap - self.rate_mean(**kwargs)
         wdev_sq = self.occupancy(**kwargs) * dev * dev
@@ -731,7 +954,7 @@ class BaseCell(AbstractAlmostImmutable):
         return wdev_sq.sum() * n / (n - ddof)
 
     @memoize_method
-    def acorr(self, mode='full', pearson='global', normalize_acorr=True,
+    def acorr(self, mode='full', pearson='global', normalize_correlogram=True,
               **kwargs):
         """
         Compute the autocorrelogram of the firing rate map
@@ -743,7 +966,7 @@ class BaseCell(AbstractAlmostImmutable):
         ----------
         mode, pearson
             See `IntensityMap2D.autocorrelate`.
-        normalize_acorr
+        normalize_correlogram
             Passed as keyword 'normalize' to `IntensityMap2D.autocorrelate`.
         **kwargs : dict, optional
             Additional keyword arguments are passed to `BaseCell.ratemap`.
@@ -754,12 +977,12 @@ class BaseCell(AbstractAlmostImmutable):
             See `IntensityMap2D.autocorrelate`.
 
         """
-        return self.ratemap(**kwargs).autocorrelate(mode=mode, pearson=pearson,
-                                                    normalize=normalize_acorr)
+        return self.ratemap(**kwargs).autocorrelate(
+            mode=mode, pearson=pearson, normalize=normalize_correlogram)
 
     #@memoize_method
-    def corr(self, other, mode='full', pearson='global', normalize_corr=True,
-             **kwargs):
+    def corr(self, other, mode='full', pearson='global',
+             normalize_correlogram=True, **kwargs):
         """
         Compute the cross-correlogram of another cell's firing rate to this
 
@@ -772,7 +995,7 @@ class BaseCell(AbstractAlmostImmutable):
             BaseCell instance to correlate ratemaps with.
         mode, pearson
             See `IntensityMap2D.correlate`.
-        normalize_corr
+        normalize_correlogram
             Passed as keyword 'normalize' to `IntensityMap2D.correlate`.
         **kwargs : dict, optional
             Additional keyword arguments are passed to `BaseCell.ratemap`.
@@ -786,10 +1009,9 @@ class BaseCell(AbstractAlmostImmutable):
         # Register this cell for memoize cache clearance whenever this is
         # performed on the other cell.
         #memoize_method.register_friend(other, self)
-        return self.ratemap(**kwargs).correlate(other.ratemap(**kwargs),
-                                                mode=mode,
-                                                pearson=pearson,
-                                                normalize=normalize_corr)
+        return self.ratemap(**kwargs).correlate(
+            other.ratemap(**kwargs), mode=mode, pearson=pearson,
+            normalize=normalize_correlogram)
 
     @staticmethod
     def detect_central_peaks(imap, threshold, n):
@@ -1072,7 +1294,7 @@ class BaseCell(AbstractAlmostImmutable):
             `BaseCell.ratemap`, `BaseCell.occupancy`.
 
         """
-        kwargs.update(distribution_occupancy=True)
+        kwargs.update(normalize_occupancy=True)
         fmean = self.rate_mean(**kwargs)
         rmap = self.ratemap(**kwargs)
         wrate_sq = rmap * rmap * self.occupancy(**kwargs)
@@ -1117,8 +1339,8 @@ class BaseCell(AbstractAlmostImmutable):
         if remove_cpeak:
             # Define central peak radius
             ffield = self.firing_field(**kwargs)
-            sigma = numpy.sqrt(numpy.amax(linalg.eigvalsh(ffield)))
-            inner_radius = 2.0 * sigma
+            sigma = numpy.sqrt(numpy.prod(numpy.sqrt(linalg.eigvalsh(ffield))))
+            inner_radius = 2.7 * sigma
 
             acorr = acorr.shell(inner_radius, None)
 
@@ -1341,7 +1563,7 @@ class BaseCell(AbstractAlmostImmutable):
             ``ellipse_rad, ellipse_ang``
                 Polar coordinates representing the shape and orientation of the
                 ellipse from `BaseCell.grid_ellipse`, as explained in detail in
-                T`BaseCell.ellpars`.
+                `BaseCell.ellpars`.
             ``ellipse_x, ellipse_y``
                 Cartesian versions of the ellipse parameters described above.
             ``_method_ or _key_``
@@ -2010,40 +2232,48 @@ class Cell(BaseCell):
 
     Parameters
     ----------
-    spike_t : array-like
-        Array giving the times at which the cell spiked.
     pos : Position
         Position instance representing the movement of the animal.
+    spike_t : array-like
+        Array giving the times at which the cell spiked.
     bins, range_ (range is optional)
         Bin and range specification. See `Position.occupancy` for details.
-    filter_size : scalar, optional
-        Default smoothing width to use when computing the firing rate map.
-        Given in the same units as the coordinates in `pos`.
+    map_mode : {'histogram', 'kde'}, optional
+        String to select whether to compute the spike map, occupancy map and
+        ratemap using bin counts (histogram) or kernel density estimation.
+    bandwidth : scalar or 'cv', optional
+        Bandwidth of the kernel used in the smoothing filter (if
+        `map_mode='histogram'`) or kernel density estimation (if
+        `map_mode='kde'`) when computing the firing rate map. Given in the same
+        units as the coordinates in `pos`. If this is set to `'cv'`, the
+        optimal bandwidth is computed using cross validation on kernel density
+        estimates of the spatial spike distribution. The number of folds in the
+        cross validation is equal to the square root of the number of spikes,
+        truncated to integer.
     threshold : scalar, optional
         See `BaseCell`
     **kwargs
         See `BaseCell`.
 
     """
-    def __init__(self, position, spike_t, bins, range_=None, filter_size=0.0,
-                 threshold=0.0, **kwargs):
+    def __init__(self, position, spike_t, bins, range_=None,
+                 map_mode='kde', bandwidth=0.0, threshold=0.0, **kwargs):
         BaseCell.__init__(self, threshold=threshold, **kwargs)
         for name in ('params', 'data'):
             if not hasattr(self, name):
                 setattr(self, name, {})
         self.params.update(
-            filter_size=filter_size,
             bins=bins,
-            range_=range_
+            range_=range_,
+            map_mode=map_mode,
+            bandwidth=bandwidth,
         )
 
         spike_t = numpy.squeeze(spike_t)
 
         posdata = position.filtered_data()
-        spike_x, spike_y = self.interpolate_spikes(spike_t,
-                                                   posdata['t'],
-                                                   posdata['x'],
-                                                   posdata['y'])
+        spike_x = self.interpolate_spikes(spike_t, posdata['t'], posdata['x'])
+        spike_y = self.interpolate_spikes(spike_t, posdata['t'], posdata['y'])
 
         self.data.update(
             spike_t=spike_t,
@@ -2055,46 +2285,106 @@ class Cell(BaseCell):
         self.position = position
 
     @staticmethod
-    def interpolate_spikes(spike_t, t, x, y):
+    def interpolate_spikes(spike_t, t, x):
         """
-        Find the locations of spikes in a spike train
+        Find values of a signal at the spikes in a spike train
 
-        The arrays giving positions in which to interpolate may be masked or
-        contain nans, in which case spikes occuring in the corresponding times
-        will be discarded.
+        The signal array may be masked or contain nans, in which case spikes
+        occuring in the corresponding times will be discarded.
 
         Parameters
         ----------
         spike_t : array-like
             Array giving spike times.
-        t, x, y : array-like
-            Arrays giving the time, x-coordinate and y-coordinate of the
-            position samples. If any of the arrays are masked or contain nans,
-            spikes occuring in the corresponding time intervals will be masked.
+        t, x : array-like
+            Arrays giving the times and samples of the signal to interpolate.
+            If `x` is masked or contains nans, spikes occuring in the
+            corresponding time intervals will be masked.
 
         Returns
         -------
-        spike_x, spike_y : ndarray
-            Array of spike x and y coordinates.
+        spike_x : ndarray
+            Array of the values of x at the spike times.
 
         """
         xf = numpy.ma.array(x, dtype=numpy.float_)
-        yf = numpy.ma.array(y, dtype=numpy.float_)
         xf = numpy.ma.filled(xf, fill_value=numpy.nan)
-        yf = numpy.ma.filled(yf, fill_value=numpy.nan)
 
         spike_xf = numpy.interp(spike_t, t, xf)
-        spike_yf = numpy.interp(spike_t, t, yf)
-        mask = numpy.logical_or(numpy.isnan(spike_xf), numpy.isnan(spike_yf))
+        mask = numpy.isnan(spike_xf)
 
         spike_x = numpy.interp(spike_t, t, x)
-        spike_y = numpy.interp(spike_t, t, y)
         spike_x = numpy.ma.masked_where(mask, spike_x)
-        spike_y = numpy.ma.masked_where(mask, spike_y)
-        return spike_x, spike_y
+        return spike_x
 
     @memoize_method
-    def _spikemap(self, bins, range_):
+    def bandwidth(self, bins=None, range_=None, kernel='gaussian',
+                  **kwargs):
+        """
+        Find the kernel bandwidth to use for ratemaps
+
+        The bandwidth is looked up in `self.params`. If the value `'cv'` is
+        found, the optimal bandwidth is computed using cross validation on
+        kernel density estimates of the spatial spike distribution. The number
+        of folds in the cross validation is equal to the square root of the
+        number of spikes, truncated to integer.
+
+        Parameters
+        ----------
+        bins, range_
+            See `Cell.occupancy`.
+        kernel : string, optional
+            Kernel used in the smoothing filter or kernel density estimation.
+            See `IntensityMap2D.smooth` (if `ratemap_mode='histogram'`) or
+            `sklearn.neighbors.KernelDensity` (if `ratemap_mode='kde'`)
+            (..note:: defaults may differ).
+        **kwargs : dict, optional
+            Not in use, only there to swallow extraneous keywords.
+
+        Returns
+        -------
+        scalar
+            Kernel bandwidth.
+
+        """
+        params = self.params
+        bandwidth = params['bandwidth']
+        if bandwidth != 'cv':
+            return bandwidth
+        occupancy = self._occupancy(bins, range_)
+        bset = occupancy.bset
+        range_ = bset.range_
+        shortest_binw = min(numpy.mean(binw) for binw in bset.binwidths)
+        shortest_edge = min(r[1] - r[0] for r in range_)
+        bw_min, bw_max = 0.5 * shortest_binw, 0.1 * shortest_edge
+        bw_step = 0.002 * shortest_edge
+        bw_max = max(bw_max, bw_min + bw_step)
+        if 0.5 * bw_max <= bw_min and 2.0 * bw_min >= bw_max:
+            # Range is short, use same step length everywhere
+            bandwidths = numpy.arange(bw_min, bw_max, bw_step)
+        else:
+            # Range is long, split it up and use different step lengths
+            if 0.5 * bw_max > bw_min:
+                bw_mid = 0.5 * bw_max
+            else:
+                bw_mid = 2.0 * bw_min
+            bw1 = numpy.arange(bw_min, bw_mid, bw_step)
+            bw2 = numpy.arange(bw1[-1], bw_max, 2.5 * bw_step)
+            bandwidths = numpy.hstack((bw1, bw2))
+        spike_grid = GridSearchCV(KernelDensity(kernel=kernel),
+                                  dict(bandwidth=bandwidths),
+                                  cv=10)
+
+        data = self.data
+        spike_x, spike_y = data['spike_x'], data['spike_y']
+        spike_data = numpy.column_stack((numpy.ma.compressed(spike_x),
+                                         numpy.ma.compressed(spike_y)))
+
+        spike_grid.fit(spike_data)
+        return spike_grid.best_params_['bandwidth']
+
+    @memoize_method
+    def _spikemap(self, bins, range_, map_mode, bandwidth, kernel):
         """
         Compute a map of the recorded spikes
 
@@ -2106,36 +2396,64 @@ class Cell(BaseCell):
         # creating unneccesary duplicate objects.
         occupancy = self._occupancy(bins, range_)
         bset = occupancy.bset
+        xedges, yedges = bset.xedges, bset.yedges
 
         data = self.data
         spike_x, spike_y = data['spike_x'], data['spike_y']
-        spike_hist, __, __ = numpy.histogram2d(numpy.ma.compressed(spike_x),
-                                               numpy.ma.compressed(spike_y),
-                                               bins=(bset.xedges, bset.yedges),
-                                               normed=False)
-        return IntensityMap2D(spike_hist, bset)
+        spike_x = numpy.ma.compressed(spike_x)
+        spike_y = numpy.ma.compressed(spike_y)
 
-    def spikemap(self, distribution_spikemap=False, bins=None, range_=None,
-                 filter_size=None, filter_='gaussian', normalize_spikemap=True,
-                 **kwargs):
+        if map_mode == 'histogram':
+            values, __, __ = numpy.histogram2d(spike_x, spike_y,
+                                               bins=(xedges, yedges),
+                                               normed=False)
+        elif map_mode == 'kde':
+            skde = KernelDensity(bandwidth=bandwidth, kernel=kernel)
+            sdata = numpy.column_stack((spike_x, spike_y))
+            skde.fit(sdata)
+
+            xcenters = .5 * (xedges[1:] + xedges[:-1])
+            ycenters = .5 * (yedges[1:] + yedges[:-1])
+            yyc, xxc = numpy.meshgrid(ycenters, xcenters)
+            values = skde.score_samples(
+                numpy.column_stack((xxc.ravel(),
+                                    yyc.ravel()))).reshape(xxc.shape)
+            values = numpy.exp(values)
+            values *= (self.nspikes() / numpy.sum(values))
+        else:
+            raise ValueError("Unknown 'map_mode': {}".format(map_mode))
+        return IntensityMap2D(values, bset)
+
+    def spikemap(self, normalize_spikemap=False, bins=None, range_=None,
+                 map_mode=None, bandwidth=None, kernel='gaussian',
+                 normalize_smoothing=True, **kwargs):
         """
         Compute a map of the spatial spike distribution
 
         Parameters
         ----------
-        distribution_spikemap : bool, optional
-            If True, the spike map will be normalized to have sum 1, such
-            that it can be interpreted as a spatial frequency distribution map
-            for the spikes.
+        normalize_spikemap : bool, optional
+            If True, the spike map will be normalized to have sum 1, such that
+            it can be interpreted as a distribution of spatial spiking
+            fractions.
         bins, range_
             See `Cell.occupancy`.
-        filter_size : scalar
-            Characteristic length of the smoothing filter to apply to the
-            spikemap. If None, the default specification, set at
+        map_mode : None or {'histogram', 'kde'}, optional
+            String to select whether to compute the occupancy map using bin
+            counts (histogram) or kernel density estimation. If None, the
+            default ratemap mode, set at initialization and stored in
+            `self.params`, is used.
+        bandwidth : scalar, optional
+            Bandwidth of the kernel used in the smoothing filter (if
+            `ratemap_mode='histogram'`) or kernel density estimation (if
+            `ratemap_mode='kde'`). If None, the default bandwidth, set at
             initialization and stored in `self.params`, is used.
-        filter_
-            See `IntensityMap2D.smooth` (..note:: defaults may differ).
-        normalize_occupancy
+        kernel : string, optional
+            Kernel used in the smoothing filter or kernel density estimation.
+            See `IntensityMap2D.smooth` (if `ratemap_mode='histogram'`) or
+            `sklearn.neighbors.KernelDensity` (if `ratemap_mode='kde'`)
+            (..note:: defaults may differ).
+        normalize_smoothing
             Passed as keyword 'normalize' to `IntensityMap2D.smooth`.
         **kwargs : dict, optional
             Keyword arguments are passed to `Cell.nspikes`.
@@ -2146,15 +2464,18 @@ class Cell(BaseCell):
             Spike map.
 
         """
-        if filter_size is None:
-            filter_size = self.params['filter_size']
+        if bandwidth is None:
+            bandwidth = self.bandwidth(bins=bins, range_=range_, kernel=kernel)
+        if map_mode is None:
+            map_mode = self.params['map_mode']
 
-        spikemap = self._spikemap(bins, range_)
-        if distribution_spikemap:
+        spikemap = self._spikemap(bins, range_, map_mode, bandwidth, kernel)
+        if normalize_spikemap:
             spikemap /= self.nspikes(**kwargs)
-
-        return spikemap.smooth(filter_size, filter_=filter_,
-                               normalize=normalize_spikemap)
+        if map_mode == 'histogram':
+            spikemap = spikemap.smooth(bandwidth, kernel=kernel,
+                                       normalize=normalize_smoothing)
+        return spikemap
 
     def nspikes(self, **kwargs):
         """
@@ -2173,7 +2494,8 @@ class Cell(BaseCell):
         """
         return len(numpy.ma.compressed(self.data['spike_x']))
 
-    def _occupancy(self, bins, range_, distribution_occupancy=False):
+    def _occupancy(self, bins, range_, map_mode='kde', bandwidth=None,
+                   kernel='gaussian', normalize_occupancy=False):
         """
         Compute a map of the recorded spikes
 
@@ -2186,33 +2508,44 @@ class Cell(BaseCell):
             bins = params['bins']
         if range_ is None:
             range_ = params['range_']
-        return self.position.occupancy(bins=bins, range_=range_,
-                                       distribution=distribution_occupancy)
+        return self.position.occupancy(bins=bins, range_=range_, mode=map_mode,
+                                       bandwidth=bandwidth, kernel=kernel,
+                                       normalize=normalize_occupancy)
 
-    def occupancy(self, distribution_occupancy=False, bins=None, range_=None,
-                  filter_size=None, filter_='gaussian',
-                  normalize_occupancy=True, **kwargs):
+    def occupancy(self, normalize_occupancy=False, bins=None, range_=None,
+                  map_mode=None, bandwidth=None, kernel='gaussian',
+                  normalize_smoothing=True, **kwargs):
         """
         Compute a map of occupancy times
 
         Parameters
         ----------
+        normalize_occupancy : bool, optional
+            If True, the occupancy map will be normalized to have sum 1, such
+            that it can be interpreted as a frequency distribution for the
+            occupancy.
         bins, range_
             Bin and range specification. See `Position.occupancy` for details.
             If None, the default specification, set at initialization and
             stored in `self.params`, is used.
-        distribution_occupancy : bool, optional
-            If True, the occupancy map will be normalized to have sum 1, such
-            that it can be interpreted as a frequency distribution for the
-            occupancy.
-        filter_size : scalar
-            Characteristic length of the smoothing filter to apply to the
-            occupancy map. If None, the default specification, set at
+        map_mode : None or {'histogram', 'kde'}, optional
+            String to select whether to compute the occupancy map using bin
+            counts (histogram) or kernel density estimation. If None, the
+            default ratemap mode, set at initialization and stored in
+            `self.params`, is used.
+        bandwidth : scalar, optional
+            Bandwidth of the kernel used in the smoothing filter (if
+            `ratemap_mode='histogram'`) or kernel density estimation (if
+            `ratemap_mode='kde'`). If None, the default bandwidth, set at
             initialization and stored in `self.params`, is used.
-        filter_
-            See `IntensityMap2D.smooth` (..note:: defaults may differ).
-        normalize_occupancy
-            Passed as keyword 'normalize' to `IntensityMap2D.smooth`.
+        kernel : string, optional
+            Kernel used in the smoothing filter or kernel density estimation.
+            See `IntensityMap2D.smooth` (if `ratemap_mode='histogram'`) or
+            `sklearn.neighbors.KernelDensity` (if `ratemap_mode='kde'`)
+            (..note:: defaults may differ).
+        normalize_smoothing
+            Passed as keyword 'normalize' to `IntensityMap2D.smooth` if
+            `ratemap_mode='histogram'`.
         **kwargs : dict, optional
             Not in use.
 
@@ -2222,13 +2555,17 @@ class Cell(BaseCell):
             Occupancy map.
 
         """
-        if filter_size is None:
-            filter_size = self.params['filter_size']
-        occupancy = self._occupancy(
-            bins=bins, range_=range_,
-            distribution_occupancy=distribution_occupancy)
-        return occupancy.smooth(filter_size, filter_=filter_,
-                                normalize=normalize_occupancy)
+        if bandwidth is None:
+            bandwidth = self.bandwidth(bins=bins, range_=range_, kernel=kernel)
+        if map_mode is None:
+            map_mode = self.params['map_mode']
+        occupancy = self._occupancy(bins, range_, map_mode=map_mode,
+                                    bandwidth=bandwidth, kernel=kernel,
+                                    normalize_occupancy=normalize_occupancy)
+        if map_mode == 'histogram':
+            occupancy = occupancy.smooth(bandwidth, kernel=kernel,
+                                         normalize=normalize_smoothing)
+        return occupancy
 
     def total_time(self, **kwargs):
         """
@@ -2248,37 +2585,52 @@ class Cell(BaseCell):
         return self.position.total_time()
 
     @memoize_method
-    def ratemap(self, bins=None, range_=None, normalize_ratemean=False,
-                filter_size=None, filter_mode='pre', filter_='gaussian',
-                normalize_ratemap=True, **kwargs):
+    def ratemap(self, normalize_ratemean=False, bins=None, range_=None,
+                map_mode=None, bandwidth=None, kernel='gaussian',
+                smoothing_mode='pre', normalize_smoothing=True, **kwargs):
         """
         Compute the firing rate map of the cell
 
         Parameters
         ----------
-        bins, range_
-            See `Cell.occupancy`.
         normalize_ratemean : bool, optional
             If True, the firing rate is normalized such that the mean firing
             rate is 1.0.
-        filter_size : scalar, optional
-            Characteristic length of the smoothing filter used in the
-            computation. If None, the default filter size, set at
+        bins, range_
+            See `Cell.occupancy`.
+        map_mode : None or {'histogram', 'kde'}, optional
+            String to select whether to compute the ratemap using bin counts
+            (histogram) or kernel density estimation. If None, the default
+            ratemap mode, set at initialization and stored in `self.params`, is
+            used.
+        bandwidth : scalar, optional
+            Bandwidth of the kernel used in the smoothing filter (if
+            `ratemap_mode='histogram'`) or kernel density estimation (if
+            `ratemap_mode='kde'`). If None, the default bandwidth, set at
             initialization and stored in `self.params`, is used.
-        filter_mode : {'pre', 'post'}
+        kernel : string, optional
+            Kernel used in the smoothing filter or kernel density estimation.
+            See `IntensityMap2D.smooth` (if `ratemap_mode='histogram'`) or
+            `sklearn.neighbors.KernelDensity` (if `ratemap_mode='kde'`)
+            (..note:: defaults may differ).
+        smoothing_mode : {'pre', 'post'}, optional
+            If `ratemap_mode='histogram'`, the smoothing filter can be applied
+            at two different times in the computation. This parameter selects
+            which. If `ratemap_mode='kde'`, this parameter has no effect.
 
             ``pre``
                 The occupancy map and spike histogram are smoothed
                 individually, and then divided to create the firing rate map.
             ``post``
-                The histogram is divided by the occupancy to create a raw,
-                unsmoothed firing rate map, which is then smoothed.
-        filter_
-            See `IntensityMap2D.smooth` (..note:: defaults may differ).
-        normalize_ratemap
-            Passed as keyword 'normalize' to `IntensityMap2D.smooth`.
+                The spike histogram is divided by the occupancy map to create
+                a raw firing rate map, and the smoothing filter is applied to
+                this to create the final firing rate map.
+        normalize_smoothing
+            Passed as keyword 'normalize' to `IntensityMap2D.smooth` if
+            `ratemap_mode='histogram'`.
         **kwargs: dict, optional
-            Passed on to `Cell.total_time`.
+            Passed on to `Cell.occupancy`, `Cell.spikemap` and
+            `Cell.rate_mean`.
 
         Returns
         -------
@@ -2286,28 +2638,30 @@ class Cell(BaseCell):
             Firing rate map.
 
         """
-        if filter_size is None:
-            filter_size = self.params['filter_size']
+        if map_mode is None:
+            map_mode = self.params['map_mode']
+        if bandwidth is None:
+            bandwidth = self.bandwidth(bins=bins, range_=range_, kernel=kernel)
 
-        if filter_mode == 'pre':
-            prefilter_size = filter_size
-            postfilter_size = 0.0
-        elif filter_mode == 'post':
-            prefilter_size = 0.0
-            postfilter_size = filter_size
+        if map_mode == 'kde' or smoothing_mode == 'pre':
+            pre_bandwidth = bandwidth
+            post_bandwidth = 0.0
+        elif smoothing_mode == 'post':
+            pre_bandwidth = 0.0
+            post_bandwidth = bandwidth
         else:
-            raise ValueError("unknown filter mode {}"
-                             .format(filter_mode))
+            raise ValueError("Unknown 'smoothing_mode': {}"
+                             .format(smoothing_mode))
 
         kwargs.update(
             bins=bins,
             range_=range_,
-            filter_size=prefilter_size,
-            filter_=filter_,
-            distribution_occupancy=False,
-            distribution_spikemap=False,
-            normalize_occupancy=normalize_ratemap,
-            normalize_spikemap=normalize_ratemap,
+            map_mode=map_mode,
+            bandwidth=pre_bandwidth,
+            kernel=kernel,
+            normalize_occupancy=False,
+            normalize_spikemap=False,
+            normalize_smoothing=normalize_smoothing,
         )
 
         occupancy = self.occupancy(**kwargs)
@@ -2318,8 +2672,46 @@ class Cell(BaseCell):
             kwargs.update(normalize_ratemean=False)
             ratemap /= self.rate_mean(**kwargs)
 
-        return ratemap.smooth(postfilter_size, filter_=filter_,
-                              normalize=normalize_ratemap)
+        return ratemap.smooth(post_bandwidth, kernel=kernel,
+                              normalize=normalize_smoothing)
+
+    def hd_score(self, bias_correction=True, **kwargs):
+        """
+        Compute the head direction score of the cell
+
+        The head direction score is the squared length of the circular mean
+        of the head direction vector at the spike times of the cell.
+        A correction can be applied to get an unbiased estimator of the squared
+        length of the circular mean of the underlying distribution.
+
+        Parameters
+        ----------
+        bias_correction : bool, optional
+            If True, an unbiased estimator of the squared length of the
+            circular mean of the underlying distribution is returned.
+            Otherwise, the raw circular mean of the head direction vectors at
+            the spike times is returned.
+        kwargs: dict, optional
+            Not used.
+
+        Returns
+        -------
+        hd_score : scalar
+            Head direction score.
+
+        """
+        pos = self.position
+        t = pos.filtered_data()['t']
+        hd = pos.head_direction()
+        spike_t = self.data['spike_t']
+        spike_hd = self.interpolate_spikes(spike_t, t, hd)
+        cos_rm = numpy.ma.mean(numpy.ma.cos(spike_hd))
+        sin_rm = numpy.ma.mean(numpy.ma.sin(spike_hd))
+        r2m = cos_rm * cos_rm + sin_rm * sin_rm
+        if bias_correction:
+            n = spike_hd.size
+            r2m = (n / (n - 1)) * (r2m - 1.0 / n)
+        return r2m
 
     # This is really a stochastic property and should ideally not be memoized,
     # but ain't nobody got time for that.
@@ -2333,18 +2725,18 @@ class Cell(BaseCell):
         scalar
             The spatial stability of the cell firing pattern.
         **kwargs : dict, optional
-            Keyword arguments are passed to, `Cell.ratemap`,
+            Keyword arguments are passed to, `Cell.bandwidth`, `Cell.ratemap`,
             `Cell.occupancy`, `Cell.nspikes` and `Cell.total_time`.
 
         """
         kwargs.update(
-            filter_size=2.0 * self.params['filter_size'],
-            distribution_occupancy=False,
+            bandwidth=2.0 * self.bandwidth(**kwargs),
+            normalize_occupancy=False,
             normalize_ratemean=False,
         )
         rmap = self.ratemap(**kwargs)
 
-        kwargs.update(filter_size=0.0)
+        kwargs.update(bandwidth=0.0)
 
         def _stability_terms(cell1, cell2):
             dev = cell1.ratemap(**kwargs) - cell2.ratemap(**kwargs)
@@ -2414,7 +2806,7 @@ class Cell(BaseCell):
         posindex = numpy.logical_and(t_start < t, t <= t_stop)
         new_t, new_x, new_y = t[posindex], x[posindex], y[posindex]
         new_pos = Position(new_t, new_x, new_y,
-                           speed_window=posparams['speed_window'],
+                           speed_bandwidth=posparams['speed_bandwidth'],
                            min_speed=posparams['min_speed'])
 
         spike_t = data['spike_t']
@@ -2606,7 +2998,15 @@ class CellCollection(AlmostImmutable, MutableSequence):
             if key in session:
                 pkw.update(session[key])
 
-        position = Position(session['t'], session['x'], session['y'], **pkw)
+        if 'x2' in session:
+            if 'y2' not in session:
+                raise ValueError("'x2' and 'y2' must either both be given "
+                                 "or both left out")
+            position = Position(session['t'], session['x'], session['y'],
+                                x2=session['x2'], y2=session['y2'], **pkw)
+        else:
+            position = Position(session['t'], session['x'], session['y'],
+                                **pkw)
 
         cells = session['cells']
         clist = []
@@ -2740,7 +3140,7 @@ class CellCollection(AlmostImmutable, MutableSequence):
         return cls(clist, **kwargs)
 
     @classmethod
-    def from_labels(cls, cells, labels, min_length=4, **kwargs):
+    def from_labels(cls, cells, labels, min_length=3, **kwargs):
         """
         Use a list of keys and corresponding labels to instantiate several
         CellCollection instances
