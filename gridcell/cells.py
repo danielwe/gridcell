@@ -92,23 +92,23 @@ class FeatureNames(object):
     def grid_features_latex(normalize_peaks=True, **kwargs):
         end_unnorm = r"}$"
         if normalize_peaks:
-            end = r"} / l$"
+            end = r"} / \lambda$"
         else:
             end = end_unnorm
 
         return (
-            r"$l$",
-            r"$\log l$",
+            r"$\lambda$",
+            r"$\log \lambda$",
         ) + sum(
             (
                 (
                     "".join((r"$a_{x, ", str(i), end)),
                     "".join((r"$a_{y, ", str(i), end)),
-                    "".join((r"$l_{", str(i), end)),
+                    "".join((r"$\lambda_{", str(i), end)),
                     "".join((r"$\beta_{", str(i), end_unnorm)),
                     "".join((r"$\log a_{x, ", str(i), end)),
                     "".join((r"$\log a_{y, ", str(i), end)),
-                    "".join((r"$\log l_{", str(i), end)),
+                    "".join((r"$\log \lambda_{", str(i), end)),
                 )
                 for i in range(1, 7)
             ),
