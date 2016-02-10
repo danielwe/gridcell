@@ -24,7 +24,90 @@ from __future__ import (absolute_import, division, print_function,
                         unicode_literals)
 from collections import deque, Mapping
 import numpy
-from scipy import optimize
+from scipy import optimize, signal
+from .utils import sensibly_divide
+from .cells import Position
+
+
+def filter_positions(t, x, y, window_time, cutoff_freq, window='hann'):
+    """
+    Filter a series of position samples
+
+    The positions are interpreted by `gridcell.Position` to find missing values
+    and splits between consecutive streaks of samples, before, they are filter
+    using `filter_`.
+
+    Parameters
+    ----------
+    t : array-like
+        Time points of the samples in the signal.
+    x, y : array-like
+        Position samples. See `gridcell.Position` for details about how missing
+        values and splits between consecutive streaks of regular samples are
+        handled.
+    window_time, cutoff_freq, window
+        See `filter_`.
+
+    Returns
+    -------
+    xf, yf : array-like, masked
+        Filtered position samples. Missing values are masked.
+
+    """
+    pos = Position(t, x, y)
+    data = pos.data
+    tsplit, xsplit, ysplit = data['tsplit'], data['xsplit'], data['ysplit']
+    xsplitf, ysplitf = [], []
+    for tt, xx, yy in zip(tsplit, xsplit, ysplit):
+        xsplitf.append(filter_(tt, xx, window_time, cutoff_freq, window))
+        ysplitf.append(filter_(tt, yy, window_time, cutoff_freq, window))
+    return numpy.ma.hstack(xsplitf), numpy.ma.hstack(ysplitf)
+
+
+def filter_(t, x, window_time, cutoff_freq, window):
+    """
+    Filter a signal using a FIR low-pass filter
+
+    Parameters
+    ----------
+    t : array-like
+        Time points of the samples in the signal. Only used to extract the
+        sampling frequency.
+    x : array-like
+        Signal to filter. If given as a masked array, the masked entries
+        will be handled using normalized convolution. Boundary conditions
+        are handled by treating samples beyond the boundary the same as
+        masked samples.
+    window_time : non-negative scalar
+        Length of the filter kernel, given in the same unit as `t`. The
+        actual kernel will be rounded to an odd number of samples.
+    cutoff_freq : non-negative scalar
+        Cutoff frequency of the filter. Must be between 0.0 and half the
+        sampling frequency, and given in the reciprocal unit of `t`.
+    window : string
+        Windowing function to use when constructing the filter kernel. See
+        `signal.firwin` for valid options.
+
+    Returns
+    -------
+    xf : ndarray
+        Filtered signal. Locations where only masked values contributed to
+        the filtered value are masked.
+
+    """
+    if window_time < 0.0:
+        raise ValueError("'window_time' must be a non-negative number")
+    elif window_time == 0.0:
+        return x
+    fs = 1.0 / numpy.mean(numpy.diff(t))
+    wl = 2 * int(0.5 * window_time * fs) + 1
+    kernel = signal.firwin(wl, [cutoff_freq], pass_zero=True,
+                           nyq=(0.5 * fs), window='hann')
+    mask = numpy.ma.getmaskarray(x)
+    xf = numpy.ma.filled(x, fill_value=0.0)
+    xn = signal.convolve(xf, kernel, mode='same')
+    xd = signal.convolve((~mask).astype(numpy.int_), kernel, mode='same')
+    return sensibly_divide(xn, xd, masked=True)
 
 
 def sessions(positions, spike_times, param_dicts=None, info_dicts=None):
