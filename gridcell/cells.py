@@ -313,6 +313,12 @@ class Position(AlmostImmutable):
             associated with each position sample.
 
         """
+        l = len(t)
+        if len(x) != l or len(y) != l:
+            raise ValueError("'t', 'x' and 'y' have different lengths")
+        if l < 2:
+            nanlist = [numpy.nan] * l
+            return numpy.array(nanlist), numpy.array(nanlist)
         tsteps = numpy.diff(t)
         xsteps = numpy.ma.diff(x)
         ysteps = numpy.ma.diff(y)
@@ -348,6 +354,14 @@ class Position(AlmostImmutable):
             position sample.
 
         """
+        l = len(tweights)
+        if len(dweights) != l:
+            raise ValueError("'tweights' and 'dweights' have different "
+                             "lengths")
+        if l < 2 and numpy.all(numpy.isnan(tweights)):
+            nanlist = [numpy.nan] * l
+            mask = [True] * l
+            return numpy.ma.masked_where(mask, nanlist)
         if not speed_bandwidth >= 0.0:
             raise ValueError("'speed_bandwidth' must be a non-negative number")
 

@@ -99,6 +99,11 @@ def filter_(t, x, window_time, cutoff_freq, window):
         raise ValueError("'window_time' must be a non-negative number")
     elif window_time == 0.0:
         return x
+    n = len(t)
+    if len(x) != n:
+        raise ValueError("'t' and 'x' have different lengths")
+    if n < 2:
+        return x
     fs = 1.0 / numpy.mean(numpy.diff(t))
     wl = 2 * int(0.5 * window_time * fs) + 1
     kernel = signal.firwin(wl, [cutoff_freq], pass_zero=True,
@@ -199,7 +204,7 @@ def transform_sessions(sessions, global_=False, **kwargs):
         for session in sessions['sessions']:
             xarrs.append(session['x'])
             yarrs.append(session['y'])
-            lengths.append(session['t'].size)
+            lengths.append(len(session['t']))
         xall, yall = numpy.hstack(xarrs), numpy.hstack(yarrs)
 
         xall, yall, info = transform(xall, yall, **kwargs)
