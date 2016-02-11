@@ -285,8 +285,9 @@ def transform(x, y, x2=None, y2=None, range_=None, translate=False,
         Arrays containing the coordinates.
     x2, y2 : array-like, optional
         Arrays containing the coordinates of a second set of position
-        samples. These arrays will be transformed, but will not affect the
-        transform parameters.
+        samples. If provided, the transformation parameters will be derived for
+        the mean of (x, y) and (x2, y2). The returned arrays will be
+        transformed versions of both (x, y) and (x2, y2).
     range : ((xmin, xmax), (ymin, ymax)), optional
         Range specification giving the x and y values of the edges within which
         to fit the transformed coordinates. The coordinates will be rescaled
@@ -334,6 +335,15 @@ def transform(x, y, x2=None, y2=None, range_=None, translate=False,
     info = {'rotation_angle': 0.0, 'rotation_anchor': (0.0, 0.0),
             'translation_vector': (0.0, 0.0),
             'scaling_factor': 1.0, 'scaling_anchor': (0.0, 0.0)}
+
+    extra = False
+    if x2 is not None:
+        if y2 is None:
+            raise ValueError("'x2' and 'y2' must either both be given or "
+                             "both left out")
+        x1, y1 = x, y
+        x, y = 0.5 * (x1 + x2), 0.5 * (y1 + y2)
+        extra = True
 
     if range is None:
         xo, yo = 0.0, 0.0
@@ -388,12 +398,10 @@ def transform(x, y, x2=None, y2=None, range_=None, translate=False,
     info['scaling_factor'] = scaling_factor
     info['scaling_anchor'] = (xo, yo)
 
-    if x2 is not None:
-        if y2 is None:
-            raise ValueError("'x2' and 'y2' must either both be given or "
-                             "both left out")
+    if extra:
+        x1, y1 = _transform(x1, y1, info)
         x2, y2 = _transform(x2, y2, info)
-        return x, y, x2, y2, info
+        return x1, y1, x2, y2, info
     return x, y, info
 
 

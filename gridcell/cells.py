@@ -152,8 +152,8 @@ class Position(AlmostImmutable):
     x2, y2 : array-like, optional
         Arrays containing the x- and y-positions of a second set of position
         samples. If given, the auxilliary positions are used to compute the
-        head direction of the animal at each location. The primary position
-        samples, (x, y), are still used as the position of the animal.
+        head direction of the animal at each location. The average of (x, y)
+        and (x2, y2) will be used for the position of the animal.
     speed_bandwidth : non-negative scalar, optional
         Length of the time span over which to average the computed speed at
         each sample. Should be given in the same unit as the time samples in
@@ -213,13 +213,26 @@ class Position(AlmostImmutable):
             if y2 is None:
                 raise ValueError("'x2' and 'y2' must either both be given or "
                                  "both left out")
+
+            x1, y1 = x, y
+            x1split, y1split = xsplit, ysplit
+
             x2 = numpy.ma.squeeze(x2)
             y2 = numpy.ma.squeeze(y2)
             nanmask2 = numpy.logical_or(numpy.isnan(x2), numpy.isnan(y2))
             x2 = numpy.ma.masked_where(nanmask2, x2)
             y2 = numpy.ma.masked_where(nanmask2, y2)
             x2split, y2split = xysplit(tsplit, x2, y2)
-            self.data.update(x2=x2, y2=y2, x2split=x2split, y2split=y2split)
+
+            x, y = 0.5 * (x1 + x2), 0.5 * (y1 + y2)
+            xsplit, ysplit = xysplit(tsplit, x, y)
+
+            self.data.update(x=x, y=y, xsplit=xsplit, ysplit=ysplit,
+                             x1=x1, y1=y1, x1split=x1split, y1split=y1split,
+                             x2=x2, y2=y2, x2split=x2split, y2split=y2split)
+            self.dual_positions = True
+        else:
+            self.dual_positions = False
 
     @staticmethod
     def split(t, wlength):
@@ -452,20 +465,33 @@ class Position(AlmostImmutable):
             speedmasksplit=speedmasksplit,
         )
 
-        if 'x2' in data:
+        if self.dual_positions:
+            x1split, y1split = data['x1split'], data['y1split']
             x2split, y2split = data['x2split'], data['y2split']
+            x1splitf, y1splitf = [], []
             x2splitf, y2splitf = [], []
-            for ts, x2s, y2s, sm in zip(tsplit, x2split, y2split,
-                                        speedmasksplit):
+            for ts, x1s, y1s, x2s, y2s, sm in zip(tsplit, x1split, y1split,
+                                                  x2split, y2split,
+                                                  speedmasksplit):
+                x1s = numpy.ma.masked_where(sm, x1s)
+                y1s = numpy.ma.masked_where(sm, y1s)
                 x2s = numpy.ma.masked_where(sm, x2s)
                 y2s = numpy.ma.masked_where(sm, y2s)
+                x1splitf.append(x1s)
+                y1splitf.append(y1s)
                 x2splitf.append(x2s)
                 y2splitf.append(y2s)
+            x1f = numpy.ma.hstack(x1splitf)
+            y1f = numpy.ma.hstack(y1splitf)
             x2f = numpy.ma.hstack(x2splitf)
             y2f = numpy.ma.hstack(y2splitf)
             fdata.update(
+                x1=x1f,
+                y1=y1f,
                 x2=x2f,
                 y2=y2f,
+                x1split=x1split,
+                y1split=y1split,
                 x2split=x2split,
                 y2split=y2split,
             )
@@ -583,12 +609,12 @@ class Position(AlmostImmutable):
 
         """
         fdata = self.filtered_data()
-        if 'x2' not in fdata:
+        if not self.dual_positions:
             raise ValueError("'x2' and 'y2' must be provided at instance "
                              "initialization to be able to compute head "
                              "direction")
-        x, y, x2, y2 = fdata['x'], fdata['y'], fdata['x2'], fdata['y2']
-        xdiff, ydiff = x2 - x, y2 - y
+        x1, y1, x2, y2 = fdata['x1'], fdata['y1'], fdata['x2'], fdata['y2']
+        xdiff, ydiff = x2 - x1, y2 - y1
         angle = numpy.ma.arctan2(ydiff, xdiff)
         return numpy.ma.mod(angle + 0.5 * numpy.pi, 2.0 * numpy.pi)
 
