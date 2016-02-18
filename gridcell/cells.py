@@ -37,9 +37,9 @@ from matplotlib import pyplot
 from collections import MutableSequence
 
 from .utils import (AlmostImmutable, gaussian, sensibly_divide,  #add_ticks
-                    project_vectors)
+                    project_vectors, vonmises_kde)
 from .shapes import Ellipse
-from .imaps import IntensityMap2D
+from .imaps import IntensityMap, IntensityMap2D
 from .pointpatterns import PointPattern, Window
 from .memoize.memoize import memoize_method, Memparams
 
@@ -52,6 +52,9 @@ _PI = numpy.pi
 _2PI = 2.0 * _PI
 _PI_2 = _PI / 2.0
 _PI_3 = _PI / 3.0
+
+_ANGULAR_NBINS = 120
+_ANGULAR_BANDWIDTH = numpy.deg2rad(6.0)
 
 
 class FeatureNames(object):
@@ -594,7 +597,7 @@ class Position(AlmostImmutable):
 
         return occupancy
 
-    def head_direction(self):
+    def hd(self):
         """
         Compute the head direction at each position sample
 
@@ -619,6 +622,80 @@ class Position(AlmostImmutable):
         xdiff, ydiff = x2 - x1, y2 - y1
         angle = numpy.ma.arctan2(ydiff, xdiff)
         return numpy.ma.mod(angle + _PI_2, _2PI)
+
+    @memoize_method
+    def _hd_distribution(self, bins, mode, bandwidth):
+        """
+        Compute the head direction distribution
+
+        This part of the computation in `Position.hd_distribution` is factored
+        out to optimize memoization.
+
+        """
+        hd = self.hd()
+        tw = self.filtered_data()['tweights']
+        mask = (numpy.ma.getmaskarray(hd) | numpy.ma.getmaskarray(tw))
+        hd = hd[~mask].data
+        tw = tw[~mask].data
+
+        range_ = (0.0, _2PI)
+        values, edges = numpy.histogram(
+            hd, bins=bins, range=range_, normed=False, weights=tw)
+
+        if mode == 'kde':
+            if bandwidth is None:
+                bandwidth = numpy.mean(edges[1:] - edges[:-1])
+            kappa = 1.0 / (bandwidth * bandwidth)
+            centers = .5 * (edges[1:] + edges[:-1])
+            values = vonmises_kde(hd, centers, kappa)
+            values *= (self.total_time() / numpy.sum(values))
+        elif mode != 'histogram':
+            raise ValueError("Unknown 'mode': {}".format(mode))
+
+        return IntensityMap(values, (edges, ))
+
+    def hd_distribution(self, bins, mode='kde', bandwidth=None,
+                        normalize=False):
+        """
+        Compute the distribution of times spent with different head directions
+
+        Parameters
+        ----------
+        bins : int or array-like
+            Specification of the bins in which to compute the distribution. If
+            an integer, the range [0, 2 * pi] will be divided into this many
+            equally wide bins. If an array, it is assumed that the array give
+            the bin edges.
+        mode : {'histogram', 'kde'}, optional
+            String to select how occupancy map is computed. If `'histogram'`
+            the map is computed by counting the time spent in each bin. If
+            `'kde'`, the value in the center of each bin is computed using
+            kernel density estimation using the von Mises kernel, width
+            dispersion given by `1.0 / (bandwidth ** 2)`.
+        bandwidth : scalar, optional
+            Kernel bandwidth if `mode='kde'`: `1.0 / (bandwidth ** 2)` is used
+            as the dispersion in the von Mises kernel. If None, the (average)
+            bin width is used as bandwidth. If `mode` is different from
+            `'kde'`, this parameter has no effect.
+        normalize : bool, optional
+            If True, the occupancy map will be normalized to have sum 1, such
+            that it can be interpreted as a frequency distribution for the
+            head direction. Otherwise, the occupancy map gives the total time
+            spent in each bin, such that it sums up to the total time of the
+            experiment.
+
+        Returns
+        -------
+        IntensityMap
+            Head direction distribution.
+
+        """
+        hd_dist = self._hd_distribution(bins, mode, bandwidth)
+
+        if normalize:
+            hd_dist /= self.total_time()
+
+        return hd_dist
 
     def total_time(self):
         """
@@ -2723,24 +2800,275 @@ class Cell(BaseCell):
         return ratemap.smooth(post_bandwidth, kernel=kernel,
                               normalize=normalize_smoothing)
 
-    def hd_score(self, bias_correction=True, **kwargs):
+    def spike_hd(self, **kwargs):
         """
-        Compute the head direction score of the cell
-
-        The head direction score is the squared length of the circular mean
-        of the head direction vector at the spike times of the cell.
-        A correction can be applied to get an unbiased estimator of the squared
-        length of the circular mean of the underlying distribution.
+        Get the head direction of the rat at each spike from the cell
 
         Parameters
         ----------
-        bias_correction : bool, optional
-            If True, an unbiased estimator of the squared length of the
-            circular mean of the underlying distribution is returned.
-            Otherwise, the raw circular mean of the head direction vectors at
-            the spike times is returned.
         kwargs: dict, optional
             Not used.
+
+        Returns
+        -------
+        spike_hd : ndarray
+            Array of head directions corresponding to the spike train.
+
+        """
+        pos = self.position
+        t = pos.filtered_data()['t']
+        hd = pos.hd()
+        spike_t = self.data['spike_t']
+        return self.interpolate_spikes(spike_t, t, hd)
+
+    @memoize_method
+    def _spike_hd_dist(self, bins, map_mode, bandwidth, kernel):
+        """
+        Compute the distribution of head directions at spiking times
+
+        This part of the computation in `Cell.spike_hd_dist` is factored out
+        to optimize memoization.
+
+        """
+        # We use self._hd_distribution to instantiate the BinnedSet, to avoid
+        # creating unneccesary instance duplicates.
+        hd_distribution = self._hd_distribution(bins)
+        bset = hd_distribution.bset
+        edges = bset.edges[0]
+
+        spike_hd = numpy.ma.compressed(self.spike_hd())
+
+        if map_mode == 'histogram':
+            range_ = (0.0, _2PI)
+            values, __ = numpy.histogram(spike_hd, bins=edges, range=range_,
+                                         normed=False)
+        elif map_mode == 'kde':
+            kappa = 1.0 / (bandwidth * bandwidth)
+            centers = .5 * (edges[1:] + edges[:-1])
+            values = vonmises_kde(spike_hd, centers, kappa)
+            values *= (self.nspikes() / numpy.sum(values))
+        else:
+            raise ValueError("Unknown 'map_mode': {}".format(map_mode))
+        return IntensityMap(values, bset)
+
+    def spike_hd_dist(self, normalize_spike_hd_dist=False, bins=_ANGULAR_NBINS,
+                      hd_dist_mode=None, bandwidth=_ANGULAR_BANDWIDTH,
+                      kernel='gaussian', normalize_smoothing=True, **kwargs):
+        """
+        Compute the distribution of head directions at spiking times
+
+        Parameters
+        ----------
+        normalize_spike_hd_dist : bool, optional
+            If True, the spike head direction distribution will be normalized
+            to have sum 1, such that it can be interpreted as a distribution of
+            spatial spiking fractions.
+        bins
+            See `Cell.hd_distribution`.
+        hd_dist_mode : None or {'histogram', 'kde'}, optional
+            String to select whether to compute the head direction distribution
+            using bin counts (histogram) or kernel density estimation. If None,
+            the default mode for ratemaps, set at initialization and stored in
+            `self.params`, is used.
+        bandwidth : scalar, optional
+            Bandwidth of the kernel used in the smoothing filter (if
+            `hd_dist_mode='histogram'`) or kernel density estimation (if
+            `hd_dist_mode='kde'`).
+        kernel : string, optional
+            Kernel used in the smoothing if `hd_dist_mode='histogram'`. See
+            `IntensityMap2D.smooth` (..note:: defaults may differ). If
+            `map_mode='kde'`, this keyword has no effect, and the distribution
+            is computed using the von Mises kernel.
+        normalize_smoothing
+            Passed as keyword 'normalize' to `IntensityMap.smooth` if
+            `map_mode='histogram'`.
+        **kwargs : dict, optional
+            Keyword arguments are passed to `Cell.nspikes`.
+
+        Returns
+        -------
+        IntensityMap
+            Head direction distribution at spiking times.
+
+        """
+        if hd_dist_mode is None:
+            hd_dist_mode = self.params['map_mode']
+
+        spike_hd_dist = self._spike_hd_dist(bins, hd_dist_mode, bandwidth,
+                                            kernel)
+        if normalize_spike_hd_dist:
+            spike_hd_dist /= self.nspikes(**kwargs)
+        if hd_dist_mode == 'histogram':
+            spike_hd_dist = spike_hd_dist.smooth(bandwidth, kernel=kernel,
+                                                 normalize=normalize_smoothing,
+                                                 periodic=True)
+        return spike_hd_dist
+
+    def _hd_distribution(self, bins, hd_dist_mode='kde',
+                         bandwidth=_ANGULAR_BANDWIDTH,
+                         normalize_hd_distribution=False):
+        """
+        Compute the head direction distribution
+
+        This part of the computation in `Cell.hd_distribution` is factored out
+        as a courtesy to `Cell.spike_hd_dist`.
+
+        """
+        return self.position.hd_distribution(
+            bins=bins, mode=hd_dist_mode, bandwidth=bandwidth,
+            normalize=normalize_hd_distribution)
+
+    def hd_distribution(self, normalize_hd_distribution=False,
+                        bins=_ANGULAR_NBINS, hd_dist_mode=None,
+                        bandwidth=_ANGULAR_BANDWIDTH, kernel='gaussian',
+                        normalize_smoothing=True, **kwargs):
+        """
+        Compute the head direction distribution
+
+        Parameters
+        ----------
+        normalize_hd_distribution : bool, optional
+            If True, the head direction distribution will be normalized to have
+            sum 1, such that it can be interpreted as a frequency distribution
+            for the head directions.
+        bins
+            Bin specification. See `Position.hd_distribution` for details.
+        hd_dist_mode : None or {'histogram', 'kde'}, optional
+            String to select whether to compute the head direction distribution
+            using bin counts (histogram) or kernel density estimation. If None,
+            the default mode for ratemaps, set at initialization and stored in
+            `self.params`, is used.
+        bandwidth : scalar, optional
+            Bandwidth of the kernel used in the smoothing filter (if
+            `hd_dist_mode='histogram'`) or kernel density estimation (if
+            `hd_dist_mode='kde'`).
+        kernel : string, optional
+            Kernel used in the smoothing if `hd_dist_mode='histogram'`. See
+            `IntensityMap2D.smooth` (..note:: defaults may differ). If
+            `map_mode='kde'`, this keyword has no effect, and the distribution
+            is computed using the von Mises kernel.
+        normalize_smoothing
+            Passed as keyword 'normalize' to `IntensityMap.smooth` if
+            `map_mode='histogram'`.
+        **kwargs : dict, optional
+            Keyword arguments are passed to `Cell.nspikes`.
+
+        Returns
+        -------
+        IntensityMap
+            Head direction distribution.
+
+        """
+        if hd_dist_mode is None:
+            hd_dist_mode = self.params['map_mode']
+        hd_distribution = self._hd_distribution(
+            bins, hd_dist_mode=hd_dist_mode, bandwidth=bandwidth,
+            normalize_hd_distribution=normalize_hd_distribution)
+        if hd_dist_mode == 'histogram':
+            hd_distribution = hd_distribution.smooth(
+                bandwidth, kernel=kernel, normalize=normalize_smoothing,
+                periodic=True)
+        return hd_distribution
+
+    @memoize_method
+    def hd_rate(self, normalize_ratemean=False, bins=_ANGULAR_NBINS,
+                hd_dist_mode=None, bandwidth=_ANGULAR_BANDWIDTH,
+                kernel='gaussian', smoothing_mode='pre',
+                normalize_smoothing=True, **kwargs):
+        """
+        Compute the head direction firing rate distribution of the cell
+
+        Parameters
+        ----------
+        normalize_ratemean : bool, optional
+            If True, the firing rate is normalized such that the mean firing
+            rate is 1.0.
+        bins
+            See `Cell.hd_distribution`.
+        hd_dist_mode : None or {'histogram', 'kde'}, optional
+            String to select whether to compute the head direction distribution
+            using bin counts (histogram) or kernel density estimation. If None,
+            the default mode for ratemaps, set at initialization and stored in
+            `self.params`, is used.
+        bandwidth : scalar, optional
+            Bandwidth of the kernel used in the smoothing filter if
+            `hd_dist_mode='histogram'` and `smoothing_mode='post'`. See
+            `IntensityMap2D.smooth` (..note:: defaults may differ). Passed on
+            to `Cell.spike_hd_dist` and `Cell.hd_dsitribution`.
+        kernel : string, optional
+            Kernel used in the smoothing if `hd_dist_mode='histogram'` and
+            `smoothing_mode='post'`. See `IntensityMap2D.smooth` (..note::
+            defaults may differ). Passed on to `Cell.spike_hd_dist` and
+            `Cell.hd_dsitribution`.
+        smoothing_mode : {'pre', 'post'}, optional
+            If `map_mode='histogram'`, the smoothing filter can be applied at
+            two different times in the computation. This parameter selects
+            which. If `map_mode='kde'`, this parameter has no effect.
+
+            ``pre``
+                The head direction distribution and spiking time head direction
+                distribution are smoothed individually, and then divided to
+                create the head direction firing rate distribution.
+            ``post``
+                The and spiking time head direction histogram is divided by the
+                head direction histogram to create a raw firing head direction
+                firing rate distribution, and the smoothing filter is applied
+                to this to create the final head direction firing rate
+                distribution.
+        normalize_smoothing
+            Passed on to `Cell.spike_hd_dist` and `Cell.hd_distribution`.
+        **kwargs: dict, optional
+            Passed on to `Cell.spike_hd_dist`, `Cell.hd_distribution` and
+            `Cell.rate_mean`.
+
+        Returns
+        -------
+        IntensityMap
+            Firing rate map.
+
+        """
+        if hd_dist_mode is None:
+            hd_dist_mode = self.params['map_mode']
+
+        if hd_dist_mode == 'kde' or smoothing_mode == 'pre':
+            pre_bandwidth = bandwidth
+            post_bandwidth = 0.0
+        elif smoothing_mode == 'post':
+            pre_bandwidth = 0.0
+            post_bandwidth = bandwidth
+        else:
+            raise ValueError("Unknown 'smoothing_mode': {}"
+                             .format(smoothing_mode))
+
+        kwargs.update(
+            bins=bins,
+            hd_dist_mode=hd_dist_mode,
+            bandwidth=pre_bandwidth,
+            kernel=kernel,
+            normalize_spike_hd_dist=False,
+            normalize_hd_distribution=False,
+            normalize_smoothing=normalize_smoothing,
+        )
+
+        spike_hd_dist = self.spike_hd_dist(**kwargs)
+        hd_distribution = self.hd_distribution(**kwargs)
+
+        hd_rate = spike_hd_dist / hd_distribution
+        if normalize_ratemean:
+            kwargs.update(normalize_ratemean=False)
+            hd_rate /= self.rate_mean(**kwargs)
+
+        return hd_rate.smooth(post_bandwidth, kernel=kernel,
+                              normalize=normalize_smoothing, periodic=True)
+
+    def hd_mean(self, **kwargs):
+        """
+        Compute the circular mean of the head direction firing rate of the cell
+
+        Parameters
+        ----------
+        kwargs: dict, optional
+            Keyword arguments are passed to `Cell.hd_rate`.
 
         Returns
         -------
@@ -2748,18 +3076,33 @@ class Cell(BaseCell):
             Head direction score.
 
         """
-        pos = self.position
-        t = pos.filtered_data()['t']
-        hd = pos.head_direction()
-        spike_t = self.data['spike_t']
-        spike_hd = self.interpolate_spikes(spike_t, t, hd)
-        cos_rm = numpy.ma.mean(numpy.ma.cos(spike_hd))
-        sin_rm = numpy.ma.mean(numpy.ma.sin(spike_hd))
-        r2m = cos_rm * cos_rm + sin_rm * sin_rm
-        if bias_correction:
-            n = spike_hd.size
-            r2m = (n / (n - 1)) * (r2m - 1.0 / n)
-        return r2m
+        hd_rate = self.hd_rate(**kwargs)
+        centers = hd_rate.bset.centers[0]
+        hd_int = hd_rate.integral()
+        xm = (hd_rate * numpy.cos(centers)).integral() / hd_int
+        ym = (hd_rate * numpy.sin(centers)).integral() / hd_int
+        return xm, ym
+
+    def hd_score(self, **kwargs):
+        """
+        Compute the head direction score of the cell
+
+        The head direction score is the length of the circular mean of the head
+        direction firing rate distribution.
+
+        Parameters
+        ----------
+        kwargs: dict, optional
+            Keyword arguments are passed to `Cell.hd_mean`.
+
+        Returns
+        -------
+        hd_score : scalar
+            Head direction score.
+
+        """
+        xm, ym = self.hd_mean(**kwargs)
+        return numpy.sqrt(xm * xm + ym * ym)
 
     # This is really a stochastic property and should ideally not be memoized,
     # but ain't nobody got time for that.

@@ -1262,7 +1262,8 @@ class IntensityMap(AlmostImmutable):
 
         return type(self)(new_data, new_bset)
 
-    def smooth(self, bandwidth, kernel='gaussian', normalize=False):
+    def smooth(self, bandwidth, kernel='gaussian', normalize=False,
+               periodic=False):
         """
         Return a new IntensityMap instance which is a smoothed version of this
 
@@ -1287,6 +1288,10 @@ class IntensityMap(AlmostImmutable):
                      False, values beyond the boundary are interpreted as 0.0,
                      and the presence of missing values will raise
                      a ValueError.
+        periodic : bool, optional
+            If True, periodic boundary conditions are assumed. Otherwise,
+            values beyond the boundary are assumed to be 0.0 (the bias from
+            this assumption can be compensated by setting `normalize=True`).
         :returns: new, smoothed IntensityMap instance defined over the same
                   BinnedSet instance as this
 
@@ -1303,7 +1308,10 @@ class IntensityMap(AlmostImmutable):
 
         size = [bandwidth / numpy.mean(w) for w in self.bset.binwidths]
 
-        options = {'mode': 'constant', 'cval': 0.0}
+        if periodic:
+            options = dict(mode='wrap')
+        else:
+            options = dict(mode='constant', cval=0.0)
         if kernel == 'gaussian':
             def smoothfunc(arr):
                 return filters.gaussian_filter(arr, size, **options)
