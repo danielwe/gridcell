@@ -50,6 +50,8 @@ except NameError:
 
 _PI = numpy.pi
 _2PI = 2.0 * _PI
+_PI_2 = _PI / 2.0
+_PI_3 = _PI / 3.0
 
 
 class FeatureNames(object):
@@ -503,7 +505,7 @@ class Position(AlmostImmutable):
         """
         Compute a map of occupancy times
 
-        This part of the computation in `BaseCell.occupancy` is factored out
+        This part of the computation in `Position.occupancy` is factored out
         to optimize memoization.
 
         """
@@ -511,9 +513,9 @@ class Position(AlmostImmutable):
         x, y, tw = fdata['x'], fdata['y'], fdata['tweights']
         mask = (numpy.ma.getmaskarray(x) | numpy.ma.getmaskarray(y) |
                 numpy.ma.getmaskarray(tw))
-        x = x[~mask]
-        y = y[~mask]
-        tw = tw[~mask]
+        x = x[~mask].data
+        y = y[~mask].data
+        tw = tw[~mask].data
         values, xedges, yedges = numpy.histogram2d(
             x, y, bins=bins, range=range_, normed=False, weights=tw)
 
@@ -616,7 +618,7 @@ class Position(AlmostImmutable):
         x1, y1, x2, y2 = fdata['x1'], fdata['y1'], fdata['x2'], fdata['y2']
         xdiff, ydiff = x2 - x1, y2 - y1
         angle = numpy.ma.arctan2(ydiff, xdiff)
-        return numpy.ma.mod(angle + 0.5 * numpy.pi, 2.0 * numpy.pi)
+        return numpy.ma.mod(angle + _PI_2, _2PI)
 
     def total_time(self):
         """
@@ -2374,10 +2376,9 @@ class Cell(BaseCell):
         bins, range_
             See `Cell.occupancy`.
         kernel : string, optional
-            Kernel used in the smoothing filter or kernel density estimation.
-            See `IntensityMap2D.smooth` (if `ratemap_mode='histogram'`) or
-            `sklearn.neighbors.KernelDensity` (if `ratemap_mode='kde'`)
-            (..note:: defaults may differ).
+            Kernel used in the kernel density estimation.
+            See `sklearn.neighbors.KernelDensity` (..note:: defaults may
+            differ).
         **kwargs : dict, optional
             Not in use, only there to swallow extraneous keywords.
 
@@ -2417,8 +2418,11 @@ class Cell(BaseCell):
 
         data = self.data
         spike_x, spike_y = data['spike_x'], data['spike_y']
-        spike_data = numpy.column_stack((numpy.ma.compressed(spike_x),
-                                         numpy.ma.compressed(spike_y)))
+        mask = (numpy.ma.getmaskarray(spike_x) |
+                numpy.ma.getmaskarray(spike_y))
+
+        spike_data = numpy.column_stack((spike_x[~mask].data,
+                                         spike_y[~mask].data))
 
         spike_grid.fit(spike_data)
         return spike_grid.best_params_['bandwidth']
@@ -2433,15 +2437,17 @@ class Cell(BaseCell):
 
         """
         # We use self._occupancy to instantiate the BinnedSet, to avoid
-        # creating unneccesary duplicate objects.
+        # creating unneccesary instance duplicates.
         occupancy = self._occupancy(bins, range_)
         bset = occupancy.bset
         xedges, yedges = bset.xedges, bset.yedges
 
         data = self.data
         spike_x, spike_y = data['spike_x'], data['spike_y']
-        spike_x = numpy.ma.compressed(spike_x)
-        spike_y = numpy.ma.compressed(spike_y)
+        mask = (numpy.ma.getmaskarray(spike_x) |
+                numpy.ma.getmaskarray(spike_y))
+        spike_x = spike_x[~mask].data
+        spike_y = spike_y[~mask].data
 
         if map_mode == 'histogram':
             values, __, __ = numpy.histogram2d(spike_x, spike_y,
@@ -2485,14 +2491,14 @@ class Cell(BaseCell):
             `self.params`, is used.
         bandwidth : scalar, optional
             Bandwidth of the kernel used in the smoothing filter (if
-            `ratemap_mode='histogram'`) or kernel density estimation (if
-            `ratemap_mode='kde'`). If None, the default bandwidth, set at
+            `map_mode='histogram'`) or kernel density estimation (if
+            `map_mode='kde'`). If None, the default bandwidth, set at
             initialization and stored in `self.params`, is used.
         kernel : string, optional
             Kernel used in the smoothing filter or kernel density estimation.
-            See `IntensityMap2D.smooth` (if `ratemap_mode='histogram'`) or
-            `sklearn.neighbors.KernelDensity` (if `ratemap_mode='kde'`)
-            (..note:: defaults may differ).
+            See `IntensityMap2D.smooth` (if `map_mode='histogram'`) or
+            `sklearn.neighbors.KernelDensity` (if `map_mode='kde'`) (..note::
+            defaults may differ).
         normalize_smoothing
             Passed as keyword 'normalize' to `IntensityMap2D.smooth`.
         **kwargs : dict, optional
@@ -2519,7 +2525,7 @@ class Cell(BaseCell):
 
     def nspikes(self, **kwargs):
         """
-        Count the number of spikes recorded from this cell
+        Count the number of valid spikes recorded from this cell
 
         Parameters
         ----------
@@ -2532,12 +2538,15 @@ class Cell(BaseCell):
             Number of spikes.
 
         """
-        return len(numpy.ma.compressed(self.data['spike_x']))
+        data = self.data
+        mask = (numpy.ma.getmaskarray(data['spike_x']) |
+                numpy.ma.getmaskarray(data['spike_y']))
+        return numpy.sum((~mask).astype(numpy.int_))
 
     def _occupancy(self, bins, range_, map_mode='kde', bandwidth=None,
                    kernel='gaussian', normalize_occupancy=False):
         """
-        Compute a map of the recorded spikes
+        Compute a map of occupancy times
 
         This part of the computation in `Cell.occupancy` is factored out
         as a courtesy to `Cell.spikemap`.
@@ -2575,17 +2584,17 @@ class Cell(BaseCell):
             `self.params`, is used.
         bandwidth : scalar, optional
             Bandwidth of the kernel used in the smoothing filter (if
-            `ratemap_mode='histogram'`) or kernel density estimation (if
-            `ratemap_mode='kde'`). If None, the default bandwidth, set at
+            `map_mode='histogram'`) or kernel density estimation (if
+            `map_mode='kde'`). If None, the default bandwidth, set at
             initialization and stored in `self.params`, is used.
         kernel : string, optional
             Kernel used in the smoothing filter or kernel density estimation.
-            See `IntensityMap2D.smooth` (if `ratemap_mode='histogram'`) or
-            `sklearn.neighbors.KernelDensity` (if `ratemap_mode='kde'`)
-            (..note:: defaults may differ).
+            See `IntensityMap2D.smooth` (if `map_mode='histogram'`) or
+            `sklearn.neighbors.KernelDensity` (if `map_mode='kde'`) (..note::
+            defaults may differ).
         normalize_smoothing
             Passed as keyword 'normalize' to `IntensityMap2D.smooth` if
-            `ratemap_mode='histogram'`.
+            `map_mode='histogram'`.
         **kwargs : dict, optional
             Not in use.
 
@@ -2644,19 +2653,19 @@ class Cell(BaseCell):
             ratemap mode, set at initialization and stored in `self.params`, is
             used.
         bandwidth : scalar, optional
-            Bandwidth of the kernel used in the smoothing filter (if
-            `ratemap_mode='histogram'`) or kernel density estimation (if
-            `ratemap_mode='kde'`). If None, the default bandwidth, set at
-            initialization and stored in `self.params`, is used.
+            Bandwidth of the kernel used in the smoothing filter if
+            `map_mode='histogram'` and `smoothing_mode='post'`. See
+            `IntensityMap2D.smooth` (..note:: defaults may differ). Passed on
+            to `Cell.spikemap` and `Cell.occupancy`.
         kernel : string, optional
-            Kernel used in the smoothing filter or kernel density estimation.
-            See `IntensityMap2D.smooth` (if `ratemap_mode='histogram'`) or
-            `sklearn.neighbors.KernelDensity` (if `ratemap_mode='kde'`)
-            (..note:: defaults may differ).
+            Kernel used in the smoothing if `map_mode='histogram'` and
+            `smoothing_mode='post'`. See `IntensityMap2D.smooth` (..note::
+            defaults may differ). Passed on to `Cell.spikemap` and
+            `Cell.occupancy`.
         smoothing_mode : {'pre', 'post'}, optional
-            If `ratemap_mode='histogram'`, the smoothing filter can be applied
-            at two different times in the computation. This parameter selects
-            which. If `ratemap_mode='kde'`, this parameter has no effect.
+            If `map_mode='histogram'`, the smoothing filter can be applied at
+            two different times in the computation. This parameter selects
+            which. If `map_mode='kde'`, this parameter has no effect.
 
             ``pre``
                 The occupancy map and spike histogram are smoothed
@@ -2666,10 +2675,9 @@ class Cell(BaseCell):
                 a raw firing rate map, and the smoothing filter is applied to
                 this to create the final firing rate map.
         normalize_smoothing
-            Passed as keyword 'normalize' to `IntensityMap2D.smooth` if
-            `ratemap_mode='histogram'`.
+            Passed on to `Cell.spikemap` and `Cell.occupancy`.
         **kwargs: dict, optional
-            Passed on to `Cell.occupancy`, `Cell.spikemap` and
+            Passed on to `Cell.spikemap`, `Cell.occupancy` and
             `Cell.rate_mean`.
 
         Returns
@@ -2699,13 +2707,13 @@ class Cell(BaseCell):
             map_mode=map_mode,
             bandwidth=pre_bandwidth,
             kernel=kernel,
-            normalize_occupancy=False,
             normalize_spikemap=False,
+            normalize_occupancy=False,
             normalize_smoothing=normalize_smoothing,
         )
 
-        occupancy = self.occupancy(**kwargs)
         spikemap = self.spikemap(**kwargs)
+        occupancy = self.occupancy(**kwargs)
 
         ratemap = spikemap / occupancy
         if normalize_ratemean:
@@ -3893,7 +3901,6 @@ class CellCollection(AlmostImmutable, MutableSequence):
         kwargs.update(vmin=vmin)
         return self.stacked_ratemap(**rate_kw).plot(**kwargs)
 
-_PI_3 = _PI / 3.0
 _COS_PI_3, _SIN_PI_3 = numpy.cos(_PI_3), numpy.sin(_PI_3)
 
 REGULAR_GRID_PEAKS = numpy.array(
