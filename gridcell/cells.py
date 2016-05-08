@@ -27,6 +27,7 @@ from __future__ import (absolute_import, division, print_function,
                         unicode_literals)
 from abc import ABCMeta, abstractmethod
 
+from math import ceil
 import numpy
 import pandas
 from scipy import signal, linalg, spatial
@@ -37,9 +38,10 @@ from matplotlib import pyplot
 from collections import MutableSequence
 
 from .utils import (AlmostImmutable, gaussian, sensibly_divide,  #add_ticks
-                    project_vectors, vonmises_kde)
+                    project_vectors, lattice_peaks)
+from .kde import kernel_density_estimators as kdes
 from .shapes import Ellipse
-from .imaps import IntensityMap, IntensityMap2D
+from .imaps import IntensityMap, IntensityMap2D, BinnedSet2D
 from .pointpatterns import PointPattern, Window
 from .memoize.memoize import memoize_method, Memparams
 
@@ -52,6 +54,8 @@ _PI = numpy.pi
 _2PI = 2.0 * _PI
 _PI_2 = _PI / 2.0
 _PI_3 = _PI / 3.0
+
+_SQRT2 = numpy.sqrt(2.0)
 
 _ANGULAR_NBINS = 120
 _ANGULAR_BANDWIDTH = numpy.deg2rad(6.0)
@@ -195,7 +199,7 @@ class Position(AlmostImmutable):
 
         x = numpy.ma.squeeze(x)
         y = numpy.ma.squeeze(y)
-        nanmask = numpy.logical_or(numpy.isnan(x), numpy.isnan(y))
+        nanmask = numpy.isnan(x) | numpy.isnan(y)
         x = numpy.ma.masked_where(nanmask, x)
         y = numpy.ma.masked_where(nanmask, y)
 
@@ -224,7 +228,7 @@ class Position(AlmostImmutable):
 
             x2 = numpy.ma.squeeze(x2)
             y2 = numpy.ma.squeeze(y2)
-            nanmask2 = numpy.logical_or(numpy.isnan(x2), numpy.isnan(y2))
+            nanmask2 = numpy.isnan(x2) | numpy.isnan(y2)
             x2 = numpy.ma.masked_where(nanmask2, x2)
             y2 = numpy.ma.masked_where(nanmask2, y2)
             x2split, y2split = xysplit(tsplit, x2, y2)
@@ -289,7 +293,7 @@ class Position(AlmostImmutable):
         mean_dt = numpy.mean(tsteps)
         old_splits = numpy.zeros_like(tsteps, dtype=numpy.bool_)
         splits = find_splits(mean_dt)
-        while numpy.any(numpy.logical_and(splits, ~old_splits)):
+        while numpy.any(splits & (~old_splits)):
             mean_dt = numpy.mean(tsteps[~splits])
             old_splits = splits
             splits = find_splits(mean_dt)
@@ -364,6 +368,10 @@ class Position(AlmostImmutable):
         dweights : list
             (Masked) array containing the covered distance (distance weight)
             associated with each position sample.
+        speed_bandwidth : non-negative scalar
+            Length of the time span over which to average the computed speed at
+            each sample. Should be given in the same unit as the time samples
+            in `t`.
 
         Returns
         -------
@@ -430,20 +438,27 @@ class Position(AlmostImmutable):
             raise ValueError("'min_speed' must be a non-negative number")
 
         xsplitf, ysplitf, tweightssplit, dweightssplit = [], [], [], []
-        speedmasksplit, speedsplit = [], []
+        nanmasksplit, speedmasksplit, masksplit, speedsplit = [], [], [], []
         for ts, xs, ys in zip(tsplit, xsplit, ysplit):
             tw, dw = self.time_and_distance_weights(ts, xs, ys)
             s = self.speed(tw, dw, speed_bandwidth)
-            sm = numpy.logical_or(s < min_speed, numpy.ma.getmaskarray(s))
-            xs = numpy.ma.masked_where(sm, xs)
-            ys = numpy.ma.masked_where(sm, ys)
-            tw = numpy.ma.masked_where(sm, tw)
-            dw = numpy.ma.masked_where(sm, dw)
+            nm = (numpy.ma.getmaskarray(xs) | numpy.ma.getmaskarray(ys))
+            sm = numpy.logical_or(
+                numpy.ma.getmaskarray(s),
+                numpy.ma.filled(s, fill_value=numpy.nan) < min_speed,
+            )
+            m = nm | sm
+            xs = numpy.ma.masked_where(m, xs)
+            ys = numpy.ma.masked_where(m, ys)
+            tw = numpy.ma.masked_where(m, tw)
+            dw = numpy.ma.masked_where(m, dw)
             xsplitf.append(xs)
             ysplitf.append(ys)
             tweightssplit.append(tw)
             dweightssplit.append(dw)
+            nanmasksplit.append(nm)
             speedmasksplit.append(sm)
+            masksplit.append(m)
             speedsplit.append(s)
 
         t = data['t']
@@ -452,7 +467,9 @@ class Position(AlmostImmutable):
         tweights = numpy.ma.hstack(tweightssplit)
         dweights = numpy.ma.hstack(dweightssplit)
         speed = numpy.ma.hstack(speedsplit)
-        speedmask = numpy.ma.hstack(speedmasksplit)
+        nanmask = numpy.hstack(nanmasksplit)
+        speedmask = numpy.hstack(speedmasksplit)
+        mask = numpy.hstack(masksplit)
         fdata = dict(
             t=t,
             x=xf,
@@ -460,14 +477,18 @@ class Position(AlmostImmutable):
             tweights=tweights,
             dweights=dweights,
             speed=speed,
+            nanmask=nanmask,
             speedmask=speedmask,
+            mask=mask,
             tsplit=tsplit,
             xsplit=xsplit,
             ysplit=ysplit,
             tweightssplit=tweightssplit,
             dweightssplit=dweightssplit,
             speedsplit=speedsplit,
+            nanmasksplit=nanmasksplit,
             speedmasksplit=speedmasksplit,
+            masksplit=masksplit,
         )
 
         if self.dual_positions:
@@ -475,13 +496,12 @@ class Position(AlmostImmutable):
             x2split, y2split = data['x2split'], data['y2split']
             x1splitf, y1splitf = [], []
             x2splitf, y2splitf = [], []
-            for ts, x1s, y1s, x2s, y2s, sm in zip(tsplit, x1split, y1split,
-                                                  x2split, y2split,
-                                                  speedmasksplit):
-                x1s = numpy.ma.masked_where(sm, x1s)
-                y1s = numpy.ma.masked_where(sm, y1s)
-                x2s = numpy.ma.masked_where(sm, x2s)
-                y2s = numpy.ma.masked_where(sm, y2s)
+            for ts, x1s, y1s, x2s, y2s, m in zip(tsplit, x1split, y1split,
+                                                 x2split, y2split, masksplit):
+                x1s = numpy.ma.masked_where(m, x1s)
+                y1s = numpy.ma.masked_where(m, y1s)
+                x2s = numpy.ma.masked_where(m, x2s)
+                y2s = numpy.ma.masked_where(m, y2s)
                 x1splitf.append(x1s)
                 y1splitf.append(y1s)
                 x2splitf.append(x2s)
@@ -522,30 +542,30 @@ class Position(AlmostImmutable):
         values, xedges, yedges = numpy.histogram2d(
             x, y, bins=bins, range=range_, normed=False, weights=tw)
 
-        if mode == 'kde':
+        if mode == 'histogram':
+            occ = IntensityMap2D(values, (xedges, yedges))
+        elif mode == 'kde':
             if bandwidth is None:
                 xwidth = numpy.mean(xedges[1:] - xedges[:-1])
                 ywidth = numpy.mean(yedges[1:] - yedges[:-1])
                 bandwidth = .5 * (xwidth + ywidth)
-            pkde = KernelDensity(bandwidth=bandwidth, kernel=kernel)
-            pdata = numpy.column_stack((x, y))
-            pkde.fit(pdata)
-
             xcenters = .5 * (xedges[1:] + xedges[:-1])
             ycenters = .5 * (yedges[1:] + yedges[:-1])
             yyc, xxc = numpy.meshgrid(ycenters, xcenters)
-            values = pkde.score_samples(
-                numpy.column_stack((xxc.ravel(),
-                                    yyc.ravel()))).reshape(xxc.shape)
-            values = numpy.exp(values)
-            values *= (self.total_time() / numpy.sum(values))
-        elif mode != 'histogram':
+            sample_points = numpy.column_stack((xxc.ravel(), yyc.ravel()))
+            pdata = numpy.column_stack((x, y))
+            kde = kdes[kernel]
+            values = kde(pdata, sample_points, bandwidth, weights=tw)
+            values = values.reshape(xxc.shape)
+            values = IntensityMap2D(values, (xedges, yedges))
+            occ = values * values.bset.area
+        else:
             raise ValueError("Unknown 'mode': {}".format(mode))
 
-        return IntensityMap2D(values, (xedges, yedges))
+        return occ
 
     def occupancy(self, bins, range_=None, mode='kde', bandwidth=None,
-                  kernel='gaussian', normalize=False):
+                  kernel='triweight', normalize=False):
         """
         Compute a map of occupancy times
 
@@ -572,11 +592,12 @@ class Position(AlmostImmutable):
             `bandwidth`.
         bandwidth : scalar, optional
             Kernel bandwidth if `mode='kde'`. If None, the (average) bin width
-            is used as bandwidth. If `mode` is different from `'kde'`, this
-            parameter has no effect.
+            is used as bandwidth. The bandwidth is always interpreted as the
+            standard deviation of the kernel, regardless of kernel shape and
+            support. If `mode` is different from `'kde'`, this parameter has no
+            effect.
         kernel : string, optional
-            The kernel to use if `mode='kde'`. See
-            `sklearn.neighbors.KernelDensity` for details.
+            The kernel to use if `mode='kde'`. Details to come.
         normalize : bool, optional
             If True, the occupancy map will be normalized to have sum 1, such
             that it can be interpreted as a frequency distribution for the
@@ -596,6 +617,35 @@ class Position(AlmostImmutable):
             occupancy /= self.total_time()
 
         return occupancy
+
+    def time_spent_in_region(self, xc, yc, r):
+        """
+        Compute the time spent within a circular region
+
+        Parameters
+        ----------
+        xc, yc : scalars
+            Center of the circular region to consider.
+        r : positive scalar
+            Radius of the circular region to consider.
+
+        Returns
+        -------
+        scalar
+            Time spent within the region.
+
+        """
+        fdata = self.filtered_data()
+        x, y, tw = fdata['x'], fdata['y'], fdata['tweights']
+        mask = (numpy.ma.getmaskarray(x) | numpy.ma.getmaskarray(y) |
+                numpy.ma.getmaskarray(tw))
+        x = x[~mask].data
+        y = y[~mask].data
+        tw = tw[~mask].data
+        dx, dy = x - xc, y - yc
+        distance = numpy.sqrt(dx * dx + dy * dy)
+        valid = (distance < r)
+        return numpy.sum(tw[valid])
 
     def hd(self):
         """
@@ -634,7 +684,7 @@ class Position(AlmostImmutable):
         """
         hd = self.hd()
         tw = self.filtered_data()['tweights']
-        mask = (numpy.ma.getmaskarray(hd) | numpy.ma.getmaskarray(tw))
+        mask = numpy.ma.getmaskarray(hd) | numpy.ma.getmaskarray(tw)
         hd = hd[~mask].data
         tw = tw[~mask].data
 
@@ -642,17 +692,20 @@ class Position(AlmostImmutable):
         values, edges = numpy.histogram(
             hd, bins=bins, range=range_, normed=False, weights=tw)
 
-        if mode == 'kde':
+        if mode == 'histogram':
+            occ = IntensityMap(values, (edges, ))
+        elif mode == 'kde':
             if bandwidth is None:
                 bandwidth = numpy.mean(edges[1:] - edges[:-1])
-            kappa = 1.0 / (bandwidth * bandwidth)
             centers = .5 * (edges[1:] + edges[:-1])
-            values = vonmises_kde(hd, centers, kappa)
-            values *= (self.total_time() / numpy.sum(values))
+            kde = kdes['vonmises']
+            values = kde(hd, centers, bandwidth, weights=tw)
+            values = IntensityMap(values, (edges, ))
+            occ = values * values.bset.area
         elif mode != 'histogram':
             raise ValueError("Unknown 'mode': {}".format(mode))
 
-        return IntensityMap(values, (edges, ))
+        return occ
 
     def hd_distribution(self, bins, mode='kde', bandwidth=None,
                         normalize=False):
@@ -782,7 +835,7 @@ class Position(AlmostImmutable):
         x, y, tw = fdata['x'], fdata['y'], fdata['tweights']
 
         if c is None:
-            c = 1.0 - (tw / numpy.nanmax(tw))
+            c = 1.0 - (tw / numpy.ma.max(tw))
 
         kwargs.update(marker=marker, s=s, c=c, alpha=alpha)
         return axes.scatter(x, y, **kwargs)
@@ -916,6 +969,28 @@ class BaseCell(AbstractAlmostImmutable):
         kwargs.update(normalize_occupancy=False)
         return (self.ratemap(**kwargs) * self.occupancy(**kwargs))
 
+    def nspikes(self, **kwargs):
+        """
+        Count the number of valid spikes recorded from this cell
+
+        No spike information is available here, so the number of spikes is
+        defined equal to the total time, such that the mean firing rate is 1.0.
+        This method should be reimplemented in derived classes where temporal
+        information is present.
+
+        Parameters
+        ----------
+        **kwargs : dict, optional
+            Not in use.
+
+        Returns
+        -------
+        integer
+            Number of spikes.
+
+        """
+        return self.total_time(**kwargs)
+
     def occupancy(self, normalize_occupancy=False, **kwargs):
         """
         Compute a map of occupancy times
@@ -969,7 +1044,7 @@ class BaseCell(AbstractAlmostImmutable):
         return self.occupancy(**kwargs).sum()
 
     @abstractmethod
-    def ratemap(self, normalize_ratemean=False, **kwargs):
+    def ratemap(self, normalize_rate=False, **kwargs):
         """
         Compute the firing rate map of the cell
 
@@ -978,9 +1053,8 @@ class BaseCell(AbstractAlmostImmutable):
 
         Parameters
         ----------
-        normalize_ratemean : bool, optional
-            If True, the firing rate is normalized such that the mean firing
-            rate is 1.0.
+        normalize_rate : bool, optional
+            If True, the firing rate is normalized by the mean firing rate.
         **kwargs : dict, optional
             Not in use.
 
@@ -992,7 +1066,7 @@ class BaseCell(AbstractAlmostImmutable):
         """
         pass
 
-    def rate_mean(self, normalize_ratemean=False, **kwargs):
+    def rate_mean(self, **kwargs):
         """
         Compute the spatial mean of the firing rate
 
@@ -1003,9 +1077,6 @@ class BaseCell(AbstractAlmostImmutable):
 
         Parameters
         ----------
-        normalize_ratemean : bool, optional
-            If True, the firing rate is normalized such that the mean firing
-            rate is 1.0.
         **kwargs : dict, optional
             Keyword arguments are passed to `BaseCell.spikemap` and
             `BaseCell.total_time`.
@@ -1016,10 +1087,7 @@ class BaseCell(AbstractAlmostImmutable):
             The spatial mean of the firing rate.
 
         """
-        if normalize_ratemean:
-            return 1.0
-        kwargs.update(normalize_spikemap=False)
-        return (self.spikemap(**kwargs).sum() / self.total_time(**kwargs))
+        return (self.nspikes(**kwargs) / self.total_time(**kwargs))
 
     def rate_std(self, **kwargs):
         """
@@ -1099,7 +1167,7 @@ class BaseCell(AbstractAlmostImmutable):
         return self.ratemap(**kwargs).autocorrelate(
             mode=mode, pearson=pearson, normalize=normalize_correlogram)
 
-    #@memoize_method
+    @memoize_method
     def corr(self, other, mode='full', pearson='global',
              normalize_correlogram=True, **kwargs):
         """
@@ -1127,7 +1195,7 @@ class BaseCell(AbstractAlmostImmutable):
         """
         # Register this cell for memoize cache clearance whenever this is
         # performed on the other cell.
-        #memoize_method.register_friend(other, self)
+        memoize_method.register_friend(other, self)
         return self.ratemap(**kwargs).correlate(
             other.ratemap(**kwargs), mode=mode, pearson=pearson,
             normalize=normalize_correlogram)
@@ -1259,11 +1327,9 @@ class BaseCell(AbstractAlmostImmutable):
 
         if project_peaks:
             # Project to true lattice vectors
-            pmat = (1 / 6) * linalg.toeplitz([2, 1, -1, -2, -1, 1])
-            peaks = pmat.dot(peaks)
+            peaks = lattice_peaks(peaks)
 
         if normalize_peaks:
-            kwargs.update(project_peaks=project_peaks)
             peaks /= self.scale(**kwargs)
 
         if polar_peaks:
@@ -1387,6 +1453,63 @@ class BaseCell(AbstractAlmostImmutable):
                                 ecc * numpy.sin(theta)))
         return numpy.array((ecc, theta))
 
+    def unit_cell_vertices(self, cell_type='voronoi', **kwargs):
+        """
+        Compute the vertices of a unit cell of the grid pattern
+
+        Parameters
+        ----------
+        cell_type : {'voronoi', 'rhomboid'}, optional
+            If 'voronoi', the vertices for the central Voronoi unit cell of the
+            grid pattern is computed. If 'rhomboid', the vertices of
+            a rhomboidal unit cell with four grid pattern nodes as vertices is
+            computed.
+        **kwargs : dict, optional
+            Keyword arguments are passed to `BaseCell.grid_peaks`.
+
+        Returns
+        -------
+        ndarray, shape (6, 2)
+            Coordinates of the vertices of the unit cell, sorted by angle
+            with the x axis.
+
+        """
+        pkw = dict(kwargs)
+        pkw.update(polar_peaks=False, project_peaks=True)
+        grid_peaks = self.grid_peaks(**pkw)
+
+        peak_pattern = numpy.vstack(((0.0, 0.0), grid_peaks))
+        if cell_type == 'voronoi':
+            voronoi = spatial.Voronoi(peak_pattern)
+            vertices = voronoi.vertices[
+                voronoi.regions[voronoi.point_region[0]]]
+        elif cell_type == 'rhomboid':
+            vertices = numpy.vstack((peak_pattern[:2],
+                                     peak_pattern[1] + peak_pattern[2],
+                                     peak_pattern[2]))
+        else:
+            raise ValueError("Unknown 'cell_type': {}".format(cell_type))
+
+        return vertices
+
+    def unit_cell(self, **kwargs):
+        """
+        Create a Window instance representing a grid pattern unit cell
+
+        Parameters
+        ----------
+        **kwargs : dict, optional
+            Keyword arguments are passed to `BaseCell.unit_cell_vertices`.
+            Note in particular the keyword `cell_type`.
+
+        Returns
+        -------
+        Window
+            Window instance representing the unit cell.
+
+        """
+        return Window(self.unit_cell_vertices(**kwargs))
+
     def sparsity(self, **kwargs):
         """
         Compute the spatial sparsity of the firing rate map of the cell
@@ -1493,7 +1616,7 @@ class BaseCell(AbstractAlmostImmutable):
                 rot_ring_mask = rot_ring_data.mask
 
                 # Compute doughnut overlap
-                full_mask = numpy.logical_or(ring_mask, rot_ring_mask)
+                full_mask = ring_mask | rot_ring_mask
                 ring_olap = numpy.ma.array(ring_data, mask=full_mask)
                 rot_ring_olap = numpy.ma.array(rot_ring_data,
                                                mask=full_mask)
@@ -1652,6 +1775,67 @@ class BaseCell(AbstractAlmostImmutable):
         ffarr *= 1.0 / numpy.abs(ffarr).max()
 
         return IntensityMap2D(ffarr, bset)
+
+    def firing_field_radius(self, **kwargs):
+        """
+        Compute a radius characterizing the average firing field of the cell
+
+        Parameters
+        ----------
+        **kwargs : dict, optional
+            Keyword arguments are passed to `BaseCell.firing_field`.
+
+        Returns
+        -------
+        scalar
+            Firing field radius.
+
+        """
+        return 2.0 * (linalg.det(self.firing_field(**kwargs)) ** 0.25)
+        #return self.scale(**kwargs) * numpy.sqrt(0.1)  # 2.0 / 7.0
+
+    def firing_fields(self, fixed_radius=True, **kwargs):
+        """
+        Detect firing fields in the ratemap
+
+        Parameters
+        ----------
+        fixed_radius : bool, optional
+            If True, the returned firing fields will all have a common radius
+            given by `BaseCell.firing_field_radius`. Otherwise, the radius
+            corresponding to the scale at which the blob was detected will be
+            used.
+        **kwargs : dict, optional
+            Additional keyword arguments are passed to `BaseCell.firing_field`
+            and `BaseCell.ratemap`.
+
+        Returns
+        -------
+        ndarray, shape (n, 3)
+            Array containing information about the `n` detected fields. Each
+            row [x, y, r] contains the x and y coordinates and radius of one
+            field.
+
+        """
+        radius = self.firing_field_radius(**kwargs)
+        sig = radius / _SQRT2
+        default_bins = self.ratemap(**kwargs).shape
+        custom_bins = (2 * default_bins[0], 2 * default_bins[1])
+        rmap = self.ratemap(bins=custom_bins)
+        threshold = 0.4 * rmap.mean()
+        fields = rmap.blobs(
+            min_sigma=sig,
+            max_sigma=1.25 * sig,
+            num_sigma=26,
+            prune_overlap=True,
+            threshold=threshold,
+            log_scale=False,
+            ignore_missing=True,
+            exclude_edges=True,
+        )
+        if fixed_radius:
+            fields[:, 2] = radius
+        return fields
 
     def features(self, index=FeatureNames.default_features, weights=None,
                  roll=0, normalize_peaks=True, **kwargs):
@@ -2225,106 +2409,182 @@ class TemplateGridCell(BaseCell):
     firing_field : array-like, shape (2, 2)
         Array containing the covariance matrix characterizing the shape of the
         firing fields. See `BaseCell.firing_field` for an explanation.
-    bset : BinnedSet2D
-        A BinnedSet2D instance defining the region over which to construct the
-        firing rate map of the cell.
+    bins, range_:
+        Bin and range specification. See `BinnedSet.from_range_shape` for
+        details (`bins` is equivalent to `shape`).
     **kwargs : dict, optional
         Keyword arguments are passed to `BaseCell`.
 
     """
-    def __init__(self, peaks, firing_field, bset, **kwargs):
+    def __init__(self, peaks, firing_field, bins, range_, **kwargs):
+        if not numpy.allclose(peaks, lattice_peaks(peaks)):
+            raise ValueError("'peaks' does not define a consistent lattice")
+
         BaseCell.__init__(self, **kwargs)
         if not hasattr(self, 'data'):
             setattr(self, 'data', {})
         self.data.update(
             peaks=peaks,
             firing_field=firing_field,
-            bset=bset
+        )
+        self.params.update(
+            bins=bins,
+            range_=range_,
         )
 
-    @staticmethod
-    def construct_ratemap(peaks, firing_field, bset):
+    def grid(self, range_=None):
         """
-        Construct an idealized grid cell firing rate map
+        Find all grid nodes within a rectangular range
 
         Parameters
         ----------
-        peaks : array-like, shape (6, 2)
-            Array containing the six primary lattice vectors of the grid
-            pattern.  These vectors are equivalent to the coordinates of the
-            six inner peaks in the autocorrelogram of the cell, as returned by
-            e.g.  `BaseCell.grid_peaks`.
-        firing_field : array-like, shape (2, 2)
-            Array containing the covariance matrix characterizing the shape of
-            the firing fields. See `BaseCell.firing_field` for an explanation.
-        bset : BinnedSet2D
-            A BinnedSet2D instance defining the region over which to construct
-            the firing rate map of the cell.
+        range_ : sequence
+            Sequence containing two range tuples, one for each spatial
+            direction. Each range tuple contains the minimum and maximum value
+            along the corresponding dimension.
 
         Returns
         -------
-        IntensityMap2D
-            Firing rate map.
+        ndarray, shape (n, 2)
+            Array containing the coordinates of all peaks of the pattern found
+            within 'range_'
 
         """
-        xcm, ycm = bset.cmesh
-        xypoints = numpy.vstack((xcm.ravel(), ycm.ravel())).transpose()
+        if range_ is None:
+            range_ = self.params['range_']
 
-        # Compute the major lattice vectors from one hexagon center to the next
-        lattice = peaks + numpy.roll(peaks, 1, axis=0)
-        lattice_r1 = numpy.roll(lattice, 1, axis=0)
+        peaks = self.grid_peaks()
+        peaks_r1 = numpy.roll(peaks, 1, axis=0)
 
-        # Find the number of rounds of adding hexagonal pattern around the
-        # center is needed in order to fill the range defined by the bset
-        midlattice = 0.5 * (lattice + lattice_r1)
-        mlx, mly = midlattice[:, 0], midlattice[:, 1]
-        mldsq = mlx * mlx + mly * mly
+        # Find the number of rounds of adding fields around the center needed
+        # in order to fill the range
+        midpeaks = 0.5 * (peaks + peaks_r1)
+        mpx, mpy = midpeaks[:, 0], midpeaks[:, 1]
+        mpdsq = mpx * mpx + mpy * mpy
 
-        dx, dy = 0.5 * xcm.ptp(), 0.5 * ycm.ptp()
+        rx, ry = range_
+        dx, dy = 0.5 * (rx[1] - rx[0]), 0.5 * (ry[1] - ry[0])
         diagsq = dx * dx + dy * dy
 
-        levels = int(numpy.ceil(numpy.sqrt(diagsq / mldsq.min())))
+        levels = int(numpy.ceil(numpy.sqrt(diagsq / mpdsq.min())))
 
-        pattern = numpy.vstack(((0.0, 0.0), peaks))
-        all_peaks = [pattern]
+        all_peaks = [[0.0, 0.0]]
         for i in range(levels + 1):
             for l in range(i):
                 k = i - l
-                disp = k * lattice + l * lattice_r1
-                if (k - l) % 3 == 0:
-                    for d in disp:
-                        all_peaks.append(pattern + d)
-                else:
-                    for d in disp:
-                        all_peaks.append(d)
+                all_peaks.append(k * peaks + l * peaks_r1)
         all_peaks = numpy.vstack(all_peaks)
 
-        # Compute the firing rate
-        firing_rate = 0.0
-        for peak in all_peaks:
-            firing_rate += gaussian(xypoints, mean=peak, cov=firing_field)
+        # We have rounded up, so we probably need to remove a few peaks
+        within = numpy.logical_and(
+            numpy.logical_and(
+                numpy.logical_and(
+                    rx[0] < all_peaks[:, 0],
+                    all_peaks[:, 0] < rx[1],
+                ),
+                ry[0] < all_peaks[:, 1],
+            ),
+            all_peaks[:, 1] < ry[1],
+        )
+        all_peaks = all_peaks[within]
 
-        # Normalize to a mean firing rate of 1.0
-        firing_rate /= numpy.mean(firing_rate)
+        # Sort
+        all_peaks = all_peaks[numpy.argsort(all_peaks[:, 1])]
+        all_peaks = all_peaks[numpy.argsort(all_peaks[:, 0])]
 
-        # Reshape to the shape of xcm and ycm
-        firing_rate = firing_rate.reshape(xcm.shape)
+        return all_peaks
 
-        return IntensityMap2D(firing_rate, bset)
+    def firing_rate(self, x, y, phase=(0.0, 0.0), amplitude_cv=0.0):
+        """
+        Compute the firing rate at a location
+
+        Parameters
+        ----------
+        x, y : array-like
+            Coordinates at which to evaluate the firing rate.
+        amplitude_cv : scalar, optional
+            The amplitudes of the firing fields are drawn independently from
+            a distribution with this coefficient of variance (ratio of standard
+            deviation to mean).
+        phase : tuple, optional
+            Spatial phase of the ratemap. Zero phase, `(0.0, 0.0)`, places
+            a firing field at the origin.
+
+        Returns
+        -------
+        ndarray, same shape as x and y
+            Firing rate at locations given by `x` and `y`.
+
+        """
+        x, y = numpy.broadcast_arrays(x - phase[0], y - phase[1])
+        frate = numpy.zeros_like(x, dtype=numpy.float_)
+        valid = ~(numpy.isnan(x) | numpy.isnan(y))
+        xv, yv = x[valid], y[valid]
+        frate[~valid] = numpy.nan
+
+        points = numpy.column_stack((xv, yv))
+        peaks = self.grid_peaks()
+        voronoi = self.unit_cell(cell_type='voronoi')
+
+        #points = voronoi.wrap_into(points)
+        #pattern = numpy.vstack(((0.0, 0.0), peaks))
+
+        peaks_r1 = numpy.roll(peaks, 1, axis=0)
+        mid = 0.5 * (peaks + peaks_r1)
+        midx, midy = mid[:, 0], mid[:, 1]
+        midr_sq = midx * midx + midy * midy
+        diag_sq = xv * xv + yv * yv
+        rounds = int(ceil(numpy.sqrt(numpy.max(diag_sq) / numpy.min(midr_sq))))
+        rounds += 1  # Just to be sure
+
+        pattern = [numpy.array((0.0, 0.0))]
+        for k in range(1, rounds + 1):
+            for l in range(k):
+                pattern.extend((k - l) * peaks + l * peaks_r1)
+        l = len(pattern)
+
+        if amplitude_cv > 0.0:
+            cv_sq = amplitude_cv * amplitude_cv
+
+            # Gamma
+            shape = 1.0 / cv_sq
+            scale = cv_sq
+            amplitudes = numpy.random.gamma(shape, scale=scale, size=l)
+
+            ## Log-normal
+            #log_cv_sqp1 = numpy.log(1.0 + cvsq)
+            #mean = -.5 * log_cv_sqp1
+            #sigma = numpy.sqrt(log_cv_sqp1)
+            #amplitudes = numpy.random.lognormal(mean, sigma=sigma, size=l)
+        else:
+            amplitudes = numpy.ones(l)
+
+        # Scale to get expected mean firing rate 1.0 (approximation: all mass
+        # of gaussians contained within unit cell area)
+        amplitudes *= voronoi.area
+
+        ffield = self.firing_field()
+        for peak, amplitude in zip(pattern, amplitudes):
+            frate[valid] += amplitude * gaussian(points, mean=peak, cov=ffield)
+        return frate
 
     @memoize_method
-    def ratemap(self, normalize_ratemean=False, **kwargs):
+    def ratemap(self, normalize_rate=False, bins=None, range_=None, **kwargs):
         """
         Compute the firing rate map of the template grid cell
 
         Parameters
         ----------
-        normalize_ratemean : bool, optional
+        normalize_rate : bool, optional
             This keyword has no effect here: since the firing rate of
             a TemplateGridCell is synthetic, it is always normalized to mean
-            1.0.
+            rate 1.0.
+        bins, range_
+            Bin and range specification. See `Position.occupancy` for details.
+            If None, the default specification, set at initialization and
+            stored in `self.params`, is used.
         **kwargs : dict, optional
-            Not in use.
+            Passed to `TemplateGridCell.firing_rate`.
 
         Returns
         -------
@@ -2332,15 +2592,51 @@ class TemplateGridCell(BaseCell):
             Firing rate map.
 
         """
-        data = self.data
-        return self.construct_ratemap(data['peaks'], data['firing_field'],
-                                      data['bset'])
+        if bins is None:
+            bins = self.params['bins']
+        if range_ is None:
+            range_ = self.params['range_']
+        bset = BinnedSet2D.from_range_shape(range_, bins)
+        xcm, ycm = bset.cmesh
+        firing_rate = self.firing_rate(
+            xcm.ravel(), ycm.ravel(), **kwargs).reshape(bins)
+
+        return IntensityMap2D(firing_rate, bset)
 
     def _peaks(self, *args, **kwargs):
         return self.data['peaks']
 
     def firing_field(self, **kwargs):
         return self.data['firing_field']
+
+    def firing_fields(self, fixed_radius=True, **kwargs):
+        """
+        Detect firing fields in the ratemap
+
+        Here in the template cell, this is done simply by using the lattice
+        information.
+
+        Parameters
+        ----------
+        fixed_radius : bool, optional
+            No effect here; the radius of all fields is given by
+            `TemplateGridCell.firing_field_radius`.
+        **kwargs : dict, optional
+            Additional keyword arguments are passed to `TemplateGridCell.grid`
+            and `TemplateGridCell.firing_field_radius`. Note in particular the
+            keyword `range_`.
+
+        Returns
+        -------
+        ndarray, shape (n, 3)
+            Array containing information about the `n` detected fields. Each
+            row [x, y, r] contains the x and y coordinates and radius of one
+            field.
+
+        """
+        coordinates = self.grid(**kwargs)
+        radius = self.firing_field_radius(**kwargs)
+        return numpy.column_stack((coordinates, [radius] * len(coordinates)))
 
 
 class Cell(BaseCell):
@@ -2437,27 +2733,15 @@ class Cell(BaseCell):
         return spike_x
 
     @memoize_method
-    def bandwidth(self, bins=None, range_=None, kernel='gaussian',
-                  **kwargs):
+    def bandwidth(self):
         """
-        Find the kernel bandwidth to use for ratemaps
+        Find the kernel bandwidth to when computing ratemaps
 
-        The bandwidth is looked up in `self.params`. If the value `'cv'` is
-        found, the optimal bandwidth is computed using cross validation on
-        kernel density estimates of the spatial spike distribution. The number
-        of folds in the cross validation is equal to the square root of the
-        number of spikes, truncated to integer.
-
-        Parameters
-        ----------
-        bins, range_
-            See `Cell.occupancy`.
-        kernel : string, optional
-            Kernel used in the kernel density estimation.
-            See `sklearn.neighbors.KernelDensity` (..note:: defaults may
-            differ).
-        **kwargs : dict, optional
-            Not in use, only there to swallow extraneous keywords.
+        The bandwidth is looked up in `self.params`. However, if the value
+        `'cv'` is found, the optimal bandwidth is computed using cross
+        validation on Gaussian kernel density estimates of the spatial spike
+        distribution.  The number of folds in the cross validation is equal to
+        the square root of the number of spikes, truncated to integer.
 
         Returns
         -------
@@ -2469,38 +2753,22 @@ class Cell(BaseCell):
         bandwidth = params['bandwidth']
         if bandwidth != 'cv':
             return bandwidth
-        occupancy = self._occupancy(bins, range_)
-        bset = occupancy.bset
-        range_ = bset.range_
-        shortest_binw = min(numpy.mean(binw) for binw in bset.binwidths)
-        shortest_edge = min(r[1] - r[0] for r in range_)
-        bw_min, bw_max = 0.5 * shortest_binw, 0.1 * shortest_edge
-        bw_step = 0.002 * shortest_edge
-        bw_max = max(bw_max, bw_min + bw_step)
-        if 0.5 * bw_max <= bw_min and 2.0 * bw_min >= bw_max:
-            # Range is short, use same step length everywhere
-            bandwidths = numpy.arange(bw_min, bw_max, bw_step)
-        else:
-            # Range is long, split it up and use different step lengths
-            if 0.5 * bw_max > bw_min:
-                bw_mid = 0.5 * bw_max
-            else:
-                bw_mid = 2.0 * bw_min
-            bw1 = numpy.arange(bw_min, bw_mid, bw_step)
-            bw2 = numpy.arange(bw1[-1], bw_max, 2.5 * bw_step)
-            bandwidths = numpy.hstack((bw1, bw2))
-        spike_grid = GridSearchCV(KernelDensity(kernel=kernel),
-                                  dict(bandwidth=bandwidths),
-                                  cv=10)
-
         data = self.data
         spike_x, spike_y = data['spike_x'], data['spike_y']
         mask = (numpy.ma.getmaskarray(spike_x) |
                 numpy.ma.getmaskarray(spike_y))
-
         spike_data = numpy.column_stack((spike_x[~mask].data,
                                          spike_y[~mask].data))
 
+        n = spike_data.shape[0]
+        silverman_constant = n ** (-1.0 / 6.0)
+        std = numpy.det(numpy.cov(spike_data.T)) ** 0.25
+        bw_max = 1.1 * silverman_constant * std
+        bw_min = 0.1 * bw_max
+        bandwidths = numpy.linspace(bw_min, bw_max, 100)
+        spike_grid = GridSearchCV(KernelDensity(kernel='gaussian'),
+                                  dict(bandwidth=bandwidths),
+                                  cv=10)
         spike_grid.fit(spike_data)
         return spike_grid.best_params_['bandwidth']
 
@@ -2521,8 +2789,7 @@ class Cell(BaseCell):
 
         data = self.data
         spike_x, spike_y = data['spike_x'], data['spike_y']
-        mask = (numpy.ma.getmaskarray(spike_x) |
-                numpy.ma.getmaskarray(spike_y))
+        mask = numpy.ma.getmaskarray(spike_x) | numpy.ma.getmaskarray(spike_y)
         spike_x = spike_x[~mask].data
         spike_y = spike_y[~mask].data
 
@@ -2531,24 +2798,20 @@ class Cell(BaseCell):
                                                bins=(xedges, yedges),
                                                normed=False)
         elif map_mode == 'kde':
-            skde = KernelDensity(bandwidth=bandwidth, kernel=kernel)
-            sdata = numpy.column_stack((spike_x, spike_y))
-            skde.fit(sdata)
-
             xcenters = .5 * (xedges[1:] + xedges[:-1])
             ycenters = .5 * (yedges[1:] + yedges[:-1])
             yyc, xxc = numpy.meshgrid(ycenters, xcenters)
-            values = skde.score_samples(
-                numpy.column_stack((xxc.ravel(),
-                                    yyc.ravel()))).reshape(xxc.shape)
-            values = numpy.exp(values)
-            values *= (self.nspikes() / numpy.sum(values))
+            sample_points = numpy.column_stack((xxc.ravel(), yyc.ravel()))
+            sdata = numpy.column_stack((spike_x, spike_y))
+            kde = kdes[kernel]
+            values = len(sdata) * kde(sdata, sample_points, bandwidth)
+            values = values.reshape(xxc.shape) * bset.area
         else:
             raise ValueError("Unknown 'map_mode': {}".format(map_mode))
         return IntensityMap2D(values, bset)
 
     def spikemap(self, normalize_spikemap=False, bins=None, range_=None,
-                 map_mode=None, bandwidth=None, kernel='gaussian',
+                 map_mode=None, bandwidth=None, kernel='triweight',
                  normalize_smoothing=True, **kwargs):
         """
         Compute a map of the spatial spike distribution
@@ -2572,10 +2835,9 @@ class Cell(BaseCell):
             `map_mode='kde'`). If None, the default bandwidth, set at
             initialization and stored in `self.params`, is used.
         kernel : string, optional
-            Kernel used in the smoothing filter or kernel density estimation.
-            See `IntensityMap2D.smooth` (if `map_mode='histogram'`) or
-            `sklearn.neighbors.KernelDensity` (if `map_mode='kde'`) (..note::
-            defaults may differ).
+            The kernel to use in the smoothing filter if
+            `map_mode='histogram'`, or kernel density estimation if
+            `map_mode=kde`. Details to come.
         normalize_smoothing
             Passed as keyword 'normalize' to `IntensityMap2D.smooth`.
         **kwargs : dict, optional
@@ -2588,7 +2850,7 @@ class Cell(BaseCell):
 
         """
         if bandwidth is None:
-            bandwidth = self.bandwidth(bins=bins, range_=range_, kernel=kernel)
+            bandwidth = self.bandwidth()
         if map_mode is None:
             map_mode = self.params['map_mode']
 
@@ -2616,12 +2878,12 @@ class Cell(BaseCell):
 
         """
         data = self.data
-        mask = (numpy.ma.getmaskarray(data['spike_x']) |
-                numpy.ma.getmaskarray(data['spike_y']))
+        spike_x, spike_y = data['spike_x'], data['spike_y']
+        mask = numpy.ma.getmaskarray(spike_x) | numpy.ma.getmaskarray(spike_y)
         return numpy.sum((~mask).astype(numpy.int_))
 
     def _occupancy(self, bins, range_, map_mode='kde', bandwidth=None,
-                   kernel='gaussian', normalize_occupancy=False):
+                   kernel='triweight', normalize_occupancy=False):
         """
         Compute a map of occupancy times
 
@@ -2639,7 +2901,7 @@ class Cell(BaseCell):
                                        normalize=normalize_occupancy)
 
     def occupancy(self, normalize_occupancy=False, bins=None, range_=None,
-                  map_mode=None, bandwidth=None, kernel='gaussian',
+                  map_mode=None, bandwidth=None, kernel='triweight',
                   normalize_smoothing=True, **kwargs):
         """
         Compute a map of occupancy times
@@ -2682,7 +2944,7 @@ class Cell(BaseCell):
 
         """
         if bandwidth is None:
-            bandwidth = self.bandwidth(bins=bins, range_=range_, kernel=kernel)
+            bandwidth = self.bandwidth()
         if map_mode is None:
             map_mode = self.params['map_mode']
         occupancy = self._occupancy(bins, range_, map_mode=map_mode,
@@ -2711,17 +2973,16 @@ class Cell(BaseCell):
         return self.position.total_time()
 
     @memoize_method
-    def ratemap(self, normalize_ratemean=False, bins=None, range_=None,
-                map_mode=None, bandwidth=None, kernel='gaussian',
+    def ratemap(self, normalize_rate=False, bins=None, range_=None,
+                map_mode=None, bandwidth=None, kernel='triweight',
                 smoothing_mode='pre', normalize_smoothing=True, **kwargs):
         """
         Compute the firing rate map of the cell
 
         Parameters
         ----------
-        normalize_ratemean : bool, optional
-            If True, the firing rate is normalized such that the mean firing
-            rate is 1.0.
+        normalize_rate : bool, optional
+            If True, the firing rate is normalized by the mean firing rate.
         bins, range_
             See `Cell.occupancy`.
         map_mode : None or {'histogram', 'kde'}, optional
@@ -2766,7 +3027,7 @@ class Cell(BaseCell):
         if map_mode is None:
             map_mode = self.params['map_mode']
         if bandwidth is None:
-            bandwidth = self.bandwidth(bins=bins, range_=range_, kernel=kernel)
+            bandwidth = self.bandwidth()
 
         if map_mode == 'kde' or smoothing_mode == 'pre':
             pre_bandwidth = bandwidth
@@ -2793,12 +3054,41 @@ class Cell(BaseCell):
         occupancy = self.occupancy(**kwargs)
 
         ratemap = spikemap / occupancy
-        if normalize_ratemean:
-            kwargs.update(normalize_ratemean=False)
+        if normalize_rate:
             ratemap /= self.rate_mean(**kwargs)
 
         return ratemap.smooth(post_bandwidth, kernel=kernel,
                               normalize=normalize_smoothing)
+
+    def mean_rate_in_region(self, xc, yc, r):
+        """
+        Compute the mean firing rate of the cell within a circular region
+
+        Parameters
+        ----------
+        xc, yc : scalars
+            Center of the circular region to consider.
+        r : positive scalar
+            Radius of the circular region to consider.
+
+        Returns
+        -------
+        scalar
+            Mean firing rate within the region (the number of spikes recorded
+            within the region divided by the time spent there).
+
+        """
+        data = self.data
+        spike_x, spike_y = data['spike_x'], data['spike_y']
+        mask = numpy.ma.getmaskarray(spike_x) | numpy.ma.getmaskarray(spike_y)
+        spike_x = spike_x[~mask].data
+        spike_y = spike_y[~mask].data
+        dx, dy = spike_x - xc, spike_y - yc
+        distance = numpy.sqrt(dx * dx + dy * dy)
+        valid = (distance < r)
+        nspikes = distance[valid].size
+        time = self.position.time_spent_in_region(xc, yc, r)
+        return nspikes / time
 
     def spike_hd(self, **kwargs):
         """
@@ -2822,7 +3112,7 @@ class Cell(BaseCell):
         return self.interpolate_spikes(spike_t, t, hd)
 
     @memoize_method
-    def _spike_hd_dist(self, bins, map_mode, bandwidth, kernel):
+    def _spike_hd_dist(self, bins, hd_dist_mode, bandwidth, kernel):
         """
         Compute the distribution of head directions at spiking times
 
@@ -2838,17 +3128,17 @@ class Cell(BaseCell):
 
         spike_hd = numpy.ma.compressed(self.spike_hd())
 
-        if map_mode == 'histogram':
+        if hd_dist_mode == 'histogram':
             range_ = (0.0, _2PI)
             values, __ = numpy.histogram(spike_hd, bins=edges, range=range_,
                                          normed=False)
-        elif map_mode == 'kde':
-            kappa = 1.0 / (bandwidth * bandwidth)
+        elif hd_dist_mode == 'kde':
             centers = .5 * (edges[1:] + edges[:-1])
-            values = vonmises_kde(spike_hd, centers, kappa)
-            values *= (self.nspikes() / numpy.sum(values))
+            kde = kdes['vonmises']
+            values = len(spike_hd) * kde(spike_hd, centers, bandwidth)
+            values *= bset.area
         else:
-            raise ValueError("Unknown 'map_mode': {}".format(map_mode))
+            raise ValueError("Unknown 'hd_dist_mode': {}".format(hd_dist_mode))
         return IntensityMap(values, bset)
 
     def spike_hd_dist(self, normalize_spike_hd_dist=False, bins=_ANGULAR_NBINS,
@@ -2971,7 +3261,7 @@ class Cell(BaseCell):
         return hd_distribution
 
     @memoize_method
-    def hd_rate(self, normalize_ratemean=False, bins=_ANGULAR_NBINS,
+    def hd_rate(self, normalize_rate=False, bins=_ANGULAR_NBINS,
                 hd_dist_mode=None, bandwidth=_ANGULAR_BANDWIDTH,
                 kernel='gaussian', smoothing_mode='pre',
                 normalize_smoothing=True, **kwargs):
@@ -2980,9 +3270,8 @@ class Cell(BaseCell):
 
         Parameters
         ----------
-        normalize_ratemean : bool, optional
-            If True, the firing rate is normalized such that the mean firing
-            rate is 1.0.
+        normalize_rate : bool, optional
+            If True, the firing rate is normalized by the mean firing rate.
         bins
             See `Cell.hd_distribution`.
         hd_dist_mode : None or {'histogram', 'kde'}, optional
@@ -3054,8 +3343,7 @@ class Cell(BaseCell):
         hd_distribution = self.hd_distribution(**kwargs)
 
         hd_rate = spike_hd_dist / hd_distribution
-        if normalize_ratemean:
-            kwargs.update(normalize_ratemean=False)
+        if normalize_rate:
             hd_rate /= self.rate_mean(**kwargs)
 
         return hd_rate.smooth(post_bandwidth, kernel=kernel,
@@ -3121,9 +3409,9 @@ class Cell(BaseCell):
 
         """
         kwargs.update(
-            bandwidth=2.0 * self.bandwidth(**kwargs),
+            bandwidth=2.0 * self.bandwidth(),
             normalize_occupancy=False,
-            normalize_ratemean=False,
+            normalize_rate=False,
         )
         rmap = self.ratemap(**kwargs)
 
@@ -3189,25 +3477,43 @@ class Cell(BaseCell):
         posdata = pos.data
         posparams = pos.params
 
-        t, x, y = posdata['t'], posdata['x'], posdata['y']
-        t_0, t_1 = t[(0, -1), ]
-        length = t_1 - t_0
+        tw = pos.filtered_data()['tweights']
+        cumtw = numpy.cumsum(tw)
+        length = cumtw[-1]
+        start_length, stop_length = length * start, length * stop
 
-        t_start, t_stop = t_0 + length * start, t_0 + length * stop
-        posindex = numpy.logical_and(t_start < t, t <= t_stop)
-        new_t, new_x, new_y = t[posindex], x[posindex], y[posindex]
-        new_pos = Position(new_t, new_x, new_y,
-                           speed_bandwidth=posparams['speed_bandwidth'],
-                           min_speed=posparams['min_speed'])
+        index = (start_length <= cumtw) & (cumtw < stop_length)
+
+        t = posdata['t'][index]
+        poskwargs = dict(
+            t=t,
+            min_speed=posparams['min_speed'],
+            speed_bandwidth=posparams['speed_bandwidth'],
+        )
+        poskwargs.update(**pos.info)
+        if pos.dual_positions:
+            poskwargs.update(
+                x=posdata['x1'][index],
+                y=posdata['y1'][index],
+                x2=posdata['x2'][index],
+                y2=posdata['y2'][index],
+            )
+        else:
+            poskwargs.update(
+                x=posdata['x'][index],
+                y=posdata['x'][index],
+            )
+
+        new_pos = Position(**poskwargs)
 
         spike_t = data['spike_t']
-        spikeindex = numpy.logical_and(t_start < spike_t, spike_t <= t_stop)
+        spikeindex = (t[0] <= spike_t) & (spike_t < t[-1])
         new_spike_t = data['spike_t'][spikeindex]
 
-        kwargs = self.info
-        kwargs.update(self.params)
+        cellkwargs = self.info
+        cellkwargs.update(self.params)
 
-        return Cell(position=new_pos, spike_t=new_spike_t, **kwargs)
+        return Cell(position=new_pos, spike_t=new_spike_t, **cellkwargs)
 
     def resample_spikes(self, length=1.0, replace=True):
         """
@@ -3752,7 +4058,7 @@ class CellCollection(AlmostImmutable, MutableSequence):
             Possible values:
 
             ``None``
-                No normalization si performed.
+                No normalization is performed.
             ``'max'``
                 The maximum value of each rate map is normalized to 1.0.
             ``'mean'``
@@ -4254,6 +4560,11 @@ REGULAR_GRID_PEAKS = numpy.array(
      [-_COS_PI_3, -_SIN_PI_3],
      [_COS_PI_3, -_SIN_PI_3]])
 
+CANONICAL_TEMPLATE = TemplateGridCell(REGULAR_GRID_PEAKS,
+                                      numpy.diag([0.05, 0.05]),
+                                      (150, 150),
+                                      ((-5.0, 5.0), (-5.0, 5.0)))
+
 
 class Module(CellCollection):
     """
@@ -4265,13 +4576,13 @@ class Module(CellCollection):
     See `CellCollection`.
 
     """
-    def _template_bset(self, **kwargs):
+    def _template_bins_range(self, **kwargs):
         """
-        Compute a BinnedSet2D for the template cell
+        Calculate bin and range parameters for a module template grid cell
 
-        The BinnedSet2D is created by extending the BinnedSet2D underlying the
-        firing rate maps of the cells in the module to three times the width in
-        each dimension.
+        The range and binning is determined by extending the range of the cells
+        in the module threefold in each direction, but keeping the same bin
+        resolution.
 
         Parameters
         ----------
@@ -4280,13 +4591,24 @@ class Module(CellCollection):
 
         Returns
         -------
-        BinnedSet2D
-            BinnedSet2D for the template cell.
+        tuple
+            Bin specification
+        tuple
+            Range specification
 
         """
         bset = self[0].ratemap(**kwargs).bset
-        extension = [(s, s) for s in bset.shape]
-        return bset.extend(extension)
+
+        cellbins = bset.shape
+        bins = (3 * cellbins[0], 3 * cellbins[1])
+
+        crx, cry = bset.range_
+        cwx = crx[1] - crx[0]
+        cwy = cry[1] - cry[0]
+        range_ = ((crx[0] - cwx, crx[1] + cwx),
+                  (cry[0] - cwy, cry[1] + cwy))
+
+        return bins, range_
 
     @memoize_method
     def template(self, template_kw=None, **kwargs):
@@ -4318,17 +4640,12 @@ class Module(CellCollection):
             template_kw = {}
         return TemplateGridCell(self.mean_grid_peaks(**kwargs),
                                 self.mean_firing_field(**kwargs),
-                                self._template_bset(**kwargs), **template_kw)
+                                *self._template_bins_range(**kwargs),
+                                **template_kw)
 
-    def window_vertices(self, window_type='voronoi', project_phases=False,
-                        **kwargs):
+    def window(self, window_type='voronoi', canonical=False, **kwargs):
         """
-        Compute the vertices of the window of possible grid phases
-
-        The window is defined as the central (Voronoi) unit cell in the grid
-        pattern of the template cell of the module (see `Module.template`),
-        that is, the set of points closer to the central firing field of this
-        cell than to any other firing field in its firing pattern.
+        Create a Window instance representing the phase window of the module
 
         Parameters
         ----------
@@ -4337,53 +4654,12 @@ class Module(CellCollection):
             the template cell of the module is used as window. If 'rhomboid',
             a rhomboidal unit cell with four grid pattern nodes as vertices is
             used as the window.
-        project_phases : bool, optional
-            If True, the window is derived from a regular hexagonal grid with
-            edge lengths 1.0, instead of from the module template cell.
+        canonical : bool, optional
+            If True, the window is the unit cell of a canonical grid with edge
+            lengths 1.0 and all 60-degree angles.
         **kwargs : dict, optional
             Keyword arguments are passed to `Module.template` and
-            `TemplateGridCell.grid_peaks`.
-
-        Returns
-        -------
-        ndarray, shape (6, 2)
-            Coordinates of the vertices of the phase window, sorted by angle
-            with the x axis.
-
-        """
-        if project_phases:
-            grid_peaks = REGULAR_GRID_PEAKS
-        else:
-            pkw = dict(kwargs)
-            pkw.update(polar_peaks=False)
-            grid_peaks = self.template(**kwargs).grid_peaks(**pkw)
-
-        peak_pattern = numpy.vstack(((0.0, 0.0), grid_peaks))
-        if window_type == 'voronoi':
-            voronoi = spatial.Voronoi(peak_pattern)
-            window = voronoi.vertices[
-                voronoi.regions[voronoi.point_region[0]]]
-        elif window_type == 'rhomboid':
-            window = numpy.vstack((peak_pattern[:2],
-                                   peak_pattern[1] + peak_pattern[2],
-                                   peak_pattern[2]))
-        else:
-            raise ValueError("Unknown 'window_type': {}".format(window_type))
-
-        return window
-
-    def window(self, **kwargs):
-        """
-        Create a Window instance representing the window of possible grid
-        phases
-
-        See `self.window_vertices` for an explanation of what the window is all
-        about.
-
-        Parameters
-        ----------
-        **kwargs : dict, optional
-            Keyword arguments are passed to `Module.window_vertices`.
+            `TemplateGridCell.unit_cell`.
 
         Returns
         -------
@@ -4391,7 +4667,11 @@ class Module(CellCollection):
             Window instance representing the grid phase window.
 
         """
-        return Window(self.window_vertices(**kwargs))
+        if canonical:
+            template = CANONICAL_TEMPLATE
+        else:
+            template = self.template(**kwargs)
+        return template.unit_cell(cell_type=window_type, **kwargs)
 
     @memoize_method
     def _phases(self, **kwargs):
@@ -4407,7 +4687,7 @@ class Module(CellCollection):
             {cell: cell.phase(template, **kwargs) for cell in self},
             index=('phase_x', 'phase_y')).transpose().loc[self]
 
-    def phases(self, project_phases=False, **kwargs):
+    def phases(self, canonical=False, **kwargs):
         """
         Compute the grid phases of the cells in the module.
 
@@ -4422,9 +4702,10 @@ class Module(CellCollection):
 
         Parameters
         ----------
-        project_phases : bool, optional
-            If True, phases are projected onto a regular hexagonal grid with
-            edge lengths 1.0.
+        canonical : bool, optional
+            If True, phases are subjected to the transform that takes the grid
+            pattern of the template to a perfect triangular lattice (the
+            ``canonical'' lattice for grid patterns).
         **kwargs : dict, optional
             Keyword arguments are passed to `BaseCell.phase`,
             `Module.template` and `TemplateGridCell.grid_peaks`.
@@ -4438,7 +4719,7 @@ class Module(CellCollection):
 
         """
         phases = self._phases(**kwargs)
-        if project_phases:
+        if canonical:
             pkw = dict(kwargs)
             pkw.update(polar_peaks=False, project_peaks=True)
             basis = self.template(**kwargs).grid_peaks(**pkw)[:2]
@@ -4466,7 +4747,7 @@ class Module(CellCollection):
              for pair in pl},
             columns=('phase_x', 'phase_y')).transpose().loc[pl]
 
-    def pairwise_phases(self, from_absolute=True, project_phases=False,
+    def pairwise_phases(self, from_absolute=True, canonical=False,
                         **kwargs):
         """
         Compute the pairwise relative grid phases of the cells in the module.
@@ -4483,7 +4764,7 @@ class Module(CellCollection):
         function. Use `Module.pairwise_phase_pattern` for window-aware, wrapped
         phases.
 
-        ..note:: If `from_absolute` and `project_phases` are both False, there
+        ..note:: If `from_absolute` and `canonical` are both False, there
         is no guarantee that the phases are well-defined with respect to
         a common window, and thus wrapping may not even make sense.
 
@@ -4493,10 +4774,9 @@ class Module(CellCollection):
             If True, the pairwise relative phases are computed as the
             difference of the corresponding aboslute differences. If False,
             each pairwise relative phase is computed using `BaseCell.phase`.
-        project_phases : bool, optional
-            If True, phases are projected onto a regular hexagonal grid with
-            edge lengths 1.0. The projection is based on the lattice defined by
-            the module template cell.
+        canonical : bool, optional
+            If True, phases are projected onto a the unit cell of the canonical
+            grid (see `Module.template`).
         **kwargs : dict, optional
             Keyword arguments are passed to `BaseCell.phase`,
             `Module.template` and `TemplateGridCell.grid_peaks`.
@@ -4511,7 +4791,7 @@ class Module(CellCollection):
 
         """
         if from_absolute:
-            kwargs.update(project_phases=project_phases)
+            kwargs.update(canonical=canonical)
             abs_phases = self.phases(**kwargs)
             pl = [(cell1, cell2) for cell1 in self for cell2 in self]
                   #if cell2 is not cell1]
@@ -4520,7 +4800,7 @@ class Module(CellCollection):
                  for pair in pl}).transpose().loc[pl]
 
         pairwise_phases = self._pairwise_phases(**kwargs)
-        if project_phases:
+        if canonical:
             pkw = dict(kwargs)
             pkw.update(polar_peaks=False, project_peaks=True)
             basis = self.template(**kwargs).grid_peaks(**pkw)[:2]
@@ -4564,7 +4844,7 @@ class Module(CellCollection):
             del kwargs['window_type']
 
         phases = self.phases(**kwargs)
-        phase_points = PointPattern.wrap_into(window, phases.values)
+        phase_points = window.wrap_into(phases.values)
         return PointPattern(phase_points, window,
                             edge_correction=edge_correction)
 
@@ -4632,8 +4912,8 @@ class Module(CellCollection):
                           for i in range(l - 1) for j in range(i + 1, l)]
 
         if not full_window:
-            ppoints = PointPattern.wrap_into(
-                window, pairwise_phases.loc[unique_indices].values)
+            ppoints = window.wrap_into(
+                pairwise_phases.loc[unique_indices].values)
             half_window = window.diagonal_cut()
             good_points = half_window.intersection(ppoints)
             bad_points = ppoints.difference(good_points)
@@ -4647,13 +4927,13 @@ class Module(CellCollection):
                 signs = numpy.mod(numpy.arange(len(unique_indices)), 2)
             signs = 2 * signs - 1
             indices = [ui[::s] for (ui, s) in zip(unique_indices, signs)]
-            phase_points = PointPattern.wrap_into(
-                window, pairwise_phases.loc[indices].values)
+            phase_points = window.wrap_into(
+                pairwise_phases.loc[indices].values)
         elif sign == 'both':
             indices = unique_indices + [ui[::-1] for ui in unique_indices]
 
-            phase_points = PointPattern.wrap_into(
-                window, pairwise_phases.loc[indices].values)
+            phase_points = window.wrap_into(
+                pairwise_phases.loc[indices].values)
         else:
             raise ValueError("unknown sign: {}.".format(sign))
 
@@ -4688,9 +4968,9 @@ class Module(CellCollection):
         """
         l = len(self)
         dmatrix = numpy.zeros((l, l))
-        w = self.window(window_type='voronoi', project_phases=True).centered()
-        ph = numpy.array(PointPattern.wrap_into(
-            w, self.pairwise_phases(project_phases=True).values))
+        w = self.window(window_type='voronoi', canonical=True).centered()
+        ph = numpy.array(w.wrap_into(
+            self.pairwise_phases(from_absolute=True, canonical=True).values))
         for i in range(l):
             for j in range(l):
                 p = ph[i * l + j]

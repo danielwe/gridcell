@@ -25,7 +25,7 @@ from __future__ import (absolute_import, division, print_function,
 import numpy
 from scipy import signal, fftpack, special
 from scipy.ndimage import filters, measurements, interpolation
-from skimage import feature  # , exposure
+from skimage import feature  #, exposure
 from matplotlib import pyplot
 
 from .utils import AlmostImmutable, sensibly_divide, pearson_correlogram
@@ -35,6 +35,9 @@ try:
     __ = basestring
 except NameError:
     basestring = str
+
+_SQRT2 = numpy.sqrt(2.0)
+_SQRT3 = numpy.sqrt(3.0)
 
 
 class BinnedSet(AlmostImmutable):
@@ -158,7 +161,7 @@ class BinnedSet(AlmostImmutable):
             center.append(0.5 * (r[0] + r[1]))
             binwidth.append((r[1] - r[0]) / n)
 
-        return cls.from_center_binwidth_shape(cls, center, binwidth, shape)
+        return cls.from_center_binwidth_shape(center, binwidth, shape)
 
     def __eq__(self, other):
         """
@@ -479,8 +482,8 @@ class BinnedSet(AlmostImmutable):
         Find the coordinates of positions given by (possibly fractional) bin
         indices
 
-        It is assumed that the given indices refer to the bin centers, NOT the
-        bin edges.
+        It is assumed that the given indices refer to the bin centers, and not
+        the bin edges.
 
         The coordinates of the positions are computed by interpolating with the
         given indices in the map from array indices to bin centers.
@@ -495,6 +498,34 @@ class BinnedSet(AlmostImmutable):
                   for (i, n, c) in zip(indices, self.shape, self.centers)]
         coords_arr = numpy.array(coords).transpose()
         return numpy.atleast_2d(coords_arr)
+
+    def bin_indices(self, coordinates):
+        """
+        Find the (possibly fractional) bin indices of positions given by
+        coordinates
+
+        The returned indices will refer to the bin centers, and not to the
+        bin edges.
+
+        The bin indices are computed by interpolating with the
+        given coordinates in the map from bin centers to array indices.
+
+        Parameters
+        ----------
+        coordinates : array-like
+            Sequence of coordinate tuples.
+
+        Returns
+        ------
+        ndarray
+            Array where element [i, j] gives the jth (fractional) index
+            corresponding to the ith coordinate position
+        """
+        coords = numpy.asarray(coordinates).transpose()
+        indices = [numpy.interp(coo, cen, range(n))
+                   for (coo, cen, n) in zip(coords, self.centers, self.shape)]
+        index_arr = numpy.array(indices).transpose()
+        return numpy.atleast_2d(index_arr)
 
     def extend(self, extension):
         """
@@ -1273,8 +1304,10 @@ class IntensityMap(AlmostImmutable):
                'bandwidth' will vary with 'kernel'.
         :kernel: choice of smoothing filter kernel. Supported values:
             'gaussian': an isotropic gaussian filter with standard deviation
-                        'size'
-            'tophat': a (hyper)square box filter with side lengths 'size'
+                        'bandwidth'
+            'tophat': a (hyper)square box filter with standard deviation
+                      'bandwidth' (that is, side lengths 'sqrt(12)
+                      * bandwidth')
                  If a more general smoothing filter is needed, the user should
                  construct the desired kernel manually and use the
                  IntensityMap.convolve() method. Remember to take into account
@@ -1316,6 +1349,8 @@ class IntensityMap(AlmostImmutable):
             def smoothfunc(arr):
                 return filters.gaussian_filter(arr, size, **options)
         elif kernel == 'tophat':
+            # Multiply by sqrt(12)
+            size = [2.0 * _SQRT3 * s for s in size]
             # Round bin size to nearest odd integer
             size = [2 * int(0.5 * s) + 1 for s in size]
 
@@ -1712,8 +1747,8 @@ class IntensityMap2D(IntensityMap):
         IntensityMap.__init__(self, data, bset, **kwargs)
 
     def blobs(self, min_sigma=None, max_sigma=None, num_sigma=25,
-              threshold=None, overlap=0.5, log_scale=True,
-              ignore_missing=False):
+              threshold=None, prune_overlap=True, log_scale=False,
+              ignore_missing=False, exclude_edges=False):
         """
         Detect blobs in the IntensityMap2D instance
 
@@ -1734,8 +1769,8 @@ class IntensityMap2D(IntensityMap):
                     skimage.feature.blob_log()). The method will not detect
                     blobs with radius smaller than approximately \sqrt{2}
                     * min_sigma. If None (default), a default value
-                    corresponding to the width of a single bin/pixel will be
-                    used.
+                    corresponding to a blob radius of about one twelfth of the
+                    shortest width of the intensity map will be used.
         :max_sigma: maximum standard deviation of the Gaussian kernel used in
                     the Gaussian-Laplace filter, given in the units used by the
                     underlying BinnedSet2D (NOT in bins/pixels, unlike
@@ -1753,11 +1788,11 @@ class IntensityMap2D(IntensityMap):
         :threshold: lower bound for scale-space maxima (that is, the minimum
                     height of detected peaks in the arrays created by passing
                     the intensity array through a Gaussian-Laplace filter). If
-                    None (default), the value self.data.min() + 0.2
-                    * self.data.ptp() will be used.
-        :overlap: maximum fraction of overlap of two detected blobs.
-                  If any two blobs overlap by a greater fraction than this, the
-                  smaller blob is discarded. Default value: 0.5.
+                    None (default), the mean of the data will be used.
+        prune_overlap : bool, optional
+            If False, overlapping blobs are permitted. If True, only the larger
+            of two overlapping blobs are kept. Overlap is defined using
+            `sqrt(2) * s` as the blob radius for a blob detected at sigma `s`.
         :log_scale: if True, intermediate sigma values are chosen with regular
                     spacing on a logarithmic scale betweeen min_sigma
                     and max_sigma. This way, the errors in estimated blob
@@ -1767,12 +1802,16 @@ class IntensityMap2D(IntensityMap):
                     approximately constant. Default is True.
         :ignore_missing: by default, blob detection fails for intensity maps
                          with missing values. When this parameter is set to
-                         True, however, this limitation is overcome by applying
-                         a normalized smoothing filter before blob detection.
-                         The smoothing filter is just wide enough to fill one
-                         row of missing values while barely affecting the other
-                         intensities, and will be applied repeatedly until all
-                         missing values have been replaced.
+                         True,
+                         #this limitation is overcome by applying a normalized
+                         #smoothing filter before blob detection.  The
+                         #smoothing filter is just wide enough to extrapolate
+                         #into one row of missing values while barely affecting
+                         #the other intensities, and will be applied repeatedly
+                         #until all missing values have been replaced.
+                         missing values are replaced by zeroes.
+        exclude_edges : bool, optional
+            If True, blobs with center in an edge bin are discarded.
         :returns: an array with a row [x, y, s] for each detected blob, where
                   x and y are the coordinates of the blob center and s is the
                   sigma (standard deviation) of the Gaussian kernel that
@@ -1789,14 +1828,16 @@ class IntensityMap2D(IntensityMap):
                              .format(self.__class__.__name__,
                                      self.bset.__class__.__name__))
 
-        data = self.unmasked_data
+        data = numpy.copy(self.unmasked_data)
+
         if ignore_missing:
-            bandwidth = 0.125 * numpy.amax(self.bset.binwidths)
-            filled = self
-            while numpy.isnan(data).any():
-                filled = filled.smooth(bandwidth, kernel='gaussian',
-                                       normalize=True)
-                data = filled.data
+            #bandwidth = 0.125 * numpy.amax(self.bset.binwidths)
+            #filled = self
+            #while numpy.isnan(data).any():
+            #    filled = filled.smooth(bandwidth, kernel='gaussian',
+            #                           normalize=True)
+            #    data = filled.unmasked_data
+            data[numpy.isnan(data)] = 0.0
         elif numpy.isnan(data).any():
             raise ValueError("cannot detect blobs in IntensityMap2D instances "
                              "with missing data unless ignore_missing == "
@@ -1804,10 +1845,13 @@ class IntensityMap2D(IntensityMap):
 
         #data = exposure.equalize_hist(data)  # Improves detection
 
-        binwidth = numpy.mean(self.bset.binwidths)
+        # In case of different binwidths in different directions, use the
+        # geometric mean
+        binwidth = numpy.sqrt(numpy.prod(
+            numpy.mean(self.bset.binwidths, axis=-1)))
 
         if min_sigma is None:
-            min_sigma = 1
+            min_sigma = min(self.shape) / (_SQRT2 * 12.0)
         else:
             min_sigma /= binwidth
         if max_sigma is None:
@@ -1815,28 +1859,68 @@ class IntensityMap2D(IntensityMap):
             # min(self.shape) / (sqrt(2) * 2.0 * k)
             # means limiting the largest possible blobs to regions covering at
             # most a fraction 1 / k of the shortest length in the intensity map
-            max_sigma = min(self.shape) / (numpy.sqrt(2) * 4.0)
+            max_sigma = min(self.shape) / (_SQRT2 * 4.0)
         else:
             max_sigma /= binwidth
         if threshold is None:
-            threshold = data.min() + 0.2 * data.ptp()
+            threshold = self.mean()
 
         blob_indices = feature.blob_log(data, min_sigma=min_sigma,
                                         max_sigma=max_sigma,
                                         num_sigma=num_sigma,
                                         threshold=threshold,
-                                        overlap=overlap,
+                                        overlap=1.0,
                                         log_scale=log_scale)
+
+        # Sort blobs in order of decreasing blob size
         try:
-            blob_list = blob_indices[:, :2]
+            blob_indices = blob_indices[
+                numpy.argsort(blob_indices[:, 2])[::-1]]
         except IndexError:
-            raise ValueError("no blobs found, try lowering 'threshold'")
+            blob_indices = numpy.array([[]])
+
+        if exclude_edges:
+            n, m = data.shape
+            edge = numpy.logical_or(
+                numpy.logical_or(
+                    numpy.logical_or(
+                        blob_indices[:, 0] == 0,
+                        blob_indices[:, 0] == n - 1,
+                    ),
+                    blob_indices[:, 1] == 0,
+                ),
+                blob_indices[:, 1] == m - 1,
+            )
+            blob_indices = blob_indices[~edge]
+
+        if prune_overlap:
+            prune = numpy.zeros((len(blob_indices), ), dtype=numpy.bool_)
+            for (i, b1) in enumerate(blob_indices):
+                if prune[i]:
+                    continue
+                for (j_, b2) in enumerate(blob_indices[i + 1:]):
+                    j = j_ + i + 1
+                    if prune[j]:
+                        continue
+                    ssum = b1[2] + b2[2]
+                    minimum_distance_sq = 2.0 * ssum * ssum
+                    diff = b1[:2] - b2[:2]
+                    if numpy.sum(diff * diff) < minimum_distance_sq:
+                        prune[j] = True
+            blob_indices = blob_indices[~prune]
+
+        blob_list = blob_indices[:, :2]
 
         blob_coords = self.bset.coordinates(blob_list)
 
         sigma = blob_indices[:, 2] * binwidth
 
         blobs = numpy.column_stack((blob_coords, sigma))
+
+        # Sort blobs: first by x coordinate, then by y coordinate, then by size
+        blobs = blobs[numpy.argsort(blobs[:, 2])]
+        blobs = blobs[numpy.argsort(blobs[:, 1])]
+        blobs = blobs[numpy.argsort(blobs[:, 0])]
 
         return blobs
 
@@ -1968,7 +2052,7 @@ def _safe_mmap(normalize, mapfunc, arrs):
     if normalize:
         perfect_weights = mapfunc(*ones)
         weights = mapfunc(*indicators)
-        weights /= perfect_weights.max()
+        weights /= numpy.max(perfect_weights)
         new_arr = sensibly_divide(mapfunc(*filled_arrs), weights, masked=True)
     else:
         if any(numpy.any(ind == 0.0) for ind in indicators):

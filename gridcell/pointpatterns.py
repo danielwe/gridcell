@@ -20,6 +20,7 @@ Module to facilitate point pattern analysis in arbitrarily shaped 2D windows.
 
 from __future__ import (absolute_import, division, print_function,
                         unicode_literals)
+from random import sample
 import numpy
 import pandas
 from scipy import integrate, optimize, interpolate
@@ -68,6 +69,74 @@ class Window(geometry.Polygon):
         for key in state:
             setattr(self, key, state[key])
 
+    def includes(self, p):
+        return self.contains(p) or self.boundary.contains(p)
+
+    def wrap_into(self, points):
+        """
+        Wrap a set of points into a plane-filling window
+
+        Parameters
+        ----------
+        points : array-like, shape (2, n)
+            Array of `n` point coordinates.
+
+        Returns
+        -------
+        ndarray, shape (2, n)
+            New array of wrapped point coordinates.
+
+        """
+        # Translate origin to centroid
+        cen = self.centroid
+        points = numpy.asarray(points) - cen
+
+        # Wrap points directly into the rhomboidal window
+        lattice = self.lattice()
+        basis = lattice[:2]
+
+        pcoeffs = project_vectors(points, basis)
+        pcoeffs = numpy.mod(pcoeffs + 0.5, 1.0) - 0.5
+        points = pcoeffs.dot(basis)
+
+        # If window is hexagonal there may be some residual wrapping to do
+        if len(lattice) == 6:
+            # Do a full loop to nudge all edge cases to where they belong
+            vertices = self.vertices()
+            for i, vertex in enumerate(vertices):
+                for b in lattice[i:i + 2]:
+                    bas = numpy.vstack((vertex, .5 * b))
+                    ppoints = project_vectors(points, bas)
+                    pv, pb = ppoints[:, 0], ppoints[:, 1]
+                    retard = (pv + pb > 1.0) & (pv > 0.0) & (pb > 0.0)
+                    advance = (pv + pb < -1.0) & (pv < 0.0) & (pb < 0.0)
+                    points[retard] -= b
+                    points[advance] += b
+
+        # Translate back
+        points += cen
+
+        return points
+
+    def vertices(self):
+        """
+        Find the vectors from the centroid to the vertices of the window
+
+        Returns
+        -------
+        ndarray
+            Array of vertex vectors
+
+        """
+        vertices = numpy.asarray(self.boundary)[:-1] - self.centroid
+
+        # Sort by angle, starting with from the x axis
+        angles = numpy.arctan2(vertices[:, 1], vertices[:, 0])
+        asort = numpy.argsort(angles)
+        start_index = numpy.argmin(numpy.mod(angles[asort], _2PI))
+        asort = numpy.roll(asort, -start_index)
+        return vertices[asort]
+
     @memoize_method
     def lattice(self):
         """
@@ -88,7 +157,7 @@ class Window(geometry.Polygon):
             Array of lattice vectors.
 
         """
-        vertices = (numpy.asarray(self.boundary)[:-1] - self.centroid)
+        vertices = self.vertices()
         l = vertices.shape[0]
         vrotated = numpy.roll(vertices, l // 2, axis=0)
         if not (l in (4, 6) and numpy.allclose(vertices, -vrotated)):
@@ -98,10 +167,12 @@ class Window(geometry.Polygon):
                              "vectors.")
         lattice = vertices + numpy.roll(vertices, 1, axis=0)
 
-        # Sort by angle, starting with the one closest to the x axis
+        # Sort by angle, starting with the one before the first vertex vector
         angles = numpy.arctan2(lattice[:, 1], lattice[:, 0])
         asort = numpy.argsort(angles)
-        start_index = numpy.argmin(numpy.abs(angles[asort]))
+        start_angle = numpy.arctan2(vertices[0, 1], vertices[0, 0])
+        start_index = numpy.argmin(numpy.mod(start_angle - angles[asort],
+                                             _2PI))
         asort = numpy.roll(asort, -start_index)
         return lattice[asort]
 
@@ -580,10 +651,10 @@ class PointPattern(AlmostImmutable, Sequence):
         A sequence of coordinate tuples or any other valid Window constructor
         argument, defining the set within which the point pattern is takes
         values. A ValueError is raised if the window does not contain all
-        points in `points`. The static method `wrap_into` from this class can
-        be used to wrap points into the window before initalization, if the
-        window is a simple plane-filling polygon (thus providing periodic
-        boundary conditions by which the points can be wrapped).
+        points in `points`. The Window method `wrap_into` can be used to wrap
+        points into the window before initalization, if the window is a simple
+        plane-filling polygon (thus providing periodic boundary conditions by
+        which the points can be wrapped).
     pluspoints : sequence or MultiPoint, optional
         Like `points`, but representing a set of extra points (usually outside
         the window) to use for plus sampling.
@@ -647,8 +718,8 @@ class PointPattern(AlmostImmutable, Sequence):
                              "with multiple exactly equal points"
                              .format(type(self)))
 
-        if not window.contains(points):
-            raise ValueError("Not all points in 'points' are contained inside "
+        if not window.includes(points):
+            raise ValueError("Not all points in 'points' are included in "
                              "'window'.")
         self._points = points
 
@@ -672,64 +743,6 @@ class PointPattern(AlmostImmutable, Sequence):
 
     def index(self, *args, **kwargs):
         return self._points.index(*args, **kwargs)
-
-    @staticmethod
-    def wrap_into(window, points):
-        """
-        Wrap a set of points into a plane-filling window
-
-        Parameters
-        ----------
-        window : Window
-            A sequence of coordinate tuples or any other valid Window
-            constructor argument, defining the window to wrap the points into.
-            A `ValueError` is raised if the window not a simple plane-filling
-            polygon.
-        points : MultiPoint
-            A sequence of coordinate tuples or any other valid MultiPoint
-            constructor argument, representing the points to wrap.
-
-        Returns
-        -------
-        MultiPoint
-            New `MultiPoint` instance containing the wrapped representation of
-            all points in `points`.
-
-        """
-        if not isinstance(points, geometry.MultiPoint):
-            points = geometry.MultiPoint(points)
-        if not isinstance(window, Window):
-            window = Window(window)
-
-        if window.contains(points):
-            return points
-
-        lattice = window.lattice()
-        basis = lattice[:2]
-
-        # Wrap points directly into the concentric rhomboidal window
-        parray = numpy.asarray(points)
-        pcoeffs = project_vectors(parray, basis)
-        ccoeff = project_vectors(window.centroid, basis)
-        pcoeffs = numpy.mod(pcoeffs + 0.5 - ccoeff, 1.0) - 0.5 + ccoeff
-        parray = pcoeffs.dot(basis)
-        points = geometry.MultiPoint(parray)
-
-        # If window is hexagonal, there may be some residual wrapping to do
-        if len(lattice) == 6 and not window.contains(points):
-            vectors = numpy.vstack((basis, -basis))
-            new_points = []
-            for p in points:
-                if window.contains(p):
-                    new_points.append(p)
-                    continue
-                for v in vectors:
-                    wp = affinity.translate(p, xoff=v[0], yoff=v[1])
-                    if window.contains(wp):
-                        new_points.append(wp)
-                        break
-            points = geometry.MultiPoint(new_points)
-        return points
 
     def _inherit_binary_operation(self, other, op):
         """
@@ -2014,8 +2027,19 @@ class PointPattern(AlmostImmutable, Sequence):
         if edge_correction is None:
             edge_correction = self.edge_correction
 
-        rmin, rmax = self.lstatistic_interval(edge_correction=edge_correction)
-        rmin /= 3.0
+        # rmin: the distance within which the expected number of pairs is
+        # greater than 0.5 under uniformity
+        window = self.window
+        sqi = self.squared_intensity()
+        rmin = numpy.sqrt(1.0 / (_PI * sqi * window.area))
+
+        # rmax: the maximum sensible distance
+        rmax_absolute = self.rmax(edge_correction=edge_correction)
+        if edge_correction == 'periodic':
+            rmax_standard = self.window.voronoi().inscribed_circle()['r']
+        else:
+            rmax_standard = self.window.inscribed_circle()['r']
+        rmax = min(rmax_standard, rmax_absolute)
         return rmin, rmax
 
     def lstatistic_interval(self, edge_correction=None):
@@ -2055,15 +2079,10 @@ class PointPattern(AlmostImmutable, Sequence):
         if edge_correction is None:
             edge_correction = self.edge_correction
 
-        intensity = self.intensity()
-        window = self.window
-        rmax_absolute = self.rmax(edge_correction=edge_correction)
-        if edge_correction == 'periodic':
-            rmax_standard = self.window.voronoi().inscribed_circle()['r']
-        else:
-            rmax_standard = self.window.inscribed_circle()['r']
-        rmax = min(rmax_standard, rmax_absolute)
-        rmin = 1.8 / (intensity * numpy.sqrt(window.area))
+        rmin, rmax = self.kstatistic_interval(edge_correction=edge_correction)
+
+        # rmin: increase to 5 expected pairs within this distance
+        rmin *= numpy.sqrt(10.0)
         return rmin, rmax
 
     @memoize_method
@@ -2431,7 +2450,7 @@ class PointPatternCollection(AlmostImmutable, Sequence):
                     points.extend(new_points)
                     left -= len(new_points)
 
-            pp = PointPattern(points[:n], window,
+            pp = PointPattern(sample(points, n), window,
                               edge_correction=edge_correction)
             patterns.append(pp)
 

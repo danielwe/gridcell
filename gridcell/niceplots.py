@@ -108,15 +108,15 @@ def ratemap(cell, cmap='YlGnBu_r', length_unit='cm', rate_unit='Hz'):
 
     """
     axes, cbar = cell.plot_ratemap(cmap=cmap,
-                                   edgecolor='face',
+                                   #edgecolor='face',
                                    )
 
-    cbar.solids.set(edgecolor='face')
+    #cbar.solids.set(edgecolor='face')
     cbar.set_label(r"$f \ / \ \mathrm{{{}}}$".format(rate_unit))
     cbar.locator = ticker.MaxNLocator(nbins=2)
     cbar.update_ticks()
 
-    range_ = cell.params['range_']
+    range_ = cell.ratemap().range_
     axes.set(xticks=range_[0], yticks=range_[1])
     if length_unit is None:
         axes.set(xlabel=r"$x$",
@@ -160,10 +160,10 @@ def template_ratemap(module, cmap='YlGnBu_r', length_unit='cm', box=True,
     """
     cell = module.template()
     axes, cbar = cell.plot_ratemap(cmap=cmap,
-                                   edgecolor='face'
+                                   #edgecolor='face'
                                    )
 
-    cbar.solids.set(edgecolor='face')
+    #cbar.solids.set(edgecolor='face')
     cbar.set_label(r"$f \ / \ \bar{f}$")
     cbar.locator = ticker.MaxNLocator(nbins=2)
     cbar.update_ticks()
@@ -203,7 +203,7 @@ def imap(imap, vmin=None, vmax=None, cmap='YlGnBu_r', length_unit='cm'):
     Parameters
     ----------
     ratemap : IntensityMap2D
-        Stacked firing rate to plot
+        Intensity map to plot
     cmap : Colormap or registered colormap name, optional
         Colormap to use for the plot.
     length_unit : string, optional
@@ -215,9 +215,11 @@ def imap(imap, vmin=None, vmax=None, cmap='YlGnBu_r', length_unit='cm'):
     See `IntensityMap2D.plot`.
 
     """
-    axes, cbar = imap.plot(cmap=cmap, vmin=vmin, vmax=vmax, edgecolor='face')
+    axes, cbar = imap.plot(cmap=cmap, vmin=vmin, vmax=vmax,
+                           #edgecolor='face',
+                           )
 
-    cbar.solids.set(edgecolor='face')
+    #cbar.solids.set(edgecolor='face')
 
     range_ = imap.range_
     axes.set(xticks=range_[0], yticks=range_[1])
@@ -261,7 +263,7 @@ def acorr(cell, cmap='coolwarm', length_unit='cm', threshold=False,
 
     """
     axes, cbar = cell.plot_acorr(cmap=cmap,
-                                 edgecolor='face',
+                                 #edgecolor='face',
                                  threshold=threshold,
                                  cbar_kw={'ticks': [-1, 0, 1]})
 
@@ -273,7 +275,7 @@ def acorr(cell, cmap='coolwarm', length_unit='cm', threshold=False,
     if grid_ellipse:
         cell.plot_grid_ellipse(axes=axes, color=palette[1])
 
-    cbar.solids.set(edgecolor='face')
+    #cbar.solids.set(edgecolor='face')
     cbar.set_label(r"$r$")
 
     range_ = cell.params['range_']
@@ -309,10 +311,10 @@ def corr(cell1, cell2, cmap='coolwarm', length_unit='cm', center_peak=False):
 
     """
     axes, cbar = cell1.plot_corr(cell2, cmap=cmap, center_peak=center_peak,
-                                 edgecolor='face',
+                                 #edgecolor='face',
                                  cbar_kw={'ticks': [-1, 0, 1]})
 
-    cbar.solids.set(edgecolor='face')
+    #cbar.solids.set(edgecolor='face')
     cbar.set_label(r"$\rho$")
 
     range_ = cell1.params['range_']

@@ -24,7 +24,6 @@ from __future__ import (absolute_import, division, print_function,
 import numpy
 from scipy import stats, linalg
 from scipy.ndimage import measurements
-from scipy.special import i0
 from sklearn.neighbors import KernelDensity
 from sklearn.grid_search import GridSearchCV
 import seaborn
@@ -407,19 +406,19 @@ def distplot(data, n_folds=None, n_bw=None, **kwargs):
 
     This is a wrapper around `seaborn.distplot`, using `kde_bw` to estimate
     optimal bandwidths for kernel density estimates. The call signature accepts
-    all keywords that `seaborn.kdeplot` accepts, plus additional optional
+    all keywords that `seaborn.distplot` accepts, plus additional optional
     keyword arguments as stated below.
 
     Parameters
     ----------
     data, data2, *args, **kwargs
-        See the documentation for `seaborn.kdeplot`.
+        See the documentation for `seaborn.distplot`.
     n_folds, n_bw
         See `kde_bw`. If `None`, the default value in `kde_bw` is used.
 
     Returns
     -------
-    See `seaborn.kdeplot`.
+    See `seaborn.distplot`.
 
     """
     bw_kw = {}
@@ -435,33 +434,6 @@ def distplot(data, n_folds=None, n_bw=None, **kwargs):
         kde_kws.update(bw=bw)
         kwargs.update(kde_kws=kde_kws)
     return seaborn.distplot(data, **kwargs)
-
-
-def vonmises_kde(data, sample_points, kappa):
-    """
-    Compute a kernel density estimate using the von Mises kernel
-
-    This is a simple one-off function computing the kernel density estimate at
-    a given set of sample points.
-
-    Parameters
-    ----------
-    data : array-like, shape (n,)
-        The data to estimate the density from.
-    sample_points : array-like, shape (m,)
-        The points at which to estimate the density.
-    kappa : positive scalar
-        The dispersion of the von Mises kernel.
-
-    Returns
-    -------
-    ndarray, shape (m,)
-        The kernel density estimate evaluated at the given sample points.
-
-    """
-    distances = sample_points[:, numpy.newaxis] - data[numpy.newaxis, :]
-    density = numpy.sum(numpy.exp(kappa * numpy.cos(distances)), axis=-1)
-    return density / (2 * numpy.pi * i0(kappa))
 
 
 def check_stable(n_calls, function, *args, **kwargs):
@@ -544,3 +516,22 @@ def project_vectors(vectors, basis_vectors):
     coeffs = linalg.solve(a, b, sym_pos=True)
     coeffs = numpy.rollaxis(coeffs, 0, coeffs.ndim)
     return coeffs
+
+
+def lattice_peaks(peaks):
+    """
+    Project ring of six peaks to the nearest lattice
+
+    Parameters
+    ----------
+    peaks : array-like, shape (6, 2)
+        Peak vectors to project.
+
+    Returns
+    -------
+    ndarray, shape (6, 2)
+        Lattice projected peaks
+
+    """
+    pmat = (1 / 6) * linalg.toeplitz([2, 1, -1, -2, -1, 1])
+    return pmat.dot(peaks)
