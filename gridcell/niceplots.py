@@ -86,7 +86,8 @@ def pos_and_spikes(cell, alpha_path=0.5, alpha_spikes=0.25, length_unit='cm',
     return artists
 
 
-def ratemap(cell, cmap='YlGnBu_r', length_unit='cm', rate_unit='Hz'):
+def ratemap(cell, vmax=None, threshold=None, cmap='YlGnBu_r', length_unit='cm',
+            rate_unit='Hz', axes=None):
     """
     Convenience function to plot nice firing rate maps
 
@@ -108,7 +109,10 @@ def ratemap(cell, cmap='YlGnBu_r', length_unit='cm', rate_unit='Hz'):
 
     """
     axes, cbar = cell.plot_ratemap(cmap=cmap,
+                                   threshold=threshold,
+                                   vmax=vmax,
                                    #edgecolor='face',
+                                   axes=axes,
                                    )
 
     #cbar.solids.set(edgecolor='face')
@@ -186,12 +190,18 @@ def template_ratemap(module, cmap='YlGnBu_r', length_unit='cm', box=True,
         height = range_[1][1] - range_[1][0]
         rect = patches.Rectangle(xy=xy, width=width, height=height,
                                  fill=False, color=palette[0],
-                                 linewidth=2.0)
+                                 linewidth=4.0)
         axes.add_patch(rect)
     if window_type is not None:
-        windowpatch = module.window(window_type=window_type).patch(
-            fill=False, color=palette[1], linewidth=2.0)
-        axes.add_patch(windowpatch)
+        try:
+            windowpatch = module.window(window_type=window_type).patch(
+                fill=False, color=palette[1], linewidth=4.0)
+            axes.add_patch(windowpatch)
+        except ValueError:
+            for c, wt in zip(palette[1:], window_type):
+                windowpatch = module.window(window_type=wt).patch(
+                    fill=False, color=c, linewidth=4.0)
+                axes.add_patch(windowpatch)
 
     return axes, cbar
 

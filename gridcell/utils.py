@@ -26,7 +26,13 @@ from scipy import stats, linalg
 from scipy.ndimage import measurements
 from sklearn.neighbors import KernelDensity
 from sklearn.grid_search import GridSearchCV
+import pandas
 import seaborn
+import heapq
+
+
+_PI = numpy.pi
+_2PI = numpy.pi
 
 
 class AlmostImmutable(object):
@@ -146,6 +152,77 @@ def sensibly_divide(num, denom, masked=False):
                 denom_bc[problems] = numpy.nan
 
     return num_bc / denom_bc
+
+
+def interpolate_masked(x, xp, fp, **kwargs):
+    """
+    Properly interpolate a masked array
+
+    Parameters
+    ----------
+    x : array-like
+        The x-coordinates of the enterpolated values
+    xp : 1-D sequence of floats
+        The x-coordinates of the data points. Must be increasing.
+    fp : 1-D sequence of floats
+        The y-coordinates of the data points, same length as `xp`. This can
+        be a masked array.
+    **kwargs :
+        Keyword arguments are passed to `numpy.interp`.
+
+    """
+    fpf = numpy.ma.array(fp, dtype=numpy.float_)
+    fpf = numpy.ma.filled(fpf, fill_value=numpy.nan)
+
+    ff = numpy.interp(x, xp, fpf, **kwargs)
+    mask = numpy.isnan(ff)
+
+    f = numpy.interp(x, xp, fp, **kwargs)
+    f = numpy.ma.masked_where(mask, f)
+    return f
+
+
+def unwrap_valid_clumps(arr, *args, **kwargs):
+    """
+    Unwrap clumps of valid (not inf/nan) values in an array
+
+    Parameters
+    ----------
+    arr : array-like
+        Input array
+    *args, **kwargs : optional
+        Extra arguments are passed to `numpy.unwrap`.
+
+    Returns
+    -------
+    out : ndarray
+        Output array.
+
+    """
+    if isinstance(arr, numpy.ma.masked_array):
+        mask = numpy.ma.getmaskarray(arr)
+        arr = arr.data
+
+        def hstack(x):
+            return numpy.ma.masked_where(mask, numpy.hstack(x))
+    else:
+        hstack = numpy.hstack
+    marr = numpy.ma.masked_invalid(arr)
+    valid_sl = numpy.ma.clump_unmasked(marr)
+    invalid_sl = numpy.ma.clump_masked(marr)
+    valid = [numpy.unwrap(arr[sl], *args, **kwargs) for sl in valid_sl]
+    invalid = [arr[sl] for sl in invalid_sl]
+    if valid_sl[0].start < invalid_sl[0].start:
+        first, second = valid, invalid
+    else:
+        first, second = invalid, valid
+    chunks = []
+    for c1, c2 in zip(first, second):
+        chunks.append(c1)
+        chunks.append(c2)
+    if len(first) > len(second):
+        chunks.append(first[-1])
+    return hstack(chunks)
 
 
 def add_ticks(axis, ticklocs, ticklabels):
@@ -535,3 +612,108 @@ def lattice_peaks(peaks):
     """
     pmat = (1 / 6) * linalg.toeplitz([2, 1, -1, -2, -1, 1])
     return pmat.dot(peaks)
+
+
+def disc_overlap(disc1, disc2):
+    """
+    Compute the overlap of two discs
+
+    Parameters
+    ----------
+    disc1, disc2 : sequences
+        Sequences `(x, y, r)`, giving the center `(x, y)` and radius `r` of the
+        discs.
+
+    Returns
+    -------
+    scalar
+        Fraction of the area of the intersection of the discs to the area of
+        the union of the discs.
+
+    """
+    # Let disc1 be the larger disc
+    if disc1[2] < disc2[2]:
+        disc1, disc2 = disc2, disc1
+    r1, r2 = disc1[2], disc2[2]
+    xdiff, ydiff = disc1[0] - disc2[0], disc1[1] - disc2[1]
+    d_2 = xdiff * xdiff + ydiff * ydiff
+    d = numpy.sqrt(d_2)
+    if d <= r1 - r2:
+        return (r2 * r2) / (r1 * r1)
+    rsum = r1 + r2
+    minimum_distance_sq = rsum * rsum
+    if d_2 < minimum_distance_sq:
+        r1_2, r2_2 = r1 * r1, r2 * r2
+        h_2 = (2 * (r1_2 * r2_2 + r1_2 * d_2 + r2_2 * d_2) -
+               (r1_2 * r1_2 + r2_2 * r2_2 + d_2 * d_2)) / (4 * d_2)
+        h = numpy.sqrt(h_2)
+        d1 = numpy.sqrt(r1_2 - h_2)
+        d2 = d - d1
+        theta1, theta2 = numpy.arcsin(h / r1), numpy.arcsin(h / r2)
+        if d2 < 0.0:
+            theta2 = _PI - theta2
+        overlap_area = r1_2 * theta1 - h * d1 + r2_2 * theta2 - h * d2
+        total_area = _PI * r1_2 + _PI * r2_2 - overlap_area
+        return overlap_area / total_area
+    return 0.0
+
+
+def matching_disk_pairs(discs1, discs2, min_overlap=0.0):
+    """
+    Pair up the most closely matching discs from two sets
+
+    Parameters
+    ----------
+    discs1, discs2 : sequences
+        Sequences of discs. Each disc is a sequence `(x, y, r)`, as explained
+        in `disc_overlap`.
+    min_overlap : scalar, optional
+        Minimum overlap between two matching discs
+
+    Returns
+    -------
+    sequence
+        Sequence of disc pairs `((x1, y1, r1), (x2, y2, r2))`, sorted in order
+        of decreasing overlap. The first element is a disc from `discs1` and
+        the second from `discs2`. Each disc only appears in one pair, the
+        closest match for which the matching disc did not have an even closer
+        match with another disc.
+
+    """
+    pairs = []
+    for disc1 in discs1:
+        for disc2 in discs2:
+            overlap = disc_overlap(disc1, disc2)
+            if overlap > min_overlap:
+                pair = (-overlap, tuple(disc1), tuple(disc2))
+                heapq.heappush(pairs, pair)
+    matches = []
+    used = set()
+    while pairs:
+        next_pair = heapq.heappop(pairs)[1:]
+        if all(np not in used for np in next_pair):
+            matches.append(next_pair)
+            used.update(next_pair)
+    return matches
+
+
+def clean_fields(fields, ideal_fields, min_overlap=1.0 / 9.0):
+    field_arr = fields[['field_x', 'field_y', 'field_r']].values
+    ideal_field_arr = ideal_fields[['field_x', 'field_y', 'field_r']].values
+    matches = matching_disk_pairs(field_arr, ideal_field_arr,
+                                  min_overlap=min_overlap)
+    fields_unordered, ideal_unordered = zip(*matches)
+    indices = []
+    field_arr = []
+    for ifield in ideal_fields.itertuples():
+        i = ifield.field_index
+        ifield = (ifield.field_x, ifield.field_y, ifield.field_r)
+        if ifield in ideal_unordered:
+            index = ideal_unordered.index(ifield)
+            field_arr.append(fields_unordered[index])
+            indices.append(i)
+
+    fields = pandas.DataFrame(field_arr,
+                              columns=['field_x', 'field_y', 'field_r'])
+    fields['field_index'] = numpy.array(indices, dtype=numpy.int_)
+    return fields

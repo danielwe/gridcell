@@ -28,7 +28,8 @@ from scipy.ndimage import filters, measurements, interpolation
 from skimage import feature  #, exposure
 from matplotlib import pyplot
 
-from .utils import AlmostImmutable, sensibly_divide, pearson_correlogram
+from .utils import (AlmostImmutable, sensibly_divide, pearson_correlogram,
+                    disc_overlap)
 from .ndfit import fit_ndgaussian
 
 try:
@@ -499,13 +500,13 @@ class BinnedSet(AlmostImmutable):
         coords_arr = numpy.array(coords).transpose()
         return numpy.atleast_2d(coords_arr)
 
-    def bin_indices(self, coordinates):
+    def bin_indices(self, coordinates, fractional=True):
         """
         Find the (possibly fractional) bin indices of positions given by
         coordinates
 
-        The returned indices will refer to the bin centers, and not to the
-        bin edges.
+        The returned indices will refer to the bin centers, not to the bin
+        edges.
 
         The bin indices are computed by interpolating with the
         given coordinates in the map from bin centers to array indices.
@@ -514,6 +515,10 @@ class BinnedSet(AlmostImmutable):
         ----------
         coordinates : array-like
             Sequence of coordinate tuples.
+        fractional : bool, optional
+            If True, fractional indices are returned. Otherwise, integer bin
+            indices to the bins that the coordinates lie within are returned.
+            Coordinates exactly at the bin edges are rounded downwards.
 
         Returns
         ------
@@ -524,8 +529,10 @@ class BinnedSet(AlmostImmutable):
         coords = numpy.asarray(coordinates).transpose()
         indices = [numpy.interp(coo, cen, range(n))
                    for (coo, cen, n) in zip(coords, self.centers, self.shape)]
-        index_arr = numpy.array(indices).transpose()
-        return numpy.atleast_2d(index_arr)
+        index_arr = numpy.atleast_2d(numpy.array(indices).transpose())
+        if fractional:
+            return index_arr
+        return numpy.floor(index_arr + 0.5).astype(numpy.int_)
 
     def extend(self, extension):
         """
@@ -1747,8 +1754,8 @@ class IntensityMap2D(IntensityMap):
         IntensityMap.__init__(self, data, bset, **kwargs)
 
     def blobs(self, min_sigma=None, max_sigma=None, num_sigma=25,
-              threshold=None, prune_overlap=True, log_scale=False,
-              ignore_missing=False, exclude_edges=False):
+              threshold=-numpy.inf, max_overlap=0.0, log_scale=False,
+              ignore_missing=False, exclude_edges=0):
         """
         Detect blobs in the IntensityMap2D instance
 
@@ -1787,12 +1794,13 @@ class IntensityMap2D(IntensityMap):
                     value: 25.
         :threshold: lower bound for scale-space maxima (that is, the minimum
                     height of detected peaks in the arrays created by passing
-                    the intensity array through a Gaussian-Laplace filter). If
-                    None (default), the mean of the data will be used.
-        prune_overlap : bool, optional
-            If False, overlapping blobs are permitted. If True, only the larger
-            of two overlapping blobs are kept. Overlap is defined using
-            `sqrt(2) * s` as the blob radius for a blob detected at sigma `s`.
+                    the intensity array through a Gaussian-Laplace filter).
+        max_overlap : scalar, optional
+            Maximum permitted overlap fraction. If two blobs overlap by more
+            than this, only the larger of two overlapping blobs are kept.
+            Overlap is defined as the ratio of the area of the intersection and
+            uunion of the blobs, using `sqrt(2) * s` as the blob radius for
+            a blob detected at sigma `s`.
         :log_scale: if True, intermediate sigma values are chosen with regular
                     spacing on a logarithmic scale betweeen min_sigma
                     and max_sigma. This way, the errors in estimated blob
@@ -1810,8 +1818,8 @@ class IntensityMap2D(IntensityMap):
                          #the other intensities, and will be applied repeatedly
                          #until all missing values have been replaced.
                          missing values are replaced by zeroes.
-        exclude_edges : bool, optional
-            If True, blobs with center in an edge bin are discarded.
+        exclude_edges : integer, optional
+            Number of rows along the edges in which to disallow blob centers.
         :returns: an array with a row [x, y, s] for each detected blob, where
                   x and y are the coordinates of the blob center and s is the
                   sigma (standard deviation) of the Gaussian kernel that
@@ -1862,8 +1870,6 @@ class IntensityMap2D(IntensityMap):
             max_sigma = min(self.shape) / (_SQRT2 * 4.0)
         else:
             max_sigma /= binwidth
-        if threshold is None:
-            threshold = self.mean()
 
         blob_indices = feature.blob_log(data, min_sigma=min_sigma,
                                         max_sigma=max_sigma,
@@ -1879,33 +1885,33 @@ class IntensityMap2D(IntensityMap):
         except IndexError:
             blob_indices = numpy.array([[]])
 
-        if exclude_edges:
+        if exclude_edges > 0:
             n, m = data.shape
             edge = numpy.logical_or(
                 numpy.logical_or(
                     numpy.logical_or(
-                        blob_indices[:, 0] == 0,
-                        blob_indices[:, 0] == n - 1,
+                        blob_indices[:, 0] < exclude_edges,
+                        n - 1 - blob_indices[:, 0] < exclude_edges,
                     ),
-                    blob_indices[:, 1] == 0,
+                    blob_indices[:, 1] < exclude_edges,
                 ),
-                blob_indices[:, 1] == m - 1,
+                m - 1 - blob_indices[:, 1] < exclude_edges,
             )
             blob_indices = blob_indices[~edge]
 
-        if prune_overlap:
+        if max_overlap < 1.0:
             prune = numpy.zeros((len(blob_indices), ), dtype=numpy.bool_)
             for (i, b1) in enumerate(blob_indices):
                 if prune[i]:
                     continue
+                blob1 = (b1[0], b1[1], _SQRT2 * b1[2])
                 for (j_, b2) in enumerate(blob_indices[i + 1:]):
                     j = j_ + i + 1
                     if prune[j]:
                         continue
-                    ssum = b1[2] + b2[2]
-                    minimum_distance_sq = 2.0 * ssum * ssum
-                    diff = b1[:2] - b2[:2]
-                    if numpy.sum(diff * diff) < minimum_distance_sq:
+                    blob2 = (b2[0], b2[1], _SQRT2 * b2[2])
+                    overlap = disc_overlap(blob1, blob2)
+                    if overlap > max_overlap:
                         prune[j] = True
             blob_indices = blob_indices[~prune]
 

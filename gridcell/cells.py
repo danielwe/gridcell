@@ -28,6 +28,7 @@ from __future__ import (absolute_import, division, print_function,
 from abc import ABCMeta, abstractmethod
 
 from math import ceil
+from itertools import repeat
 import numpy
 import pandas
 from scipy import signal, linalg, spatial
@@ -38,7 +39,10 @@ from matplotlib import pyplot
 from collections import MutableSequence
 
 from .utils import (AlmostImmutable, gaussian, sensibly_divide,  #add_ticks
-                    project_vectors, lattice_peaks)
+                    project_vectors, lattice_peaks, interpolate_masked,
+                    unwrap_valid_clumps, clean_fields,
+                    #matching_disk_pairs, disc_overlap,
+                    )
 from .kde import kernel_density_estimators as kdes
 from .shapes import Ellipse
 from .imaps import IntensityMap, IntensityMap2D, BinnedSet2D
@@ -56,9 +60,12 @@ _PI_2 = _PI / 2.0
 _PI_3 = _PI / 3.0
 
 _SQRT2 = numpy.sqrt(2.0)
+_SQRT3 = numpy.sqrt(3.0)
 
 _ANGULAR_NBINS = 120
 _ANGULAR_BANDWIDTH = numpy.deg2rad(6.0)
+
+_EPS = numpy.finfo(1.0).eps
 
 
 class FeatureNames(object):
@@ -146,168 +153,117 @@ class FeatureNames(object):
         return _lm
 
 
-class Position(AlmostImmutable):
+class BasePosition(AlmostImmutable):
     """
-    Represent positional data recorded over time
+    Represent collected fragments of positional data
 
     Parameters
     ----------
-    t : array-like
-        Array containing the times of the position samples.
-    x, y : array-like
-        Arrays containing the x- and y-positions of the position samples.
-        Missing samples can be represented by nans or by using a masked array
-        for at least one of the arrays.
-    x2, y2 : array-like, optional
-        Arrays containing the x- and y-positions of a second set of position
-        samples. If given, the auxilliary positions are used to compute the
-        head direction of the animal at each location. The average of (x, y)
-        and (x2, y2) will be used for the position of the animal.
+    tsplit : sequence
+        Sequence of arrays containing the times of the position samples in each
+        fragment. Fragments cannot overlap.
+    xsplit, ysplit : sequence
+        Sequences of arrays containing the x- and y-positions of the position
+        samples in each fragment.  Missing samples can be represented by nans
+        or by using a masked array for at least one of the arrays.
+    x2split, y2split : sequence, optional
+        Sequences of arrays containing the x- and y-positions of a second set
+        of position samples in each fragment. If given, the auxilliary
+        positions are used to compute the head direction of the animal at each
+        location. The average of (xsplit, ysplit) and (x2split, y2split) will
+        be used for the position of the animal.
     speed_bandwidth : non-negative scalar, optional
         Length of the time span over which to average the computed speed at
         each sample. Should be given in the same unit as the time samples in
         `t`.
     min_speed : non-negative scalar, optional
         Lower speed limit for samples to be considered valid. Should be given
-        in the unit for speed derived from the position samples in `x, y` and
-        the time samples in `t`.
-        ..note:: The speed computation assumes regularly sampled positions.
-        A split in the consecutive streak of samples is noted if a sampling
-        time step exceedes 1.5 times the average of the non-split time steps,
-        unless this jump is not compensated by shorter time steps within the
-        nearest `Position.WLENGTH` samples from the long step. Each consecutive
-        streak is treated and filtered as a separate time series. Any sampling
-        irregularities within each streak are disregarded.
+        in the unit for speed derived from the position samples in `xsplit,
+        ysplit` and the time samples in `tsplit`.
+        ..note:: The speed computation assumes regularly sampled positions
+        within each fragment.
     **kwargs : dict, optional
         Any additional keyword arguments are stored as a dict in the attribute
         `info`. They are not used for internal computations.
 
     """
     params = Memparams(dict, 'params')
-    WLENGTH = 5
 
-    def __init__(self, t, x, y, x2=None, y2=None, min_speed=0.0,
-                 speed_bandwidth=0.0, **kwargs):
+    @staticmethod
+    def _tframed(tsplit):
+        tlist = []
+        for ts in tsplit:
+            tlist.extend([ts[0], ts, ts[-1]])
+        return numpy.hstack(tlist)
+
+    @staticmethod
+    def _posframed(split):
+        ma = numpy.ma.masked_array(numpy.nan, mask=True)
+        slist = []
+        for s in split:
+            slist.extend([ma, s, ma])
+        return numpy.ma.hstack(slist)
+
+    def __init__(self, tsplit, xsplit, ysplit, x2split=None, y2split=None,
+                 min_speed=0.0, speed_bandwidth=0.0, **kwargs):
         self.params = dict(
             speed_bandwidth=speed_bandwidth,
             min_speed=min_speed,
         )
         self.info = kwargs
 
-        t = numpy.squeeze(t)
-        tsplit = self.split(t, self.WLENGTH)
+        tsplit = sorted(tsplit, key=lambda ts: ts[0])  # Sort by start time
+        if any(tsplit[i + 1][0] < ts[-1] for i, ts in enumerate(tsplit[:-1])):
+            raise ValueError("Time fragments cannot overlap")
+        t = numpy.hstack(tsplit)
 
-        x = numpy.ma.squeeze(x)
-        y = numpy.ma.squeeze(y)
-        nanmask = numpy.isnan(x) | numpy.isnan(y)
-        x = numpy.ma.masked_where(nanmask, x)
-        y = numpy.ma.masked_where(nanmask, y)
+        def sanitize(xsplit, ysplit):
+            new_xsplit, new_ysplit = [], []
+            for xs, ys in zip(xsplit, ysplit):
+                nanmask = numpy.isnan(xs) | numpy.isnan(ys)
+                new_xsplit.append(numpy.ma.masked_where(nanmask, xs))
+                new_ysplit.append(numpy.ma.masked_where(nanmask, ys))
+            return new_xsplit, new_ysplit
 
-        def xysplit(tsplit, x, y):
-            xsplit, ysplit = [], []
+        xsplit, ysplit = sanitize(xsplit, ysplit)
+        x, y = numpy.ma.hstack(xsplit), numpy.ma.hstack(ysplit)
 
-            index = 0
-            for ts in tsplit:
-                l = ts.size
-                xsplit.append(x[index:index + l])
-                ysplit.append(y[index:index + l])
-                index += l
-            return xsplit, ysplit
+        tframed = self._tframed(tsplit)
+        xframed = self._posframed(xsplit)
+        yframed = self._posframed(ysplit)
 
-        xsplit, ysplit = xysplit(tsplit, x, y)
         self.data = dict(t=t, x=x, y=y, tsplit=tsplit, xsplit=xsplit,
-                         ysplit=ysplit)
+                         ysplit=ysplit, tframed=tframed, xframed=xframed,
+                         yframed=yframed)
 
-        if x2 is not None:
-            if y2 is None:
-                raise ValueError("'x2' and 'y2' must either both be given or "
-                                 "both left out")
-
+        if x2split is not None:
+            if y2split is None:
+                raise ValueError("'x2split' and 'y2split' must either both be "
+                                 "given or both left out")
             x1, y1 = x, y
             x1split, y1split = xsplit, ysplit
+            x1framed, y1framed = xframed, yframed
 
-            x2 = numpy.ma.squeeze(x2)
-            y2 = numpy.ma.squeeze(y2)
-            nanmask2 = numpy.isnan(x2) | numpy.isnan(y2)
-            x2 = numpy.ma.masked_where(nanmask2, x2)
-            y2 = numpy.ma.masked_where(nanmask2, y2)
-            x2split, y2split = xysplit(tsplit, x2, y2)
+            x2split, y2split = sanitize(x2split, y2split)
+            x2, y2 = numpy.ma.hstack(x2split), numpy.ma.hstack(y2split)
+            x2framed = self._posframed(x2split)
+            y2framed = self._posframed(y2split)
 
             x, y = 0.5 * (x1 + x2), 0.5 * (y1 + y2)
-            xsplit, ysplit = xysplit(tsplit, x, y)
+            xsplit = [0.5 * (x1s + x2s) for x1s, x2s in zip(x1split, x2split)]
+            ysplit = [0.5 * (y1s + y2s) for y1s, y2s in zip(y1split, y2split)]
+            xframed = 0.5 * (x1framed + x2framed)
+            yframed = 0.5 * (y1framed + y2framed)
 
             self.data.update(x=x, y=y, xsplit=xsplit, ysplit=ysplit,
+                             xframed=xframed, yframed=yframed,
                              x1=x1, y1=y1, x1split=x1split, y1split=y1split,
-                             x2=x2, y2=y2, x2split=x2split, y2split=y2split)
+                             x1framed=x1framed, y1framed=y1framed,
+                             x2=x2, y2=y2, x2split=x2split, y2split=y2split,
+                             x2framed=x2framed, y2framed=y2framed)
             self.dual_positions = True
         else:
             self.dual_positions = False
-
-    @staticmethod
-    def split(t, wlength):
-        """
-        Find leaps in an otherwise more or less regular series of samples, and
-        split the array at these points
-
-        Parameters
-        ----------
-        t : array-like, one-dimensional
-            Array containing the series of samples.
-        wlength : scalar
-            Number of samples over which the intervals must balance out if the
-            samples are irregular. If a step longer than 1.5 times the average
-            time step is not compensated by one or more shorter-than-average
-            time steps within this number of samples, the long time step is
-            identified as the end of one consecutive streak of samples and the
-            beginning of the next.
-
-        Returns
-        -------
-        tsplit : list
-            List where each element is a one-dimensional ndarray with
-            a consecutie streak of samples from the series, such that
-            `numpy.hstack(tsplit)` equals `t`.
-
-        """
-        t = numpy.asarray(t)
-        tsteps = numpy.diff(t)
-
-        window = numpy.ones(wlength)
-        average_tsteps = (signal.convolve(tsteps, window, mode='same') /
-                          signal.convolve(numpy.ones_like(tsteps), window,
-                                          mode='same'))
-        start_offset = 1 - (wlength + 1) // 2
-        stop_offset = 1 + wlength // 2
-
-        def find_splits(mean_dt):
-            potential_splits = tsteps > 1.5 * mean_dt
-            splits = numpy.zeros_like(potential_splits)
-            threshold = mean_dt * (2 * wlength + 1) / (2 * wlength)
-            for psplit in numpy.where(potential_splits)[0]:
-                pstart = psplit + start_offset
-                pstop = psplit + stop_offset
-                if numpy.all(average_tsteps[pstart:pstop] > threshold):
-                    splits[psplit + 1] = True
-            return splits
-
-        mean_dt = numpy.mean(tsteps)
-        old_splits = numpy.zeros_like(tsteps, dtype=numpy.bool_)
-        splits = find_splits(mean_dt)
-        while numpy.any(splits & (~old_splits)):
-            mean_dt = numpy.mean(tsteps[~splits])
-            old_splits = splits
-            splits = find_splits(mean_dt)
-
-        splits = numpy.where(splits)[0]
-        fullsplits = numpy.hstack((0, splits, len(t)))
-        nsplits = len(splits)
-
-        tsplit = []
-        for i in range(nsplits + 1):
-            ts = t[fullsplits[i]:fullsplits[i + 1]]
-            tsplit.append(ts)
-
-        return tsplit
 
     @staticmethod
     def time_and_distance_weights(t, x, y):
@@ -462,8 +418,11 @@ class Position(AlmostImmutable):
             speedsplit.append(s)
 
         t = data['t']
+        tframed = data['tframed']
         xf = numpy.ma.hstack(xsplitf)
         yf = numpy.ma.hstack(ysplitf)
+        xframedf = self._posframed(xsplitf)
+        yframedf = self._posframed(ysplitf)
         tweights = numpy.ma.hstack(tweightssplit)
         dweights = numpy.ma.hstack(dweightssplit)
         speed = numpy.ma.hstack(speedsplit)
@@ -481,8 +440,11 @@ class Position(AlmostImmutable):
             speedmask=speedmask,
             mask=mask,
             tsplit=tsplit,
-            xsplit=xsplit,
-            ysplit=ysplit,
+            xsplit=xsplitf,
+            ysplit=ysplitf,
+            tframed=tframed,
+            xframed=xframedf,
+            yframed=yframedf,
             tweightssplit=tweightssplit,
             dweightssplit=dweightssplit,
             speedsplit=speedsplit,
@@ -510,15 +472,23 @@ class Position(AlmostImmutable):
             y1f = numpy.ma.hstack(y1splitf)
             x2f = numpy.ma.hstack(x2splitf)
             y2f = numpy.ma.hstack(y2splitf)
+            x1framedf = self._posframed(x1splitf)
+            y1framedf = self._posframed(y1splitf)
+            x2framedf = self._posframed(x2splitf)
+            y2framedf = self._posframed(y2splitf)
             fdata.update(
                 x1=x1f,
                 y1=y1f,
                 x2=x2f,
                 y2=y2f,
-                x1split=x1split,
-                y1split=y1split,
-                x2split=x2split,
-                y2split=y2split,
+                x1split=x1splitf,
+                y1split=y1splitf,
+                x2split=x2splitf,
+                y2split=y2splitf,
+                x1framed=x1framedf,
+                y1framed=y1framedf,
+                x2framed=x2framedf,
+                y2framed=y2framedf,
             )
 
         return fdata
@@ -647,12 +617,96 @@ class Position(AlmostImmutable):
         valid = (distance < r)
         return numpy.sum(tw[valid])
 
-    def hd(self):
+    def hdsplit(self, filtered=True):
+        """
+        Compute the head direction at the samples in each position fragment
+
+        This requires a second set of positions to be provided at
+        initialization.
+
+        Parameters
+        ----------
+        filtered : bool, optional
+            If True, the head direction is computed from speed filtered
+            positions. This means that the values will be masked whenever the
+            filtered positions are masked (i.e. when the speed is below
+            `self.params['min_speed']`).
+
+        Returns
+        -------
+        hdsplit : list
+            List containing arrays of the head direction angle for each sample
+            in the position fragments. Head directions are defined in the
+            interval `[0, 2 * pi]`.  The vector from (x, y) to (x2, y2) is
+            assumed to point from left to right across the head of the animal.
+
+        """
+        if filtered:
+            data = self.filtered_data()
+        else:
+            data = self.data
+        if not self.dual_positions:
+            raise ValueError("'x2' and 'y2' must be provided at instance "
+                             "initialization to be able to compute head "
+                             "direction")
+        x1split, x2split = data['x1split'], data['x2split']
+        y1split, y2split = data['y1split'], data['y2split']
+        hdsplit = []
+        for x1s, x2s, y1s, y2s in zip(x1split, x2split, y1split, y2split):
+            xdiff, ydiff = x2s - x1s, y2s - y1s
+            angle = numpy.ma.arctan2(ydiff, xdiff)
+            hdsplit.append(numpy.ma.mod(angle, _2PI))
+        return hdsplit
+
+    def hdframed(self, filtered=True):
+        """
+        Compute the head direction at each position sample with a masked value
+        framing each fragment (useful for interpolation and plotting)
+
+        This requires a second set of positions to be provided at
+        initialization.
+
+        Parameters
+        ----------
+        filtered : bool, optional
+            If True, the head direction is computed from speed filtered
+            positions. This means that the values will be masked whenever the
+            filtered positions are masked (i.e. when the speed is below
+            `self.params['min_speed']`).
+
+        Returns
+        -------
+        hdframed : ndarray
+            Array of the head direction angle for each sample
+            in the position fragments, with an extra masked value at the
+            beginning and end of each position fragment. Head directions are
+            defined in the interval `[0, 2 * pi]`.  The vector from (x, y) to
+            (x2, y2) is assumed to point from left to right across the head of
+            the animal.
+
+        """
+        if filtered:
+            data = self.filtered_data()
+        else:
+            data = self.data
+        if not self.dual_positions:
+            raise ValueError("'x2' and 'y2' must be provided at instance "
+                             "initialization to be able to compute head "
+                             "direction")
+        x1framed, x2framed = data['x1framed'], data['x2framed']
+        y1framed, y2framed = data['y1framed'], data['y2framed']
+        xdiff, ydiff = x2framed - x1framed, y2framed - y1framed
+        angle = numpy.ma.arctan2(ydiff, xdiff)
+        return numpy.ma.mod(angle, _2PI)
+
+    def hd(self, **kwargs):
         """
         Compute the head direction at each position sample
 
-        This requires that `x2`and `y2` were provided at instance
-        initialization.
+        Parameters
+        ----------
+        **kwargs : dict, optional
+            Keyword arguments are passed to `BasePosition.hdsplit`.
 
         Returns
         -------
@@ -663,15 +717,7 @@ class Position(AlmostImmutable):
             to right across the head of the animal.
 
         """
-        fdata = self.filtered_data()
-        if not self.dual_positions:
-            raise ValueError("'x2' and 'y2' must be provided at instance "
-                             "initialization to be able to compute head "
-                             "direction")
-        x1, y1, x2, y2 = fdata['x1'], fdata['y1'], fdata['x2'], fdata['y2']
-        xdiff, ydiff = x2 - x1, y2 - y1
-        angle = numpy.ma.arctan2(ydiff, xdiff)
-        return numpy.ma.mod(angle + _PI_2, _2PI)
+        return numpy.ma.hstack(self.hdsplit(**kwargs))
 
     @memoize_method
     def _hd_distribution(self, bins, mode, bandwidth):
@@ -762,6 +808,203 @@ class Position(AlmostImmutable):
         """
         return numpy.ma.sum(self.filtered_data()['tweights'])
 
+    def interpolate(self, t, filtered=True):
+        """
+        Interpolate the position
+
+        Parameters
+        ----------
+        t : array-like
+            The times at which to interpolate the position
+        filtered : bool, optional
+            If True, the interpolation is done into the speed filtered
+            positions. This means that the interpolated values will be masked
+            whenever the filtered positions are masked (i.e. when the speed is
+            below `self.params['min_speed']`).
+
+        Returns
+        -------
+        x, y : ndarray
+            Arrays of the x and y position for each time in `t`.
+
+        """
+        if filtered:
+            data = self.filtered_data()
+        else:
+            data = self.data
+        tframed = data['tframed']
+        xframed, yframed = data['xframed'], data['yframed']
+        return (interpolate_masked(t, tframed, xframed),
+                interpolate_masked(t, tframed, yframed))
+
+    def interpolate_hd(self, t, filtered=True):
+        """
+        Interpolate the head direction
+
+        Parameters
+        ----------
+        see `self.interpolate`.
+
+        Returns
+        -------
+        hd : ndarray
+            Array of the head direction for each time in `t`.
+
+        """
+        if filtered:
+            data = self.filtered_data()
+        else:
+            data = self.data
+        tframed, hdframed = data['tframed'], self.hdframed(filtered=filtered)
+        hdunwrapped = unwrap_valid_clumps(hdframed)
+        return numpy.ma.mod(interpolate_masked(t, tframed, hdunwrapped), _2PI)
+
+    def disjoint_windows_split(self, dt):
+        """
+        Find a set of disjoint time windows spanning the sample times in each
+        fragment
+
+        Parameters
+        ----------
+        dt : scalar
+            The width of the windows
+
+        Returns
+        -------
+        windows : list of ndarrays
+            List where each element is an array of start and end times for the
+            windows spanning the corresponding time fragment. The first column,
+            `windows[i][:, 0]`, contains start times, while the second column,
+            `windows[i][:, 1]` contains end times. All but the last window for
+            each fragment has length `dt`; the last window is truncated such
+            that the end time equals the time of the last sample in the
+            fragment.
+
+        """
+        tsplit = self.data['tsplit']
+        windows = []
+        for ts in tsplit:
+            adjusted_end = ts[-1] * (1.0 - _EPS)
+            # For 64-bit floats, this is safe as long as the end time ts[-1] is
+            # smaller than ca. 4.5e15 * dt (about 5.7 million years if dt is 40
+            # ms)
+
+            tstart = numpy.arange(ts[0], adjusted_end, dt)
+            tend = tstart + dt
+            tend[-1] = ts[-1]
+            windows.append(numpy.column_stack((tstart, tend)))
+        return windows
+
+    def disjoint_windows(self, dt):
+        """
+        Find a set of disjoint time windows spanning the sample times
+
+        Parameters
+        ----------
+        see `BasePosition.disjoint_windows_split`.
+
+        Returns
+        -------
+        windows : ndarray
+            Array of start and end times for the windows. The first column,
+            `windows[:, 0]`, contains start times, while the second column,
+            `windows[:, 1]` contains end times. All but the last window in
+            each fragment has length `dt`; the last window is truncated such
+            that the end time equals the time of the last sample in the
+            fragment.
+        """
+        return numpy.vstack(self.disjoint_windows_split(dt))
+
+    def moving_windows_split(self, dt):
+        """
+        Find a set of moving windows covering the sample times in each fragment
+
+        Parameters
+        ----------
+        dt : scalar
+            The width of the windows
+
+        Returns
+        -------
+        windows : list of ndarrays
+            List where each element is an array of start and end times for the
+            windows spanning the corresponding time fragment. The first column,
+            `windows[i][:, 0]`, contains start times, while the second column,
+            `windows[i][:, 1]` contains end times. Each window is centered
+            around a sample and has length `dt`, save for windows near the
+            beginning and end of each fragment, which are truncated so that no
+            window starts before the first sample in each fragment or ends
+            after the last sample in each fragment.
+
+        """
+        tsplit = self.data['tsplit']
+        windows = []
+        dt_2 = 0.5 * dt
+        for ts in tsplit:
+            tstart = numpy.maximum(ts - dt_2, ts[0])
+            tend = numpy.minimum(ts + dt_2, ts[-1])
+            windows.append(numpy.column_stack((tstart, tend)))
+        return windows
+
+    def moving_windows(self, dt):
+        """
+        Find a set of moving windows covering the sample times
+
+        Parameters
+        ----------
+        see `BasePosition.moving_windows_split`.
+
+        Returns
+        -------
+        windows : ndarray
+            Array of start and end times for the
+            windows. The first column, `windows[:, 0]`, contains start times,
+            while the second column, `windows[:, 1]` contains end times. Each
+            window is centered around a sample and has length `dt`, save for
+            windows near the beginning and end of each fragment, which are
+            truncated so that no window starts before the first sample in each
+            fragment or ends after the last sample in each fragment.
+
+        """
+        return numpy.vstack(self.moving_windows_split(dt))
+
+    def window_means(self, windows, filtered=True):
+        """
+        Compute the mean position in a set of time windows
+
+        Parameters
+        ----------
+        windows : array-like
+            Array of time windows similar to those returned from
+            `BasePosition.disjoint_windows` or `BasePosition.moving_windows`.
+        filtered : bool, optional
+            If True, use speed filtered positions.
+
+        Returns
+        -------
+        x, y: ndarray
+            Arrays containing the x and y coordinates of the mean position in
+            each of the given time windows
+
+        """
+        if filtered:
+            data = self.filtered_data()
+        else:
+            data = self.data
+        t, x, y, tw = data['t'], data['x'], data['y'], data['tweights']
+        n = len(windows)
+        xmeans, ymeans = numpy.ma.empty(n), numpy.ma.empty(n)
+        for i, (tstart, tend) in enumerate(windows):
+            index = (tstart <= t) & (t <= tend)
+            # Counting a hypothetical sample right at the window boundary twice
+            # is no crime in this case. It's the right thing to do in order to
+            # get the best mean.
+            twi = tw[index]
+            tw_total = numpy.sum(twi)
+            xmeans[i] = numpy.ma.sum(twi * x[index]) / tw_total
+            ymeans[i] = numpy.ma.sum(twi * y[index]) / tw_total
+        return xmeans, ymeans
+
     def plot_path(self, axes=None, linewidth=0.5, color='0.5', alpha=0.5,
                   **kwargs):
         """
@@ -792,10 +1035,10 @@ class Position(AlmostImmutable):
             axes = pyplot.gca(aspect='equal')
 
         fdata = self.filtered_data()
-        x, y = fdata['x'], fdata['y']
+        xframed, yframed = fdata['xframed'], fdata['yframed']
 
         kwargs.update(linewidth=linewidth, color=color, alpha=alpha)
-        return axes.plot(x, y, **kwargs)
+        return axes.plot(xframed, yframed, **kwargs)
 
     def plot_samples(self, axes=None, marker='.', s=1.0, c=None,
                      alpha=0.5, **kwargs):
@@ -903,6 +1146,135 @@ class Position(AlmostImmutable):
             lines.append(min_line)
 
         return lines
+
+
+class Position(BasePosition):
+    """
+    Represent positional data recorded over time
+
+    Parameters
+    ----------
+    t : array-like
+        Array containing the times of the position samples.
+        ..note:: A split in the consecutive streak of samples is noted if
+        a sampling time step exceedes 1.5 times the average of the non-split
+        time steps, unless this jump is not compensated by shorter time steps
+        within the nearest `Position.WLENGTH` samples from the long step. Each
+        consecutive streak is treated and filtered as a separate time series.
+        Any sampling irregularities within each streak are disregarded.
+    x, y : array-like
+        Arrays containing the x- and y-positions of the position samples.
+        Missing samples can be represented by nans or by using a masked array
+        for at least one of the arrays.
+    x2, y2 : array-like, optional
+        Arrays containing the x- and y-positions of a second set of position
+        samples. If given, the auxilliary positions are used to compute the
+        head direction of the animal at each location. The average of (x, y)
+        and (x2, y2) will be used for the position of the animal.
+    **kwargs : dict, optional
+        Additional keyword arguments are passed to the `BasePosition`
+        initializer.
+
+    """
+    WLENGTH = 5
+
+    def __init__(self, t, x, y, x2=None, y2=None, **kwargs):
+        t = numpy.squeeze(t)
+        tsplit = self.split(t, self.WLENGTH)
+
+        def xysplit(tsplit, x, y):
+            xsplit, ysplit = [], []
+
+            index = 0
+            for ts in tsplit:
+                l = ts.size
+                xsplit.append(x[index:index + l])
+                ysplit.append(y[index:index + l])
+                index += l
+            return xsplit, ysplit
+
+        x = numpy.ma.squeeze(x)
+        y = numpy.ma.squeeze(y)
+        xsplit, ysplit = xysplit(tsplit, x, y)
+
+        if x2 is not None:
+            if y2 is None:
+                raise ValueError("'x2' and 'y2' must either both be given or "
+                                 "both left out")
+
+            x2 = numpy.ma.squeeze(x2)
+            y2 = numpy.ma.squeeze(y2)
+            x2split, y2split = xysplit(tsplit, x2, y2)
+            BasePosition.__init__(self, tsplit, xsplit, ysplit,
+                                  x2split=x2split, y2split=y2split, **kwargs)
+        else:
+            BasePosition.__init__(self, tsplit, xsplit, ysplit, **kwargs)
+
+    @staticmethod
+    def split(t, wlength):
+        """
+        Find leaps in an otherwise more or less regular series of samples, and
+        split the array at these points
+
+        Parameters
+        ----------
+        t : array-like, one-dimensional
+            Array containing the series of samples.
+        wlength : scalar
+            Number of samples over which the intervals must balance out if the
+            samples are irregular. If a step longer than 1.5 times the average
+            time step is not compensated by one or more shorter-than-average
+            time steps within this number of samples, the long time step is
+            identified as the end of one consecutive streak of samples and the
+            beginning of the next.
+
+        Returns
+        -------
+        tsplit : list
+            List where each element is a one-dimensional ndarray with
+            a consecutie streak of samples from the series, such that
+            `numpy.hstack(tsplit)` equals `t`.
+
+        """
+        t = numpy.asarray(t)
+        tsteps = numpy.diff(t)
+
+        window = numpy.ones(wlength)
+        average_tsteps = (signal.convolve(tsteps, window, mode='same') /
+                          signal.convolve(numpy.ones_like(tsteps), window,
+                                          mode='same'))
+        start_offset = 1 - (wlength + 1) // 2
+        stop_offset = 1 + wlength // 2
+
+        def find_splits(mean_dt):
+            potential_splits = tsteps > 1.5 * mean_dt
+            splits = numpy.zeros_like(potential_splits)
+            threshold = mean_dt * (2 * wlength + 1) / (2 * wlength)
+            for psplit in numpy.where(potential_splits)[0]:
+                pstart = psplit + start_offset
+                pstop = psplit + stop_offset
+                if numpy.all(average_tsteps[pstart:pstop] > threshold):
+                    splits[psplit + 1] = True
+            return splits
+
+        mean_dt = numpy.mean(tsteps)
+        old_splits = numpy.zeros_like(tsteps, dtype=numpy.bool_)
+        splits = find_splits(mean_dt)
+        while numpy.any(splits & (~old_splits)):
+            mean_dt = numpy.mean(tsteps[~splits])
+            old_splits = splits
+            splits = find_splits(mean_dt)
+
+        splits = numpy.where(splits)[0]
+        fullsplits = numpy.hstack((0, splits, len(t)))
+        nsplits = len(splits)
+
+        tsplit = []
+        for i in range(nsplits + 1):
+            ts = t[fullsplits[i]:fullsplits[i + 1]]
+            tsplit.append(ts)
+
+        return tsplit
 
 
 # This is how we create a python2+3-compatible abstract base class: create an
@@ -1078,7 +1450,7 @@ class BaseCell(AbstractAlmostImmutable):
         Parameters
         ----------
         **kwargs : dict, optional
-            Keyword arguments are passed to `BaseCell.spikemap` and
+            Keyword arguments are passed to `BaseCell.nspikes` and
             `BaseCell.total_time`.
 
         Returns
@@ -1580,10 +1952,7 @@ class BaseCell(AbstractAlmostImmutable):
         inner_radius = 0.0
         if remove_cpeak:
             # Define central peak radius
-            ffield = self.firing_field(**kwargs)
-            sigma = numpy.sqrt(numpy.prod(numpy.sqrt(linalg.eigvalsh(ffield))))
-            inner_radius = 2.7 * sigma
-
+            inner_radius = self.firing_field_radius(**kwargs)
             acorr = acorr.shell(inner_radius, None)
 
         min_binwidth = min(numpy.mean(w) for w in bset.binwidths)
@@ -1776,14 +2145,27 @@ class BaseCell(AbstractAlmostImmutable):
 
         return IntensityMap2D(ffarr, bset)
 
-    def firing_field_radius(self, **kwargs):
+    def firing_field_radius(self, from_scale=True, radius_factor=None,
+                            **kwargs):
         """
-        Compute a radius characterizing the average firing field of the cell
+        Compute a radius approximating the average firing field size
 
         Parameters
         ----------
+        from_scale : bool, optional
+            If True, the radius is proportional to the scale. Otherwise, the
+            radius is proportional to the square root of the geometric mean of
+            the eigenvalues of the covariance matrix returned from
+            `BaseCell.firing_field` (i.e. the geometric mean of the standard
+            deviations of the marginal distributions along the separable
+            directions of the fitted Gaussian).
+        radius_factor : scalar, optional
+            The constant of proportionality referred to above. If None, the
+            following default values are used: if `from_scale=True`,
+            `radius_factor=2.0 / 7.0`; otherwise, `radius_factor=1.75`.
         **kwargs : dict, optional
-            Keyword arguments are passed to `BaseCell.firing_field`.
+            Keyword arguments are passed to `BaseCell.scale` or
+            `BaseCell.firing_field`.
 
         Returns
         -------
@@ -1791,10 +2173,20 @@ class BaseCell(AbstractAlmostImmutable):
             Firing field radius.
 
         """
-        return 2.0 * (linalg.det(self.firing_field(**kwargs)) ** 0.25)
-        #return self.scale(**kwargs) * numpy.sqrt(0.1)  # 2.0 / 7.0
+        if from_scale:
+            if radius_factor is None:
+                radius_factor = 2.0 / 7.0
+            return radius_factor * self.scale(**kwargs)
+        else:
+            if radius_factor is None:
+                radius_factor = 1.75
+            return radius_factor * (
+                linalg.det(self.firing_field(**kwargs)) ** 0.25)
 
-    def firing_fields(self, fixed_radius=True, **kwargs):
+    def firing_fields(self, fixed_radius=True, clean=True,
+                      min_overlap=1.0 / 9.0, max_overlap=1.0 / 9.0,
+                      min_sigma_factor=1.0 / 1.1, max_sigma_factor=1.1,
+                      num_sigma=193, threshold_quantile=1.0 / 8.0, **kwargs):
         """
         Detect firing fields in the ratemap
 
@@ -1805,9 +2197,36 @@ class BaseCell(AbstractAlmostImmutable):
             given by `BaseCell.firing_field_radius`. Otherwise, the radius
             corresponding to the scale at which the blob was detected will be
             used.
+        clean : bool, optional
+            If True, a template ratemap with idealized grid and fields, from
+            `BaseCell.template`, is used to pick out only the those of the
+            detected fields that overlap sufficiently with the fields in the
+            idealized grid.
+        min_overlap : scalar, optional
+            The minimum overlap fraction of a detected and an idealized firing
+            fields in order to be considered a match. This parameter has no
+            effect if `clean=False`.
+        max_overlap : scalar, optional
+            The maximum overlap fraction of two detected firing fields --
+            when fields overlap more than this, only the larger field is kept.
+        min_sigma_factor, max_sigma_factor : scalars, optional
+            Constants defining the sigma interval for the blob detection
+            algorithm. The interval is bounded by these constants multiplied by
+            the firing field radius divided by ..math::`\sqrt{2}`.
+        num_sigma : integer, optional
+            The number of sigma values to use in the blob detection algorithm.
+            The values will be logarithmically spaced in the sigma interval.
+        threshold_quantile : scalar in [0, 1], optional
+            Parameter to calculate the blob detection threshold. The peak
+            detection threshold on the negative scaled Laplacian-of-Gaussian
+            transforms of the ratemap are is computed as follows: the bottom
+            and top 7.5 percentiles are discarded from the distribution of
+            rates in the ratemap, the distribution is shifted such that the
+            lowest value is 0.0, and the threshold is found as the quantile of
+            this distribution given by this parameter.
         **kwargs : dict, optional
-            Additional keyword arguments are passed to `BaseCell.firing_field`
-            and `BaseCell.ratemap`.
+            Additional keyword arguments are passed to `BaseCell.firing_field`,
+            `BaseCell.ratemap`, and `BaseCell.ideal_firing_fields`.
 
         Returns
         -------
@@ -1819,23 +2238,65 @@ class BaseCell(AbstractAlmostImmutable):
         """
         radius = self.firing_field_radius(**kwargs)
         sig = radius / _SQRT2
-        default_bins = self.ratemap(**kwargs).shape
+        rmap = self.ratemap(**kwargs)
+        default_bins = rmap.shape
         custom_bins = (2 * default_bins[0], 2 * default_bins[1])
-        rmap = self.ratemap(bins=custom_bins)
-        threshold = 0.4 * rmap.mean()
-        fields = rmap.blobs(
-            min_sigma=sig,
-            max_sigma=1.25 * sig,
-            num_sigma=26,
-            prune_overlap=True,
+        custom_rmap = self.ratemap(bins=custom_bins)
+        threshold = numpy.diff(
+            numpy.percentile(custom_rmap.data.ravel(),
+                             [7.5, 85 * threshold_quantile + 7.5]))[0]
+        field_arr = custom_rmap.blobs(
+            min_sigma=sig * min_sigma_factor,
+            max_sigma=sig * max_sigma_factor,
+            num_sigma=num_sigma,
+            max_overlap=max_overlap,
             threshold=threshold,
-            log_scale=False,
+            log_scale=True,
             ignore_missing=True,
-            exclude_edges=True,
+            exclude_edges=2,
         )
+
         if fixed_radius:
-            fields[:, 2] = radius
+            field_arr[:, 2] = radius
+        else:
+            field_arr[:, 2] *= _SQRT2
+
+        fields = pandas.DataFrame(field_arr,
+                                  columns=['field_x', 'field_y', 'field_r'])
+        fields['field_index'] = numpy.arange(1, len(field_arr) + 1,
+                                             dtype=numpy.int_)
+
+        if clean:
+            ideal_fields = self.ideal_firing_fields(**kwargs)
+            fields = clean_fields(fields, ideal_fields,
+                                  min_overlap=min_overlap)
+
         return fields
+
+    @memoize_method
+    def ideal_firing_fields(self, **kwargs):
+        """
+        Compute idealized firing fields via the template ratemap for the cell
+
+        Parameters
+        ----------
+        **kwargs : dict, optional
+            Additional keyword arguments are passed to `BaseCell.template`,
+            `TemplateGridCell.firing_field_radius` and
+            `TemplateGridCell.firing_fields`.
+
+        Returns
+        -------
+        ndarray, shape (n, 3)
+            All firing fields from the template that overlap with the
+            experimental environment of the cell.
+
+        """
+        template = self.template(**kwargs)
+        margin = template.firing_field_radius(**kwargs)
+        range_ = tuple((r[0] - margin, r[1] + margin)
+                       for r in self.ratemap().range_)
+        return template.firing_fields(range_=range_, **kwargs)
 
     def features(self, index=FeatureNames.default_features, weights=None,
                  roll=0, normalize_peaks=True, **kwargs):
@@ -2391,6 +2852,60 @@ class BaseCell(AbstractAlmostImmutable):
         kwargs.update(threshold=threshold, vmin=vmin, vmax=vmax)
         return ffield.plot(**kwargs)
 
+    @memoize_method
+    def template(self, circular_fields=True, template_kw=None, **kwargs):
+        """
+        Create an idealized template ratemap from this cell
+
+        A TemplateGridCell instance instantiated with grid parameters from this
+        cell is returned.
+
+        Parameters
+        ----------
+        circular_fields : bool, optional
+            If True, the firing fields in the template will be circular
+            symmetric Gaussians. If False, they will be general 2D Gaussians
+            with covariance matrix given by `BaseCell.firing_field`. The
+            determinant of the covariance matrix is the same in both cases.
+        template_kw : None or dict, optional
+            Keyword arguments passed to `TemplateGridCell`.
+        **kwargs : dict, optional
+            Keyword arguments passed to `BaseCell.ratemap`,
+            `BaseCell.grid_peaks`, and `BaseCell.firing_field`.
+
+        Return
+        ------
+        TemplateGridCell
+            Idealized template.
+
+        """
+        bset = self.ratemap(**kwargs).bset
+
+        cellbins = bset.shape
+        cellrange = bset.range_
+        bins = []
+        range_ = []
+        for cb, cr in zip(cellbins, cellrange):
+            eb = (cb + 1) // 2
+            ew = (cr[1] - cr[0]) * eb / cb
+            bins.append(cb + 2 * eb)
+            range_.append((cr[0] - ew, cr[1] + ew))
+
+        if template_kw is None:
+            template_kw = {}
+        kwargs.update(polar_peaks=False)
+
+        ffield = self.firing_field(**kwargs)
+        if circular_fields:
+            ffield = numpy.identity(2) * numpy.sqrt(linalg.det(ffield))
+
+        peaks = self.grid_peaks(**kwargs)
+
+        template = TemplateGridCell(peaks, ffield, bins, range_,
+                                    **template_kw)
+        template.params['phase'] = self.phase(template)
+        return template
+
 
 class TemplateGridCell(BaseCell):
     """
@@ -2412,11 +2927,15 @@ class TemplateGridCell(BaseCell):
     bins, range_:
         Bin and range specification. See `BinnedSet.from_range_shape` for
         details (`bins` is equivalent to `shape`).
+    phase : tuple, optional
+        The spatial offset of the ratemap of the template. Zero phase places
+        a firing field at the origin.
     **kwargs : dict, optional
         Keyword arguments are passed to `BaseCell`.
 
     """
-    def __init__(self, peaks, firing_field, bins, range_, **kwargs):
+    def __init__(self, peaks, firing_field, bins, range_, phase=(0.0, 0.0),
+                 **kwargs):
         if not numpy.allclose(peaks, lattice_peaks(peaks)):
             raise ValueError("'peaks' does not define a consistent lattice")
 
@@ -2430,9 +2949,10 @@ class TemplateGridCell(BaseCell):
         self.params.update(
             bins=bins,
             range_=range_,
+            phase=phase,
         )
 
-    def grid(self, range_=None):
+    def grid(self, phase=None, range_=None, **kwargs):
         """
         Find all grid nodes within a rectangular range
 
@@ -2441,7 +2961,14 @@ class TemplateGridCell(BaseCell):
         range_ : sequence
             Sequence containing two range tuples, one for each spatial
             direction. Each range tuple contains the minimum and maximum value
-            along the corresponding dimension.
+            along the corresponding dimension. If not provided, the full range
+            (given at initialization) is used
+        phase : tuple or None, optional
+            Spatial phase of the grid. If provided, this overrides the phase
+            given at initialization. Zero phase, `(0.0, 0.0)`, places a firing
+            field at the origin.
+        **kwargs : dict, optional
+            Keyword arguments are passed to `TemplateGridCell.grid_peaks`.
 
         Returns
         -------
@@ -2450,32 +2977,37 @@ class TemplateGridCell(BaseCell):
             within 'range_'
 
         """
+        if phase is None:
+            phase = self.params['phase']
+        voronoi = self.unit_cell(cell_type='voronoi')
+        phase = voronoi.wrap_into(numpy.asarray(phase)[numpy.newaxis, ...])
+
         if range_ is None:
             range_ = self.params['range_']
-
-        peaks = self.grid_peaks()
-        peaks_r1 = numpy.roll(peaks, 1, axis=0)
-
-        # Find the number of rounds of adding fields around the center needed
-        # in order to fill the range
-        midpeaks = 0.5 * (peaks + peaks_r1)
-        mpx, mpy = midpeaks[:, 0], midpeaks[:, 1]
-        mpdsq = mpx * mpx + mpy * mpy
-
         rx, ry = range_
         dx, dy = 0.5 * (rx[1] - rx[0]), 0.5 * (ry[1] - ry[0])
-        diagsq = dx * dx + dy * dy
 
-        levels = int(numpy.ceil(numpy.sqrt(diagsq / mpdsq.min())))
+        peaks = self.grid_peaks(**kwargs)
+        peaks_r1 = numpy.roll(peaks, 1, axis=0)
+        mid = 0.5 * (peaks + peaks_r1)
+        midx, midy = mid[:, 0], mid[:, 1]
+        midr_sq = midx * midx + midy * midy
+        diag_sq = dx * dx + dy * dy
+        phase_margin = 0.5 * voronoi.longest_diagonal()
+        rounds = int(ceil(numpy.sqrt(
+            (numpy.max(diag_sq) + phase_margin * phase_margin) /
+            numpy.min(midr_sq))))
 
-        all_peaks = [[0.0, 0.0]]
-        for i in range(levels + 1):
-            for l in range(i):
-                k = i - l
-                all_peaks.append(k * peaks + l * peaks_r1)
-        all_peaks = numpy.vstack(all_peaks)
+        pattern = [numpy.array((0.0, 0.0))]
+        for k in range(1, rounds + 1):
+            layer_parts = []
+            for l in range(k):
+                layer_parts.append(l * peaks + (k - l) * peaks_r1)
+            pattern.append(numpy.column_stack(layer_parts).reshape(-1, 2))
+        all_peaks = numpy.vstack(pattern)
+        all_peaks += phase
 
-        # We have rounded up, so we probably need to remove a few peaks
+        # We have rounded up, so we may need to remove a few peaks
         within = numpy.logical_and(
             numpy.logical_and(
                 numpy.logical_and(
@@ -2489,12 +3021,12 @@ class TemplateGridCell(BaseCell):
         all_peaks = all_peaks[within]
 
         # Sort
-        all_peaks = all_peaks[numpy.argsort(all_peaks[:, 1])]
-        all_peaks = all_peaks[numpy.argsort(all_peaks[:, 0])]
+        #all_peaks = all_peaks[numpy.argsort(all_peaks[:, 1])]
+        #all_peaks = all_peaks[numpy.argsort(all_peaks[:, 0])]
 
         return all_peaks
 
-    def firing_rate(self, x, y, phase=(0.0, 0.0), amplitude_cv=0.0):
+    def firing_rate(self, x, y, amplitudes=1.0, **kwargs):
         """
         Compute the firing rate at a location
 
@@ -2502,13 +3034,22 @@ class TemplateGridCell(BaseCell):
         ----------
         x, y : array-like
             Coordinates at which to evaluate the firing rate.
-        amplitude_cv : scalar, optional
-            The amplitudes of the firing fields are drawn independently from
-            a distribution with this coefficient of variance (ratio of standard
-            deviation to mean).
-        phase : tuple, optional
-            Spatial phase of the ratemap. Zero phase, `(0.0, 0.0)`, places
-            a firing field at the origin.
+        amplitudes : scalar or iterable, optional
+            This argument provides a way to assign varying amplitudes to the
+            firing fields in the ratemap. If an iterable, the contained values
+            will be assigned one by one to the fields in the ratemap, starting
+            at the center (`x == phase[0]` and `y == phase[1]`) and spiraling
+            counterclockwise towards the periphery. A ValueError is raised if
+            too few amplitudes are provided (the number of peaks used to
+            compute the rate may be somewhat larger than strictly necessary,
+            so provide many values). If a scalar, this amplitude will be
+            assigned to all fields. The amplitude of a field is scaled such
+            that `amplitudes=1.0` gives a ratemap with mean rate 1.0.
+        mean_rate : scalar, optional
+            The firing rate is normalized such that the expected spatial mean
+            rate is equal to this.
+        **kwargs : dict, optional
+            Keyword arguments are passed to `TemplateGridCell.grid`.
 
         Returns
         -------
@@ -2516,55 +3057,32 @@ class TemplateGridCell(BaseCell):
             Firing rate at locations given by `x` and `y`.
 
         """
-        x, y = numpy.broadcast_arrays(x - phase[0], y - phase[1])
+        x, y = numpy.broadcast_arrays(x, y)
         frate = numpy.zeros_like(x, dtype=numpy.float_)
         valid = ~(numpy.isnan(x) | numpy.isnan(y))
         xv, yv = x[valid], y[valid]
         frate[~valid] = numpy.nan
 
         points = numpy.column_stack((xv, yv))
-        peaks = self.grid_peaks()
         voronoi = self.unit_cell(cell_type='voronoi')
+        margin = voronoi.longest_diagonal()
+        range_ = tuple((numpy.min(v) - margin, numpy.max(v) + margin)
+                       for v in (xv, yv))
+        pattern = self.grid(range_=range_, **kwargs)
 
-        #points = voronoi.wrap_into(points)
-        #pattern = numpy.vstack(((0.0, 0.0), peaks))
-
-        peaks_r1 = numpy.roll(peaks, 1, axis=0)
-        mid = 0.5 * (peaks + peaks_r1)
-        midx, midy = mid[:, 0], mid[:, 1]
-        midr_sq = midx * midx + midy * midy
-        diag_sq = xv * xv + yv * yv
-        rounds = int(ceil(numpy.sqrt(numpy.max(diag_sq) / numpy.min(midr_sq))))
-        rounds += 1  # Just to be sure
-
-        pattern = [numpy.array((0.0, 0.0))]
-        for k in range(1, rounds + 1):
-            for l in range(k):
-                pattern.extend((k - l) * peaks + l * peaks_r1)
-        l = len(pattern)
-
-        if amplitude_cv > 0.0:
-            cv_sq = amplitude_cv * amplitude_cv
-
-            # Gamma
-            shape = 1.0 / cv_sq
-            scale = cv_sq
-            amplitudes = numpy.random.gamma(shape, scale=scale, size=l)
-
-            ## Log-normal
-            #log_cv_sqp1 = numpy.log(1.0 + cvsq)
-            #mean = -.5 * log_cv_sqp1
-            #sigma = numpy.sqrt(log_cv_sqp1)
-            #amplitudes = numpy.random.lognormal(mean, sigma=sigma, size=l)
-        else:
-            amplitudes = numpy.ones(l)
-
-        # Scale to get expected mean firing rate 1.0 (approximation: all mass
-        # of gaussians contained within unit cell area)
-        amplitudes *= voronoi.area
+        try:
+            amps = iter(amplitudes)
+        except TypeError:
+            amps = repeat(amplitudes)
 
         ffield = self.firing_field()
-        for peak, amplitude in zip(pattern, amplitudes):
+        for peak in pattern:
+            try:
+                # Scale to get expected mean firing rate 1.0 (approximation:
+                # all mass of gaussians contained within unit cell area)
+                amplitude = voronoi.area * next(amps)
+            except StopIteration:
+                raise ValueError("Too few amplitudes provided")
             frate[valid] += amplitude * gaussian(points, mean=peak, cov=ffield)
         return frate
 
@@ -2636,7 +3154,82 @@ class TemplateGridCell(BaseCell):
         """
         coordinates = self.grid(**kwargs)
         radius = self.firing_field_radius(**kwargs)
-        return numpy.column_stack((coordinates, [radius] * len(coordinates)))
+        fields = pandas.DataFrame(coordinates,
+                                  columns=['field_x', 'field_y'])
+        fields['field_r'] = radius
+        fields['field_index'] = numpy.arange(1, len(fields) + 1,
+                                             dtype=numpy.int_)
+        return fields
+
+    def synthetic_spike_t(self, t, x, y, mean_rate, tstep=0.005, **kwargs):
+        """
+        Generate a synthetic spike train for a series of position samples
+
+        Parameters
+        ----------
+        t, x, y : array-like
+            Times, x-values and y-values of the position samples to generate
+            spikes for.
+        mean_rate : scalar
+            Mean firing rate of the spike train.
+        tstep : scalar, optional
+            Length of time bins. The trajectory will be divided into time bins
+            of this length, and zero or one spike will be placed in each bin
+            (hence, this value may be interpreted as the refraftory period of
+            the neuron).
+        **kwargs : dict, optional
+            Keyword arguments will be passed to `TemplateGridCell.firing_rate`.
+            Note in particular the keyword `amplitudes`, which may be used to
+            adjust the amplitude of each firing field. Keep in mind that the
+            amplitudes will also be scaled by `mean_rate`, so they should be
+            sampled from a distribution of mean 1.0.
+
+        Returns
+        -------
+        ndarray
+            Array of spike times.
+
+        """
+        tstep_2 = 0.5 * tstep
+        tcenters = numpy.arange(t[0] + tstep_2, t[-1], tstep)
+        tsteps = (numpy.minimum(tcenters + tstep_2, t[-1]) -
+                  (tcenters - tstep_2))
+
+        x = numpy.ma.filled(x, fill_value=numpy.nan)
+        y = numpy.ma.filled(y, fill_value=numpy.nan)
+
+        xcenters = numpy.interp(tcenters, t, x)
+        ycenters = numpy.interp(tcenters, t, y)
+
+        ideal_rate = mean_rate * self.firing_rate(xcenters, ycenters, **kwargs)
+
+        spike_prob = tsteps * ideal_rate
+        spikes = numpy.random.random_sample((len(spike_prob), )) < spike_prob
+        return tcenters[spikes]
+
+    def synthetic_spike_t_pos(self, pos, mean_rate, **kwargs):
+        """
+        Generate a synthetic spike train for a `Position` object
+
+        Parameters
+        ----------
+        pos : Position
+            `Position` object to generate spikes for.
+        mean_rate : scalar
+            Mean firing rate of the spike train.
+        **kwargs : dict, optional
+            Keyword arguments will be passed to
+            `TemplateGridCell.synthetic_spike_t`.
+
+        Returns
+        -------
+        ndarray
+            Array of spike times.
+
+        """
+        data = pos.data
+        tf, xf, yf = data['tframed'], data['xframed'], data['yframed']
+        return self.synthetic_spike_t(tf, xf, yf, mean_rate, **kwargs)
 
 
 class Cell(BaseCell):
@@ -2686,9 +3279,7 @@ class Cell(BaseCell):
 
         spike_t = numpy.squeeze(spike_t)
 
-        posdata = position.filtered_data()
-        spike_x = self.interpolate_spikes(spike_t, posdata['t'], posdata['x'])
-        spike_y = self.interpolate_spikes(spike_t, posdata['t'], posdata['y'])
+        spike_x, spike_y = position.interpolate(spike_t)
 
         self.data.update(
             spike_t=spike_t,
@@ -2698,39 +3289,6 @@ class Cell(BaseCell):
 
         memoize_method.register_friend(position, self)
         self.position = position
-
-    @staticmethod
-    def interpolate_spikes(spike_t, t, x):
-        """
-        Find values of a signal at the spikes in a spike train
-
-        The signal array may be masked or contain nans, in which case spikes
-        occuring in the corresponding times will be discarded.
-
-        Parameters
-        ----------
-        spike_t : array-like
-            Array giving spike times.
-        t, x : array-like
-            Arrays giving the times and samples of the signal to interpolate.
-            If `x` is masked or contains nans, spikes occuring in the
-            corresponding time intervals will be masked.
-
-        Returns
-        -------
-        spike_x : ndarray
-            Array of the values of x at the spike times.
-
-        """
-        xf = numpy.ma.array(x, dtype=numpy.float_)
-        xf = numpy.ma.filled(xf, fill_value=numpy.nan)
-
-        spike_xf = numpy.interp(spike_t, t, xf)
-        mask = numpy.isnan(spike_xf)
-
-        spike_x = numpy.interp(spike_t, t, x)
-        spike_x = numpy.ma.masked_where(mask, spike_x)
-        return spike_x
 
     @memoize_method
     def bandwidth(self):
@@ -3106,10 +3664,8 @@ class Cell(BaseCell):
 
         """
         pos = self.position
-        t = pos.filtered_data()['t']
-        hd = pos.hd()
         spike_t = self.data['spike_t']
-        return self.interpolate_spikes(spike_t, t, hd)
+        return pos.interpolate_hd(spike_t)
 
     @memoize_method
     def _spike_hd_dist(self, bins, hd_dist_mode, bandwidth, kernel):
@@ -3360,8 +3916,8 @@ class Cell(BaseCell):
 
         Returns
         -------
-        hd_score : scalar
-            Head direction score.
+        xmean, ymean : scalars
+            Cartesian coordinates of the circular mean.
 
         """
         hd_rate = self.hd_rate(**kwargs)
@@ -3477,7 +4033,9 @@ class Cell(BaseCell):
         posdata = pos.data
         posparams = pos.params
 
-        tw = pos.filtered_data()['tweights']
+        # Masked samples don't count
+        tw = numpy.ma.filled(pos.filtered_data()['tweights'], fill_value=0.0)
+
         cumtw = numpy.cumsum(tw)
         length = cumtw[-1]
         start_length, stop_length = length * start, length * stop
@@ -4099,8 +4657,8 @@ class CellCollection(AlmostImmutable, MutableSequence):
                 return cell.ratemap(**kwargs) / cell.rate_std(**kwargs)
         elif normalize == 'zscore':
             def _norm(cell):
-                return ((cell.ratemap(**kwargs) - cell.rate_mean(**kwargs))
-                        / cell.rate_std(**kwargs))
+                return ((cell.ratemap(**kwargs) - cell.rate_mean(**kwargs)) /
+                        cell.rate_std(**kwargs))
         else:
             raise ValueError("unknown normalization: {}".format(normalize))
 
@@ -4600,18 +5158,19 @@ class Module(CellCollection):
         bset = self[0].ratemap(**kwargs).bset
 
         cellbins = bset.shape
-        bins = (3 * cellbins[0], 3 * cellbins[1])
-
-        crx, cry = bset.range_
-        cwx = crx[1] - crx[0]
-        cwy = cry[1] - cry[0]
-        range_ = ((crx[0] - cwx, crx[1] + cwx),
-                  (cry[0] - cwy, cry[1] + cwy))
+        cellrange = bset.range_
+        bins = []
+        range_ = []
+        for cb, cr in zip(cellbins, cellrange):
+            eb = (cb + 1) // 2
+            ew = (cr[1] - cr[0]) * eb / cb
+            bins.append(cb + 2 * eb)
+            range_.append((cr[0] - ew, cr[1] + ew))
 
         return bins, range_
 
     @memoize_method
-    def template(self, template_kw=None, **kwargs):
+    def template(self, circular_fields=True, template_kw=None, **kwargs):
         """
         Construct a template cell for the module
 
@@ -4622,6 +5181,11 @@ class Module(CellCollection):
 
         Parameters
         ----------
+        circular_fields : bool, optional
+            If True, the firing fields in the template will be circular
+            symmetric Gaussians. If False, they will be general 2D Gaussians
+            with covariance matrix given by `Module.mean_firing_field`. The
+            determinant of the covariance matrix is the same in both cases.
         template_kw : dict or None, optional
             Keyword arguments passed to the instantiation of the
             TemplateGridCell.
@@ -4638,8 +5202,12 @@ class Module(CellCollection):
         """
         if template_kw is None:
             template_kw = {}
-        return TemplateGridCell(self.mean_grid_peaks(**kwargs),
-                                self.mean_firing_field(**kwargs),
+
+        ffield = self.mean_firing_field(**kwargs)
+        if circular_fields:
+            ffield = numpy.identity(2) * numpy.sqrt(linalg.det(ffield))
+
+        return TemplateGridCell(self.mean_grid_peaks(**kwargs), ffield,
                                 *self._template_bins_range(**kwargs),
                                 **template_kw)
 
@@ -4741,7 +5309,7 @@ class Module(CellCollection):
 
         """
         pl = [(cell1, cell2) for cell1 in self for cell2 in self]
-              #if cell2 is not cell1]
+        #      if cell2 is not cell1]
         return pandas.DataFrame(
             {pair: pair[1].phase(pair[0], **kwargs)
              for pair in pl},
@@ -4794,7 +5362,7 @@ class Module(CellCollection):
             kwargs.update(canonical=canonical)
             abs_phases = self.phases(**kwargs)
             pl = [(cell1, cell2) for cell1 in self for cell2 in self]
-                  #if cell2 is not cell1]
+            #      if cell2 is not cell1]
             return pandas.DataFrame(
                 {pair: abs_phases.loc[pair[1]] - abs_phases.loc[pair[0]]
                  for pair in pl}).transpose().loc[pl]

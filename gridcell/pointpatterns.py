@@ -78,12 +78,12 @@ class Window(geometry.Polygon):
 
         Parameters
         ----------
-        points : array-like, shape (2, n)
+        points : array-like, shape (n, 2)
             Array of `n` point coordinates.
 
         Returns
         -------
-        ndarray, shape (2, n)
+        ndarray, shape (n, 2)
             New array of wrapped point coordinates.
 
         """
@@ -1691,7 +1691,7 @@ class PointPattern(AlmostImmutable, Sequence):
             npnp_1 = area * area * squared_intensity
             kstd = r * numpy.sqrt(2.0 * _PI * voronoi.ball_difference_area(r) /
                                   npnp_1)
-                                  #(npnp_1 + 0.5 + numpy.sqrt(npnp_1 + 0.25)))
+            #                      (npnp_1 + 0.5 + numpy.sqrt(npnp_1 + 0.25)))
         else:
             kstd = numpy.ones_like(r)
 
@@ -2178,7 +2178,7 @@ class PointPattern(AlmostImmutable, Sequence):
                 csr_kw = {}
 
             kcsr = _PI * rvals * rvals
-            lines += axes.plot(rvals, kcsr, linestyle='dashed', **csr_kw)
+            lines += axes.plot(rvals, kcsr, **csr_kw)
 
         return lines
 
@@ -2233,7 +2233,7 @@ class PointPattern(AlmostImmutable, Sequence):
             if csr_kw is None:
                 csr_kw = {}
 
-            lines += axes.plot(rvals, rvals, linestyle='dashed', **csr_kw)
+            lines += axes.plot(rvals, rvals, **csr_kw)
 
         return lines
 
@@ -2297,7 +2297,7 @@ class PointPattern(AlmostImmutable, Sequence):
                 csr_kw = {}
 
             gcsr = numpy.ones_like(rvals)
-            lines += axes.plot(rvals, gcsr, linestyle='dashed', **csr_kw)
+            lines += axes.plot(rvals, gcsr, **csr_kw)
 
         return lines
 
@@ -3770,7 +3770,7 @@ class PointPatternCollection(AlmostImmutable, Sequence):
                 csr_kw = {}
 
             kcsr = _PI * rvals * rvals
-            lines += axes.plot(rvals, kcsr, linestyle='dashed', **csr_kw)
+            lines += axes.plot(rvals, kcsr, **csr_kw)
 
         return lines
 
@@ -3830,7 +3830,7 @@ class PointPatternCollection(AlmostImmutable, Sequence):
             if csr_kw is None:
                 csr_kw = {}
 
-            lines += axes.plot(rvals, rvals, linestyle='dashed', **csr_kw)
+            lines += axes.plot(rvals, rvals, **csr_kw)
 
         return lines
 

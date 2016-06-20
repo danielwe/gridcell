@@ -107,7 +107,7 @@ def filter_(t, x, window_time, cutoff_freq, window):
     fs = 1.0 / numpy.mean(numpy.diff(t))
     wl = 2 * int(0.5 * window_time * fs) + 1
     kernel = signal.firwin(wl, [cutoff_freq], pass_zero=True,
-                           nyq=(0.5 * fs), window='hann')
+                           nyq=(0.5 * fs), window=window)
     mask = numpy.ma.getmaskarray(x)
     xf = numpy.ma.filled(x, fill_value=0.0)
     xn = signal.convolve(xf, kernel, mode='same')
