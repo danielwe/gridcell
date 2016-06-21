@@ -698,11 +698,38 @@ def matching_disk_pairs(discs1, discs2, min_overlap=0.0):
 
 
 def clean_fields(fields, ideal_fields, min_overlap=1.0 / 9.0):
+    """
+    Select the fields that pair up most closely with a set of ideal fields
+
+    Parameters
+    ----------
+    fields, ideal_fields : pandas.DataFrame
+        Dataframes containing firing fields, as returned from
+        `BaseCell.firing_fields`. The columns `'field_x', 'field_y', 'field_r'`
+        contain the x and y coordinates of the field center, and the field
+        radius. The `ideal_fields` dataframe must also contain a column
+        `field_index` containing an index for each field. These indices will be
+        transferred to the matching fields in `fields` that are returned.
+    min_overlap : scalar, optional
+        Minimum overlap of a field with one of the ideal fields in order to be
+        considered a match.
+
+    Returns
+    -------
+    sequence
+        Subset of `fields` that most closely match `ideal_fields`.
+
+    """
     field_arr = fields[['field_x', 'field_y', 'field_r']].values
     ideal_field_arr = ideal_fields[['field_x', 'field_y', 'field_r']].values
     matches = matching_disk_pairs(field_arr, ideal_field_arr,
                                   min_overlap=min_overlap)
-    fields_unordered, ideal_unordered = zip(*matches)
+    try:
+        fields_unordered, ideal_unordered = zip(*matches)
+    except ValueError:
+        # No matches found
+        return pandas.DataFrame(dict(field_x=[], field_y=[], field_r=[],
+                                     field_index=[]))
     indices = []
     field_arr = []
     for ifield in ideal_fields.itertuples():
