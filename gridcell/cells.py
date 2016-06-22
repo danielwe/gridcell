@@ -368,6 +368,7 @@ class BasePosition(AlmostImmutable):
         )
         return dwa / twa
 
+    @memoize_method
     def filtered_data(self):
         """
         Apply a speed mask to the data
@@ -2183,7 +2184,8 @@ class BaseCell(AbstractAlmostImmutable):
             return radius_factor * (
                 linalg.det(self.firing_field(**kwargs)) ** 0.25)
 
-    def firing_fields(self, fixed_radius=True, clean=True,
+    @memoize_method
+    def firing_fields(self, fixed_radius=True, clean=True, ifields=None,
                       min_overlap=1.0 / 9.0, max_overlap=1.0 / 9.0,
                       min_sigma_factor=1.0 / 1.1, max_sigma_factor=1.1,
                       num_sigma=193, threshold_quantile=1.0 / 8.0, **kwargs):
@@ -2198,10 +2200,11 @@ class BaseCell(AbstractAlmostImmutable):
             corresponding to the scale at which the blob was detected will be
             used.
         clean : bool, optional
-            If True, a template ratemap with idealized grid and fields, from
-            `BaseCell.template`, is used to pick out only the those of the
-            detected fields that overlap sufficiently with the fields in the
-            idealized grid.
+            If True, only the those of the detected fields that overlap
+            sufficiently with the a set of idealized fields will be kept.
+        ifields : pandas.DataFrame, optional
+            The ideali firing fields to use if `clean=True`. If `None`, the
+            fields returned by `BaseCell.ideal_firing_fields`are used.
         min_overlap : scalar, optional
             The minimum overlap fraction of a detected and an idealized firing
             fields in order to be considered a match. This parameter has no
@@ -2267,13 +2270,12 @@ class BaseCell(AbstractAlmostImmutable):
                                              dtype=numpy.int_)
 
         if clean:
-            ideal_fields = self.ideal_firing_fields(**kwargs)
-            fields = clean_fields(fields, ideal_fields,
-                                  min_overlap=min_overlap)
+            if ifields is None:
+                ifields = self.ideal_firing_fields(**kwargs)
+            fields = clean_fields(fields, ifields, min_overlap=min_overlap)
 
         return fields
 
-    @memoize_method
     def ideal_firing_fields(self, **kwargs):
         """
         Compute idealized firing fields via the template ratemap for the cell
@@ -3127,6 +3129,7 @@ class TemplateGridCell(BaseCell):
     def firing_field(self, **kwargs):
         return self.data['firing_field']
 
+    @memoize_method
     def firing_fields(self, fixed_radius=True, **kwargs):
         """
         Detect firing fields in the ratemap
@@ -3161,35 +3164,18 @@ class TemplateGridCell(BaseCell):
                                              dtype=numpy.int_)
         return fields
 
-    def synthetic_spike_t(self, t, x, y, mean_rate, tstep=0.005, **kwargs):
+    @memoize_method
+    def _spike_probs(self, pos, mean_rate, tstep=0.005, **kwargs):
         """
-        Generate a synthetic spike train for a series of position samples
+        Generate a series of time bins and corresponding spike probabilities
 
-        Parameters
-        ----------
-        t, x, y : array-like
-            Times, x-values and y-values of the position samples to generate
-            spikes for.
-        mean_rate : scalar
-            Mean firing rate of the spike train.
-        tstep : scalar, optional
-            Length of time bins. The trajectory will be divided into time bins
-            of this length, and zero or one spike will be placed in each bin
-            (hence, this value may be interpreted as the refraftory period of
-            the neuron).
-        **kwargs : dict, optional
-            Keyword arguments will be passed to `TemplateGridCell.firing_rate`.
-            Note in particular the keyword `amplitudes`, which may be used to
-            adjust the amplitude of each firing field. Keep in mind that the
-            amplitudes will also be scaled by `mean_rate`, so they should be
-            sampled from a distribution of mean 1.0.
-
-        Returns
-        -------
-        ndarray
-            Array of spike times.
+        This is factored out from `TemplateGridCell.synthetic_spike_t` to
+        optimize memoization.
 
         """
+        data = pos.data
+        t, x, y = data['tframed'], data['xframed'], data['yframed']
+
         tstep_2 = 0.5 * tstep
         tcenters = numpy.arange(t[0] + tstep_2, t[-1], tstep)
         tsteps = (numpy.minimum(tcenters + tstep_2, t[-1]) -
@@ -3201,13 +3187,12 @@ class TemplateGridCell(BaseCell):
         xcenters = numpy.interp(tcenters, t, x)
         ycenters = numpy.interp(tcenters, t, y)
 
-        ideal_rate = mean_rate * self.firing_rate(xcenters, ycenters, **kwargs)
+        return (
+            tcenters,
+            mean_rate * tsteps * self.firing_rate(xcenters, ycenters, **kwargs)
+        )
 
-        spike_prob = tsteps * ideal_rate
-        spikes = numpy.random.random_sample((len(spike_prob), )) < spike_prob
-        return tcenters[spikes]
-
-    def synthetic_spike_t_pos(self, pos, mean_rate, **kwargs):
+    def synthetic_spike_t(self, pos, mean_rate, **kwargs):
         """
         Generate a synthetic spike train for a `Position` object
 
@@ -3227,9 +3212,9 @@ class TemplateGridCell(BaseCell):
             Array of spike times.
 
         """
-        data = pos.data
-        tf, xf, yf = data['tframed'], data['xframed'], data['yframed']
-        return self.synthetic_spike_t(tf, xf, yf, mean_rate, **kwargs)
+        tcenters, spike_probs = self._spike_probs(pos, mean_rate, **kwargs)
+        spikes = numpy.random.random_sample((len(tcenters), )) < spike_probs
+        return tcenters[spikes]
 
 
 class Cell(BaseCell):
@@ -4231,12 +4216,14 @@ class CellCollection(AlmostImmutable, MutableSequence):
     def index(self, *args, **kwargs):
         return self._cells.index(*args, **kwargs)
 
-    # Implement equality comparison
-    def __eq__(self, other):
-        return type(other) == type(self) and other._cells == self._cells
-
-    def __ne__(self, other):
-        return not self.__eq__(other)
+    ## Implement equality comparison
+    ## NO! This makes the type unhashable, and then it cannot be used as ##
+    ## a memoize friend
+    #def __eq__(self, other):
+    #    return type(other) == type(self) and other._cells == self._cells
+    #
+    #def __ne__(self, other):
+    #    return not self.__eq__(other)
 
     @staticmethod
     def _cell_list_from_session(session, bins, range_, position_kw, cell_kw):
