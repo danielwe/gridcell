@@ -41,7 +41,6 @@ from collections import MutableSequence
 from .utils import (AlmostImmutable, gaussian, sensibly_divide,  #add_ticks
                     project_vectors, lattice_peaks, interpolate_masked,
                     unwrap_valid_clumps, clean_fields,
-                    #matching_disk_pairs, disc_overlap,
                     )
 from .kde import kernel_density_estimators as kdes
 from .shapes import Ellipse
@@ -2081,6 +2080,27 @@ class BaseCell(AbstractAlmostImmutable):
             return max_score, max_scale
         return max_score
 
+    def mean_rate_in_region(self, xc, yc, r, **kwargs):
+        """
+        Compute the mean firing rate of the cell within a circular region
+
+        Parameters
+        ----------
+        xc, yc : scalars
+            Center of the circular region to consider.
+        r : positive scalar
+            Radius of the circular region to consider.
+        **kwargs : dict, optional
+            Keyword arguments are passed to `BaseCell.ratemap`.
+
+        Returns
+        -------
+        scalar
+            Mean firing rate within the region.
+
+        """
+        return self.ratemap(**kwargs).ball((xc, yc), r).mean()
+
     def firing_field(self, threshold=None, **kwargs):
         """
         Compute a covariance matrix characterizing the average firing field
@@ -2146,24 +2166,26 @@ class BaseCell(AbstractAlmostImmutable):
 
         return IntensityMap2D(ffarr, bset)
 
-    def firing_field_radius(self, from_scale=True, radius_factor=None,
-                            **kwargs):
+    def firing_field_radius(self, radius_type='gmean', scale_factor=0.25,
+                            gauss_factor=1.6, **kwargs):
         """
         Compute a radius approximating the average firing field size
 
         Parameters
         ----------
-        from_scale : bool, optional
-            If True, the radius is proportional to the scale. Otherwise, the
-            radius is proportional to the square root of the geometric mean of
+        radius_type : {'scale', 'gauss', 'gmean'}, optional
+            Choose how to compute the radius. If `'scale'`, the radius will be
+            proportional to the grid scale. IF `'gauss'`, the radius will be
+            proportional to the square root of the geometric mean of
             the eigenvalues of the covariance matrix returned from
             `BaseCell.firing_field` (i.e. the geometric mean of the standard
             deviations of the marginal distributions along the separable
-            directions of the fitted Gaussian).
-        radius_factor : scalar, optional
-            The constant of proportionality referred to above. If None, the
-            following default values are used: if `from_scale=True`,
-            `radius_factor=2.0 / 7.0`; otherwise, `radius_factor=1.75`.
+            directions of the fitted Gaussian). Otherwise, the radius will be
+            the geometric mean of the two variants.
+        scale_factor : scalar, optional
+            The constant of proportionality when `radius_type='scale'`.
+        gauss_factor : scalar, optional
+            The constant of proportionality when `radius_type='gauss'`.
         **kwargs : dict, optional
             Keyword arguments are passed to `BaseCell.scale` or
             `BaseCell.firing_field`.
@@ -2174,21 +2196,20 @@ class BaseCell(AbstractAlmostImmutable):
             Firing field radius.
 
         """
-        if from_scale:
-            if radius_factor is None:
-                radius_factor = 2.0 / 7.0
-            return radius_factor * self.scale(**kwargs)
-        else:
-            if radius_factor is None:
-                radius_factor = 1.75
-            return radius_factor * (
-                linalg.det(self.firing_field(**kwargs)) ** 0.25)
+        r1 = scale_factor * self.scale(**kwargs)
+        if radius_type == 'scale':
+            return r1
+        r2 = gauss_factor * (linalg.det(self.firing_field(**kwargs)) ** 0.25)
+        if radius_type == 'gauss':
+            return r2
+        return numpy.sqrt(r1 * r2)
 
     @memoize_method
     def firing_fields(self, fixed_radius=True, clean=True, ifields=None,
-                      min_overlap=1.0 / 9.0, max_overlap=1.0 / 9.0,
-                      min_sigma_factor=1.0 / 1.1, max_sigma_factor=1.1,
-                      num_sigma=193, threshold_quantile=1.0 / 8.0, **kwargs):
+                      min_overlap=1.0 / 30.0, max_overlap=2.0 / 3.0,
+                      min_rfactor=1.0, max_rfactor=1.15,
+                      num_r=97, threshold_quantile_range=(0.40, 0.60),
+                      **kwargs):
         """
         Detect firing fields in the ratemap
 
@@ -2204,74 +2225,69 @@ class BaseCell(AbstractAlmostImmutable):
             sufficiently with the a set of idealized fields will be kept.
         ifields : pandas.DataFrame, optional
             The ideali firing fields to use if `clean=True`. If `None`, the
-            fields returned by `BaseCell.ideal_firing_fields`are used.
+            fields returned by `BaseCell.ideal_firing_fields` are used.
         min_overlap : scalar, optional
             The minimum overlap fraction of a detected and an idealized firing
-            fields in order to be considered a match. This parameter has no
+            field in order to be considered a match. This parameter has no
             effect if `clean=False`.
         max_overlap : scalar, optional
             The maximum overlap fraction of two detected firing fields --
             when fields overlap more than this, only the larger field is kept.
-        min_sigma_factor, max_sigma_factor : scalars, optional
-            Constants defining the sigma interval for the blob detection
+        min_rfactor, max_rfactor : scalars, optional
+            Constants defining the radius interval for the blob detection
             algorithm. The interval is bounded by these constants multiplied by
-            the firing field radius divided by ..math::`\sqrt{2}`.
-        num_sigma : integer, optional
-            The number of sigma values to use in the blob detection algorithm.
-            The values will be logarithmically spaced in the sigma interval.
-        threshold_quantile : scalar in [0, 1], optional
-            Parameter to calculate the blob detection threshold. The peak
-            detection threshold on the negative scaled Laplacian-of-Gaussian
-            transforms of the ratemap are is computed as follows: the bottom
-            and top 7.5 percentiles are discarded from the distribution of
-            rates in the ratemap, the distribution is shifted such that the
-            lowest value is 0.0, and the threshold is found as the quantile of
-            this distribution given by this parameter.
+            the firing field radius.
+        num_r : integer, optional
+            The number of radii to use in the blob detection algorithm.  The
+            values will be logarithmically spaced in the radius interval.
+        threshold_quantile_range : sequence, optional
+            The peak detection threshold on the negative scaled
+            Laplacian-of-Gaussian transforms of the ratemap are is computed as
+            the difference between these two quantiles of the firing rate
+            distribution in the ratemap.
         **kwargs : dict, optional
             Additional keyword arguments are passed to `BaseCell.firing_field`,
-            `BaseCell.ratemap`, and `BaseCell.ideal_firing_fields`.
+            `BaseCell.ratemap`, `BaseCell.ideal_firing_fields`, and
+            `BaseCell.firing_field_rates`.
 
         Returns
         -------
-        ndarray, shape (n, 3)
-            Array containing information about the `n` detected fields. Each
-            row [x, y, r] contains the x and y coordinates and radius of one
-            field.
+        DataFrame
+            DataFrame containing information about the detected fields.
+            Each row corresponds to one field, and column labels are
+            self-explanatory.
 
         """
         radius = self.firing_field_radius(**kwargs)
-        sig = radius / _SQRT2
         rmap = self.ratemap(**kwargs)
         default_bins = rmap.shape
         custom_bins = (2 * default_bins[0], 2 * default_bins[1])
         custom_rmap = self.ratemap(bins=custom_bins)
         threshold = numpy.diff(
             numpy.percentile(custom_rmap.data.ravel(),
-                             [7.5, 85 * threshold_quantile + 7.5]))[0]
+                             [100 * p for p in threshold_quantile_range]))[0]
         field_arr = custom_rmap.blobs(
-            min_sigma=sig * min_sigma_factor,
-            max_sigma=sig * max_sigma_factor,
-            num_sigma=num_sigma,
+            min_r=radius * min_rfactor,
+            max_r=radius * max_rfactor,
+            num_r=num_r,
             max_overlap=max_overlap,
             threshold=threshold,
             log_scale=True,
+            exclude_edges=1,
+            exclude_scale_endpoints=False,
             ignore_missing=True,
-            exclude_edges=2,
         )
+        fields = pandas.DataFrame(field_arr, columns=['x', 'y', 'r'])
+        fields['Field'] = numpy.arange(1, len(field_arr) + 1, dtype=numpy.int_)
 
         if fixed_radius:
-            field_arr[:, 2] = radius
-        else:
-            field_arr[:, 2] *= _SQRT2
-
-        fields = pandas.DataFrame(field_arr,
-                                  columns=['field_x', 'field_y', 'field_r'])
-        fields['field_index'] = numpy.arange(1, len(field_arr) + 1,
-                                             dtype=numpy.int_)
+            fields['r'] = radius
 
         if clean:
             if ifields is None:
                 ifields = self.ideal_firing_fields(**kwargs)
+            rates = self.firing_field_rates(fields=fields, **kwargs)
+            fields = pandas.merge(fields, rates)
             fields = clean_fields(fields, ifields, min_overlap=min_overlap)
 
         return fields
@@ -2299,6 +2315,40 @@ class BaseCell(AbstractAlmostImmutable):
         range_ = tuple((r[0] - margin, r[1] + margin)
                        for r in self.ratemap().range_)
         return template.firing_fields(range_=range_, **kwargs)
+
+    def firing_field_rates(self, fields=None, **kwargs):
+        """
+        Compute the average rate of the cell within firing fields
+
+        Parameters
+        ----------
+        fields : DataFrame, optional
+            `DataFrame` of firing fields, like that returned from
+            `BaseCell.firing_fields`. If None, the output of
+            `BaseCell.firing_fields` will be used.
+        **kwargs : dict, optional
+            Keyword arguments are passed to `BaseCell.mean_rate_in_region`, and
+            `BaseCell.firing_fields` if `fields=None`.
+
+        Returns
+        -------
+        DataFrame
+            DataFrame containing the rates in each fields. Each row corresponds
+            to one field, and column labels are self-explanatory.
+
+        """
+        if fields is None:
+            fields = self.firing_fields(**kwargs)
+        rates = []
+        indices = []
+        for field in fields.itertuples():
+            x, y, r = field.x, field.y, field.r
+            rates.append(self.mean_rate_in_region(x, y, r, **kwargs))
+            indices.append(field.Field)
+        return pandas.DataFrame(dict(
+            Rate=rates,
+            Field=numpy.array(indices, dtype=numpy.int_),
+        ))
 
     def features(self, index=FeatureNames.default_features, weights=None,
                  roll=0, normalize_peaks=True, **kwargs):
@@ -3157,11 +3207,9 @@ class TemplateGridCell(BaseCell):
         """
         coordinates = self.grid(**kwargs)
         radius = self.firing_field_radius(**kwargs)
-        fields = pandas.DataFrame(coordinates,
-                                  columns=['field_x', 'field_y'])
-        fields['field_r'] = radius
-        fields['field_index'] = numpy.arange(1, len(fields) + 1,
-                                             dtype=numpy.int_)
+        fields = pandas.DataFrame(coordinates, columns=['x', 'y'])
+        fields['r'] = radius
+        fields['Field'] = numpy.arange(1, len(fields) + 1, dtype=numpy.int_)
         return fields
 
     @memoize_method
@@ -3603,9 +3651,12 @@ class Cell(BaseCell):
         return ratemap.smooth(post_bandwidth, kernel=kernel,
                               normalize=normalize_smoothing)
 
-    def mean_rate_in_region(self, xc, yc, r):
+    def mean_rate_in_region(self, xc, yc, r, **kwargs):
         """
         Compute the mean firing rate of the cell within a circular region
+
+        Reimplements `BaseCell.mean_rate_in_region` method to use spike data
+        instead of ratemap to compute the mean rate.
 
         Parameters
         ----------
@@ -3613,6 +3664,8 @@ class Cell(BaseCell):
             Center of the circular region to consider.
         r : positive scalar
             Radius of the circular region to consider.
+        **kwargs : dict, optional
+            Keyword arguments are swallowed.
 
         Returns
         -------

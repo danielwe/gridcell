@@ -25,11 +25,11 @@ from __future__ import (absolute_import, division, print_function,
 import numpy
 from scipy import signal, fftpack, special
 from scipy.ndimage import filters, measurements, interpolation
-from skimage import feature  #, exposure
+#from skimage import feature  #, exposure
 from matplotlib import pyplot
 
 from .utils import (AlmostImmutable, sensibly_divide, pearson_correlogram,
-                    disc_overlap)
+                    remove_overlapping_discs)
 from .ndfit import fit_ndgaussian
 
 try:
@@ -1706,15 +1706,42 @@ class IntensityMap(AlmostImmutable):
             IntensityMap containing only values within the specified shell.
 
         """
-        dmesh = numpy.sqrt(numpy.sum([cm * cm for cm in self.bset.cmesh],
-                                     axis=0))
+        bset = self.bset
+        dmesh = numpy.sqrt(numpy.sum([cm * cm for cm in bset.cmesh], axis=0))
         mask = False
         if inner_radius is not None:
             mask = dmesh < inner_radius
         if outer_radius is not None:
             mask = numpy.logical_or(mask, dmesh >= outer_radius)
         shell_data = numpy.ma.array(self.data, mask=mask, keep_mask=True)
-        return type(self)(shell_data, self.bset)
+        return type(self)(shell_data, bset)
+
+    def ball(self, c, r):
+        """
+        Return an intensity map where all values outside a ball are masked
+
+
+        Parameters
+        ----------
+        c : sequence of scalars
+            Location of the origin of the ball, in the coordinate system
+            defined by `self.bset`.
+        r : scalar
+            Radius of the ball, in the same units as `c`.
+
+        Returns
+        -------
+        IntensityMap
+            IntensityMap containing only values within the specified ball.
+
+        """
+        bset = self.bset
+        cmesh_shifted = (cm - q for cm, q in zip(bset.cmesh, c))
+        rmesh = numpy.sqrt(numpy.sum([cm * cm for cm in cmesh_shifted],
+                                     axis=0))
+        mask = (rmesh >= r)
+        shell_data = numpy.ma.array(self.data, mask=mask, keep_mask=True)
+        return type(self)(shell_data, bset)
 
 
 class IntensityMap2D(IntensityMap):
@@ -1753,13 +1780,13 @@ class IntensityMap2D(IntensityMap):
 
         IntensityMap.__init__(self, data, bset, **kwargs)
 
-    def blobs(self, min_sigma=None, max_sigma=None, num_sigma=25,
-              threshold=-numpy.inf, max_overlap=0.0, log_scale=False,
-              ignore_missing=False, exclude_edges=0):
+    def blobs(self, min_r=None, max_r=None, num_r=25, threshold=0.0,
+              max_overlap=0.0, log_scale=False, exclude_edges=0,
+              exclude_scale_endpoints=False, ignore_missing=False):
         """
         Detect blobs in the IntensityMap2D instance
 
-        An alternative to self.peaks() for detecting elevated regions in
+        An alternative to `self.peaks` for detecting elevated regions in
         IntensityMap2D instances.
 
         This method is essentially a wrapper around the Laplacian of Gaussian
@@ -1767,166 +1794,157 @@ class IntensityMap2D(IntensityMap):
         scales of blobs in arrays. Some (hopefully sensible) default parameters
         are provided. Note that this implementation of the Laplacian of
         Gaussian algorithm is only appropriate if the underlying BinnedSet
-        instance is square, and the method will raise an error if this is not
+        instance is regular, and the method will raise an error if this is not
         the case.
 
-        :min_sigma: minimum standard deviation of the Gaussian kernel used in
-                    the Gaussian-Laplace filter, given in units given by the
-                    underlying BinnedSet2D (NOT in bins/pixels, unlike
-                    skimage.feature.blob_log()). The method will not detect
-                    blobs with radius smaller than approximately \sqrt{2}
-                    * min_sigma. If None (default), a default value
-                    corresponding to a blob radius of about one twelfth of the
-                    shortest width of the intensity map will be used.
-        :max_sigma: maximum standard deviation of the Gaussian kernel used in
-                    the Gaussian-Laplace filter, given in the units used by the
-                    underlying BinnedSet2D (NOT in bins/pixels, unlike
-                    skimage.feature.blob_log()). The method will not detect
-                    blobs with radius larger than approximately \sqrt{2}
-                    * max_sigma. If None (default), a default value
-                    corresponding to a blob radius of about one fourth of the
-                    shortest width of the intensity map will be used.
-        :num_sigma: the number of intermediate filter scales to consider
-                    between min_sigma and max_sigma. Increase for improved
-                    precision, decrease to reduce computational cost. Note that
-                    for coarse-binned intensity maps, precision will often be
-                    limited by resolution rather than this parameter. Default
-                    value: 25.
-        :threshold: lower bound for scale-space maxima (that is, the minimum
-                    height of detected peaks in the arrays created by passing
-                    the intensity array through a Gaussian-Laplace filter).
+        Parameters
+        ----------
+        min_r : scalar, optional
+            Minimum blob detection radius, given in units given by the
+            underlying BinnedSet2D. The method may not detect blobs with radius
+            smaller than this. If None (default), a default value of about one
+            twelfth of the shortest width of the intensity map will be used.
+            (In the underlying algorithm, the smallest standard deviation of
+            the Gaussian kernel in the Gaussian-Laplace filter will be `min_r
+            / sqrt(2)`.
+        max_r : scalar, optional
+            Maximum blob detection radius, given in units given by the
+            underlying BinnedSet2D. The method may not detect blobs with radius
+            larger than this. If None (default), a default value of about one
+            fourth of the shortest width of the intensity map will be used.
+            (In the underlying algorithm, the largest standard deviation of the
+            Gaussian kernel in the Gaussian-Laplace filter will be `max_r
+            / sqrt(2)`.
+        num_r : scalar, optional
+            The number of filter scales to consider between `min_r` and
+            `max_r`. Increase for improved precision, decrease to reduce
+            computational cost. Note that for coarse-binned intensity maps,
+            precision will often be limited by resolution rather than this
+            parameter.
+        threshold : scalar, optional
+            Lower bound for scale-space maxima. The scale-space
+            transform of the intensity map, in which peak detection is
+            performed, is created by applying a Gaussian-Laplace filter with
+            kernel standard deviation `s = r / sqrt(2)`, and then multiplying
+            by `-(s ** 2)`. The units in this map will be the same as in the
+            original map, but the ranges may be different.
         max_overlap : scalar, optional
             Maximum permitted overlap fraction. If two blobs overlap by more
-            than this, only the larger of two overlapping blobs are kept.
-            Overlap is defined as the ratio of the area of the intersection and
-            uunion of the blobs, using `sqrt(2) * s` as the blob radius for
-            a blob detected at sigma `s`.
-        :log_scale: if True, intermediate sigma values are chosen with regular
-                    spacing on a logarithmic scale betweeen min_sigma
-                    and max_sigma. This way, the errors in estimated blob
-                    centers and sizes will scale approximately with the blob
-                    sizes. If False, the intermediate sigmas are chosen with
-                    regular spacing on a linear scale, and the errors will be
-                    approximately constant. Default is True.
-        :ignore_missing: by default, blob detection fails for intensity maps
-                         with missing values. When this parameter is set to
-                         True,
-                         #this limitation is overcome by applying a normalized
-                         #smoothing filter before blob detection.  The
-                         #smoothing filter is just wide enough to extrapolate
-                         #into one row of missing values while barely affecting
-                         #the other intensities, and will be applied repeatedly
-                         #until all missing values have been replaced.
-                         missing values are replaced by zeroes.
+            than this, only the larger of two overlapping blobs are kept. For
+            blobs of equal radius, the mean intensity of the original map
+            inside the blob is used as tie-breaker (the most intense blob
+            prevails.  Overlap is defined as the ratio of the area of the
+            intersection of the blobs to the area of the smallest blob.
+        log_scale : scalar, optional
+            If True, intermediate `r`-values are chosen with regular spacing on
+            a logarithmic scale betweeen min_r and max_r. Thus, the errors in
+            estimated blob centers and sizes will scale approximately with the
+            blob sizes. If False, the intermediate sigmas are chosen with
+            regular spacing on a linear scale, and the errors will be
+            approximately constant.
         exclude_edges : integer, optional
-            Number of rows along the edges in which to disallow blob centers.
-        :returns: an array with a row [x, y, s] for each detected blob, where
-                  x and y are the coordinates of the blob center and s is the
-                  sigma (standard deviation) of the Gaussian kernel that
-                  detected the peak. Once, again, this sigma value is given the
-                  units used by the underlying BinnedSet2D (NOT in bins/pixels,
-                  unlike skimage.feature.blob_log()). An estimate of the radius
-                  of the blob can be obtained by taking \sqrt{2} s.
+            Number of rows along the edges in which to discard detected blob
+            centers.
+        exclude_scale_endpoints : bool, optional
+            If True, blob centers detected at radii `min_r` and `max_r` are
+            excluded.
+        ignore_missing : bool, optional
+            If True, missing values are filled prior to blob detection, by
+            repeated normalized smoothing of the intensity map with a Gaussian
+            kernel of bandwidth `0.125 * largest bin width`. If False,
+            a ValueError is raised if the intensity map contains missing
+            values.
+
+        Returns
+        -------
+        ndarray
+            Array with a row `[x, y, r]` for each detected blob, where `x` and
+            `y` are the coordinates of the blob center and `r` is the radius of
+            the blob in the units used by the underlying BinnedSet2D.
 
         """
-        if not self.bset.square:
-            raise ValueError("instances of {} must be defined over instances "
-                             "of {} with square bins for Laplacian of "
-                             "Gaussian blob detection"
+        bset = self.bset
+        if not bset.regular:
+            raise ValueError("instances of {} must be defined over a regular "
+                             "{} instance (having bins of equal size and "
+                             "shape) for blob detection"
                              .format(self.__class__.__name__,
                                      self.bset.__class__.__name__))
 
-        data = numpy.copy(self.unmasked_data)
-
+        data = self.unmasked_data
         if ignore_missing:
-            #bandwidth = 0.125 * numpy.amax(self.bset.binwidths)
-            #filled = self
-            #while numpy.isnan(data).any():
-            #    filled = filled.smooth(bandwidth, kernel='gaussian',
-            #                           normalize=True)
-            #    data = filled.unmasked_data
-            data[numpy.isnan(data)] = 0.0
+            bandwidth = 0.125 * numpy.amax(self.bset.binwidths)
+            filled = self
+            while numpy.isnan(data).any():
+                filled = filled.smooth(bandwidth, kernel='gaussian',
+                                       normalize=True)
+                data = filled.unmasked_data
+            #data = data.copy()
+            #data[numpy.isnan(data)] = 0.0
         elif numpy.isnan(data).any():
-            raise ValueError("cannot detect blobs in IntensityMap2D instances "
-                             "with missing data unless ignore_missing == "
-                             "True.")
+            raise ValueError("cannot detect blobs in IntensityMap2D "
+                             "instances with missing data unless "
+                             "ignore_missing == True.")
 
-        #data = exposure.equalize_hist(data)  # Improves detection
+        min_width = min(r[1] - r[0] for r in bset.range_)
+        if min_r is None:
+            min_r = min_width / 12.0
+        if max_r is None:
+            max_r = min_width / 4.0
 
-        # In case of different binwidths in different directions, use the
-        # geometric mean
-        binwidth = numpy.sqrt(numpy.prod(
-            numpy.mean(self.bset.binwidths, axis=-1)))
-
-        if min_sigma is None:
-            min_sigma = min(self.shape) / (_SQRT2 * 12.0)
+        if log_scale:
+            rlist = numpy.logspace(numpy.log10(min_r), numpy.log10(max_r),
+                                   num_r)
         else:
-            min_sigma /= binwidth
-        if max_sigma is None:
-            # Taking the blob radius as sqrt(2) * sigma, setting max_sigma to
-            # min(self.shape) / (sqrt(2) * 2.0 * k)
-            # means limiting the largest possible blobs to regions covering at
-            # most a fraction 1 / k of the shortest length in the intensity map
-            max_sigma = min(self.shape) / (_SQRT2 * 4.0)
-        else:
-            max_sigma /= binwidth
+            rlist = numpy.linspace(min_r, max_r, num_r)
 
-        blob_indices = feature.blob_log(data, min_sigma=min_sigma,
-                                        max_sigma=max_sigma,
-                                        num_sigma=num_sigma,
-                                        threshold=threshold,
-                                        overlap=1.0,
-                                        log_scale=log_scale)
+        sigma_factors = [_SQRT2 * numpy.mean(bw) for bw in bset.binwidths]
+        sigma_list = numpy.column_stack([rlist / sf for sf in sigma_factors])
 
-        # Sort blobs in order of decreasing blob size
-        try:
-            blob_indices = blob_indices[
-                numpy.argsort(blob_indices[:, 2])[::-1]]
-        except IndexError:
-            blob_indices = numpy.array([[]])
+        power = 2.0 / len(sigma_factors)
+        iframe = numpy.dstack([
+            -(numpy.prod(s) ** power) *
+            filters.gaussian_laplace(data, s,
+                                     #mode='constant', cval=0.0,
+                                     #mode='reflect',
+                                     mode='nearest',
+                                     )
+            for s in sigma_list
+        ])
+        iframe_max = filters.maximum_filter(iframe, size=3, mode='constant',
+                                            cval=-numpy.inf)
+        max_mask = (iframe == iframe_max) & (iframe > threshold)
+        blob_indices = numpy.column_stack(numpy.nonzero(max_mask))
 
         if exclude_edges > 0:
-            n, m = data.shape
-            edge = numpy.logical_or(
-                numpy.logical_or(
-                    numpy.logical_or(
-                        blob_indices[:, 0] < exclude_edges,
-                        n - 1 - blob_indices[:, 0] < exclude_edges,
-                    ),
-                    blob_indices[:, 1] < exclude_edges,
-                ),
-                m - 1 - blob_indices[:, 1] < exclude_edges,
-            )
+            # Exclude edge blob_indices
+            edge = numpy.zeros((blob_indices.shape[0], ), dtype=numpy.bool_)
+            for i, n in enumerate(data.shape):
+                edge = edge | ((blob_indices[:, i] < exclude_edges) |
+                               (n - 1 - blob_indices[:, i] < exclude_edges))
             blob_indices = blob_indices[~edge]
 
-        if max_overlap < 1.0:
-            prune = numpy.zeros((len(blob_indices), ), dtype=numpy.bool_)
-            for (i, b1) in enumerate(blob_indices):
-                if prune[i]:
-                    continue
-                blob1 = (b1[0], b1[1], _SQRT2 * b1[2])
-                for (j_, b2) in enumerate(blob_indices[i + 1:]):
-                    j = j_ + i + 1
-                    if prune[j]:
-                        continue
-                    blob2 = (b2[0], b2[1], _SQRT2 * b2[2])
-                    overlap = disc_overlap(blob1, blob2)
-                    if overlap > max_overlap:
-                        prune[j] = True
-            blob_indices = blob_indices[~prune]
+        # Get proper radii
+        radii = rlist[blob_indices[:, -1]]
 
-        blob_list = blob_indices[:, :2]
+        if exclude_scale_endpoints:
+            # Exclude scale endpoints
+            scale_endpoints = (radii <= min_r) | (radii >= max_r)
+            blob_indices = blob_indices[~scale_endpoints]
+            radii = radii[~scale_endpoints]
 
-        blob_coords = self.bset.coordinates(blob_list)
+        # Get bset coordinates, mean intensities, and scale space maximum
+        # values
+        coords = bset.coordinates(blob_indices[:, :-1])
+        maxvals = iframe[tuple(numpy.transpose(blob_indices))]
 
-        sigma = blob_indices[:, 2] * binwidth
+        # Create blob array, sorted in order of decreasing mean intensity, then
+        # in order of decreasing blob radius, then in order of decreasing scale
+        # space maximum values
+        order = numpy.lexsort((maxvals, radii))[::-1]
+        blobs = numpy.column_stack((coords, radii))[order]
 
-        blobs = numpy.column_stack((blob_coords, sigma))
-
-        # Sort blobs: first by x coordinate, then by y coordinate, then by size
-        blobs = blobs[numpy.argsort(blobs[:, 2])]
-        blobs = blobs[numpy.argsort(blobs[:, 1])]
-        blobs = blobs[numpy.argsort(blobs[:, 0])]
+        blobs = remove_overlapping_discs(blobs, max_overlap)
 
         return blobs
 

@@ -32,7 +32,7 @@ import heapq
 
 
 _PI = numpy.pi
-_2PI = numpy.pi
+_PI_2 = 0.5 * _PI
 
 
 class AlmostImmutable(object):
@@ -628,7 +628,9 @@ def disc_overlap(disc1, disc2):
     -------
     scalar
         Fraction of the area of the intersection of the discs to the area of
-        the union of the discs.
+        the
+        #union of the discs.
+        smallest of the discs.
 
     """
     # Let disc1 be the larger disc
@@ -639,7 +641,8 @@ def disc_overlap(disc1, disc2):
     d_2 = xdiff * xdiff + ydiff * ydiff
     d = numpy.sqrt(d_2)
     if d <= r1 - r2:
-        return (r2 * r2) / (r1 * r1)
+        #return (r2 * r2) / (r1 * r1)  # union
+        return 1.0  # smallest
     rsum = r1 + r2
     minimum_distance_sq = rsum * rsum
     if d_2 < minimum_distance_sq:
@@ -653,14 +656,18 @@ def disc_overlap(disc1, disc2):
         if d2 < 0.0:
             theta2 = _PI - theta2
         overlap_area = r1_2 * theta1 - h * d1 + r2_2 * theta2 - h * d2
-        total_area = _PI * r1_2 + _PI * r2_2 - overlap_area
-        return overlap_area / total_area
+        disc2_area = _PI * r2_2
+        return overlap_area / disc2_area  # smallest
+        #disc1_area = _PI * r1_2
+        #total_area = disc1_area + disc2_area - overlap_area
+        #return overlap_area / total_area  # union
     return 0.0
 
 
-def matching_disk_pairs(discs1, discs2, min_overlap=0.0):
+def matching_disc_pairs(discs1, discs2, min_overlap=0.0, priority=None,
+                        max_overlap=1.0):
     """
-    Pair up the most closely matching discs from two sets
+    Pair up the best matching discs from two sets
 
     Parameters
     ----------
@@ -669,6 +676,17 @@ def matching_disk_pairs(discs1, discs2, min_overlap=0.0):
         in `disc_overlap`.
     min_overlap : scalar, optional
         Minimum overlap between two matching discs
+    priority : sequence, optional
+        Sequence of prioirty weights for discs in `disc1`. Pairs will be
+        selected such that each disc in `discs2` will be paired up with the
+        disc in `discs1` for which the product of the priority and
+        `sin(overlap * pi / 2)` is highest (only considering pairs satisfying
+        the `min_overlap` requirement). This sequence must have the same length
+        as `discs1`. If None, the most overlapping disc will have the highest
+        priority.
+    max_overlap : scalar, optional
+        Maximum overlap between discs from the same input sequence
+        (`disc1` or `disc2`) used in the returned mathcing pairs.
 
     Returns
     -------
@@ -677,27 +695,38 @@ def matching_disk_pairs(discs1, discs2, min_overlap=0.0):
         of decreasing overlap. The first element is a disc from `discs1` and
         the second from `discs2`. Each disc only appears in one pair, the
         closest match for which the matching disc did not have an even closer
-        match with another disc.
+        match with another disc. No overlapping discs from the same input
+        sequence will be included.
 
     """
     pairs = []
-    for disc1 in discs1:
+    for i, disc1 in enumerate(discs1):
+        if priority is not None:
+            p = priority[i]
+        else:
+            p = 1.0
         for disc2 in discs2:
             overlap = disc_overlap(disc1, disc2)
             if overlap > min_overlap:
-                pair = (-overlap, tuple(disc1), tuple(disc2))
+                pair = (-(p * numpy.sin(_PI_2 * overlap)),
+                        tuple(disc1), tuple(disc2))
                 heapq.heappush(pairs, pair)
     matches = []
-    used = set()
+    used1 = set()
+    used2 = set()
+    overlap_restricted = (max_overlap < 1.0)
     while pairs:
-        next_pair = heapq.heappop(pairs)[1:]
-        if all(np not in used for np in next_pair):
-            matches.append(next_pair)
-            used.update(next_pair)
+        n1, n2 = heapq.heappop(pairs)[1:]
+        if ((n1 not in used1) and (n2 not in used2) and overlap_restricted and
+                all(disc_overlap(n1, u1) <= max_overlap for u1 in used1) and
+                all(disc_overlap(n2, u2) <= max_overlap for u2 in used2)):
+            matches.append((n1, n2))
+            used1.add(n1)
+            used2.add(n2)
     return matches
 
 
-def clean_fields(fields, ideal_fields, min_overlap=1.0 / 9.0):
+def clean_fields(fields, ideal_fields, min_overlap=0.0):
     """
     Select the fields that pair up most closely with a set of ideal fields
 
@@ -705,14 +734,20 @@ def clean_fields(fields, ideal_fields, min_overlap=1.0 / 9.0):
     ----------
     fields, ideal_fields : pandas.DataFrame
         Dataframes containing firing fields, as returned from
-        `BaseCell.firing_fields`. The columns `'field_x', 'field_y', 'field_r'`
+        `BaseCell.firing_fields`. The columns `'x', 'y', 'r'`
         contain the x and y coordinates of the field center, and the field
         radius. The `ideal_fields` dataframe must also contain a column
-        `field_index` containing an index for each field. These indices will be
-        transferred to the matching fields in `fields` that are returned.
+        `Field` containing an index for each field. These indices will be
+        transferred to the matching fields in `fields` that are returned. If
+        `fields` contains a column `'Rate'`, the cube of the values in this
+        column will be used as the `priority` parameter to
+        `matching_disc_pairs`.
     min_overlap : scalar, optional
         Minimum overlap of a field with one of the ideal fields in order to be
         considered a match.
+    priority : DataFrame, optional
+        Priority for the fields in `fields`. See `matching_disc_pairs` for
+        explanation.
 
     Returns
     -------
@@ -720,27 +755,66 @@ def clean_fields(fields, ideal_fields, min_overlap=1.0 / 9.0):
         Subset of `fields` that most closely match `ideal_fields`.
 
     """
-    field_arr = fields[['field_x', 'field_y', 'field_r']].values
-    ideal_field_arr = ideal_fields[['field_x', 'field_y', 'field_r']].values
-    matches = matching_disk_pairs(field_arr, ideal_field_arr,
-                                  min_overlap=min_overlap)
+    field_arr = fields[['x', 'y', 'r']].values
+    ideal_field_arr = ideal_fields[['x', 'y', 'r']].values
+    if 'Rate' in fields:
+        p = fields['Rate'].values
+        priority = p ** 5
+    else:
+        priority = None
+    matches = matching_disc_pairs(field_arr, ideal_field_arr,
+                                  min_overlap=min_overlap, priority=priority,
+                                  max_overlap=0.0)
     try:
         fields_unordered, ideal_unordered = zip(*matches)
     except ValueError:
         # No matches found
-        return pandas.DataFrame(dict(field_x=[], field_y=[], field_r=[],
-                                     field_index=[]))
+        return pandas.DataFrame(dict(x=[], y=[], r=[], Field=[]))
     indices = []
     field_arr = []
     for ifield in ideal_fields.itertuples():
-        i = ifield.field_index
-        ifield = (ifield.field_x, ifield.field_y, ifield.field_r)
+        i = ifield.Field
+        ifield = (ifield.x, ifield.y, ifield.r)
         if ifield in ideal_unordered:
             index = ideal_unordered.index(ifield)
             field_arr.append(fields_unordered[index])
             indices.append(i)
 
-    fields = pandas.DataFrame(field_arr,
-                              columns=['field_x', 'field_y', 'field_r'])
-    fields['field_index'] = numpy.array(indices, dtype=numpy.int_)
+    fields = pandas.DataFrame(field_arr, columns=['x', 'y', 'r'])
+    fields['Field'] = numpy.array(indices, dtype=numpy.int_)
     return fields
+
+
+def find_overlapped_discs(discs, max_overlap):
+    overlapped = numpy.zeros((len(discs), ), dtype=numpy.bool_)
+    if max_overlap < 1.0:
+        for (i, disc1) in enumerate(discs):
+            if overlapped[i]:
+                continue
+            for (j_, disc2) in enumerate(discs[i + 1:]):
+                j = j_ + i + 1
+                if overlapped[j]:
+                    continue
+                overlap = disc_overlap(disc1, disc2)
+                if overlap > max_overlap:
+                    overlapped[j] = True
+    return overlapped
+
+
+def remove_overlapping_discs(discs, max_overlap):
+    return discs[~find_overlapped_discs(discs, max_overlap)]
+
+
+def remove_overlapping_fields(fields, max_overlap=0.0):
+    discs = fields[['x', 'y', 'r']].values
+    radii = discs[:, -1]
+    sort_keys = (radii, )
+    if 'Rate' in fields:
+        rates = fields['Rate'].values
+        sort_keys = (rates, ) + sort_keys
+    order = numpy.lexsort(sort_keys)[::-1]
+    discs = discs[order]
+    overlapped = find_overlapped_discs(discs, max_overlap)
+    index = numpy.empty_like(overlapped)
+    index[order] = overlapped
+    return fields.iloc[~index]
