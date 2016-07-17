@@ -27,3 +27,6 @@ setup(
         'scikit-image',
     ],
 )
+
+with open('gridcell/memoize/__init__.py', 'a'):
+    pass

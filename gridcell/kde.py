@@ -18,6 +18,8 @@ Module defining kernel density estimators
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import (absolute_import, division, print_function,
+                        unicode_literals)
 import numpy
 from scipy.special import i0, gamma, hyp1f2
 from scipy.integrate import quad
