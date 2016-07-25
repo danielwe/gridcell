@@ -124,7 +124,7 @@ def fit_ndgaussian(xdata, fdata):
         eps = fdata - param_gauss(xdata, *params_)
         return numpy.sum(eps * eps)
 
-    # Find the parameter array that solves the least-squares curve fit problem
+    # Find the parameter array that solves the least-squares fitting problem
     #params, __ = optimize.curve_fit(param_gauss, xdata, fdata, p0=params)
     l = n * (n - 1) // 2
     bounds = ([(0.0, None)] +             # Scale must be positive

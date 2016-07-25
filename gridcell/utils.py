@@ -71,21 +71,39 @@ def gaussian(x, mean=0.0, cov=1.0):
 
     :x: array-like of shape (m, n1, n2, ...), giving m n-dimensional x-values
         at which to evaluate the gaussian, where n = n1 * n2 * .... In the 1d
-        case, the array can be of shape (m,).
-    :mean: array-like, broadcastable to shape (n,), giving the n-dimensional
-           location of the Gaussian peak (the mean of the distribution for
-           which this is the pdf).
-    :cov: array-like, broadcastable to shape (n, n), giving the shape of the
-          Gaussian around the peak (the covariance matrix of the distribution
-          for which this is the pdf).
+        case, the array can be of shape (m,), or even a single scalar if `m ==
+        1`.
+    :mean: array-like, broadcastable to shape (n1, n2, ...), giving the
+           n-dimensional location of the Gaussian peak (the mean of the
+           distribution for which this is the pdf).
+    :cov: array-like. If broadcastable to shape (n1, n2, ...), used as the
+          entries in a diagonal covariance matrix. Otherwise, if broadcastable
+          to shape (n1, n2, ..., n1, n2, ...), used directly as a covariance
+          matrix.  The covariance matrix encodes the the shape of the Gaussian
+          (it is the covariance matrix of the distribution for which the
+          Gaussian is pdf).
 
     """
-    m = len(x)
-    x = numpy.reshape(x, (m, -1))
-    n = x.shape[1]
-    mean, __ = numpy.broadcast_arrays(numpy.asarray(mean), numpy.empty(n))
-    cov, __ = numpy.broadcast_arrays(numpy.asarray(cov), numpy.empty((n, n)))
-    return stats.multivariate_normal.pdf(x, mean=mean, cov=cov)
+    x = numpy.atleast_2d(x)
+    sh = x.shape
+    m, shape = sh[0], sh[1:]
+    n = numpy.prod(shape)
+    xr = numpy.reshape(x, (m, n))
+
+    mean = numpy.broadcast_to(numpy.asarray(mean), shape)
+    meanr = numpy.reshape(mean, (n, ))
+
+    cov = numpy.asarray(cov)
+    try:
+        cov = numpy.broadcast_to(numpy.asarray(cov), shape)
+    except ValueError:
+        cov = numpy.broadcast_to(numpy.asarray(cov), shape + shape)
+        covr = numpy.reshape(cov, (n, n))
+    else:
+        cov = numpy.reshape(cov, (n, ))
+        covr = numpy.diag(cov)
+
+    return stats.multivariate_normal.pdf(xr, mean=meanr, cov=covr)
 
 
 def sensibly_divide(num, denom, masked=False):
