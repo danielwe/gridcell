@@ -64,6 +64,8 @@ _SQRT3 = numpy.sqrt(3.0)
 _ANGULAR_NBINS = 120
 _ANGULAR_BANDWIDTH = numpy.deg2rad(6.0)
 
+_DEFAULT_KERNEL = 'triweight'
+
 _EPS = numpy.finfo(1.0).eps
 
 
@@ -535,7 +537,7 @@ class BasePosition(AlmostImmutable):
         return occ
 
     def occupancy(self, bins, range_=None, mode='kde', bandwidth=None,
-                  kernel='triweight', normalize=False):
+                  kernel=_DEFAULT_KERNEL, normalize=False):
         """
         Compute a map of occupancy times
 
@@ -569,11 +571,9 @@ class BasePosition(AlmostImmutable):
         kernel : string, optional
             The kernel to use if `mode='kde'`. Details to come.
         normalize : bool, optional
-            If True, the occupancy map will be normalized to have sum 1, such
-            that it can be interpreted as a frequency distribution for the
-            occupancy. Otherwise, the occupancy map gives the total time spent
-            in each bin, such that it sums up to the total time of the
-            experiment.
+            If True, the occupancy map will be normalized by the total time of
+            the experiment. Otherwise, the occupancy map gives the total time
+            spent in each bin.
 
         Returns
         -------
@@ -777,11 +777,9 @@ class BasePosition(AlmostImmutable):
             bin width is used as bandwidth. If `mode` is different from
             `'kde'`, this parameter has no effect.
         normalize : bool, optional
-            If True, the occupancy map will be normalized to have sum 1, such
-            that it can be interpreted as a frequency distribution for the
-            head direction. Otherwise, the occupancy map gives the total time
-            spent in each bin, such that it sums up to the total time of the
-            experiment.
+            If True, the occupancy map will be normalized by the total time of
+            the experiment. Otherwise, the occupancy map gives the total time
+            spent in each bin.
 
         Returns
         -------
@@ -1004,6 +1002,59 @@ class BasePosition(AlmostImmutable):
             xmeans[i] = numpy.ma.sum(twi * x[index]) / tw_total
             ymeans[i] = numpy.ma.sum(twi * y[index]) / tw_total
         return xmeans, ymeans
+
+    @memoize_method
+    def subinterval(self, start, stop):
+        """
+        Create a BasePosition object from a part of the session
+
+        Parameters
+        ----------
+        start, stop : scalar in [0, 1]
+            Start and stop times for the subinterval to use, given as fractions
+            of the total length of the recording session.
+
+        Returns
+        -------
+        BasePosition
+            New BasePosition object based on the data recorded between
+            ..math:`t_0 + (t_f - t_0) * start` and ..math:`t_0 + (t_f - t_0)
+            * stop`.
+
+        """
+        data = self.data
+        params = self.params
+
+        # Masked samples don't count
+        tw = numpy.ma.filled(self.filtered_data()['tweights'], fill_value=0.0)
+
+        cumtw = numpy.cumsum(tw)
+        length = cumtw[-1]
+        start_length, stop_length = length * start, length * stop
+
+        index = (start_length <= cumtw) & (cumtw < stop_length)
+
+        t = data['t'][index]
+        kwargs = dict(
+            t=t,
+            min_speed=params['min_speed'],
+            speed_bandwidth=params['speed_bandwidth'],
+        )
+        kwargs.update(**self.info)
+        if self.dual_positions:
+            kwargs.update(
+                x=data['x1'][index],
+                y=data['y1'][index],
+                x2=data['x2'][index],
+                y2=data['y2'][index],
+            )
+        else:
+            kwargs.update(
+                x=data['x'][index],
+                y=data['y'][index],
+            )
+
+        return type(self)(**kwargs)
 
     def plot_path(self, axes=None, linewidth=0.5, color='0.5', alpha=0.5,
                   **kwargs):
@@ -1338,8 +1389,13 @@ class BaseCell(AbstractAlmostImmutable):
             Spike map.
 
         """
-        kwargs.update(normalize_occupancy=False)
-        return (self.ratemap(**kwargs) * self.occupancy(**kwargs))
+        rmap_kw = dict(kwargs)
+        rmap_kw = kwargs.update(normalize_rate=False)
+        rmap = self.ratemap(**rmap_kw)
+        occ_kw = dict(kwargs)
+        occ_kw = kwargs.update(normalize_occupancy=False)
+        occ = self.occupancy(**occ_kw)
+        return rmap * occ
 
     def nspikes(self, **kwargs):
         """
@@ -1375,8 +1431,8 @@ class BaseCell(AbstractAlmostImmutable):
         Parameters
         ----------
         normalize_occupancy : bool, optional
-            If True, the occupancy map will be normalized to have sum 1, such
-            that it can be interpreted as an occupancy fraction distribution.
+            If True, the occupancy map will be normalized by the total time of
+            the experiment.
         **kwargs : dict, optional
             Keyword arguments are passed to `BaseCell.ratemap`.
 
@@ -1438,9 +1494,9 @@ class BaseCell(AbstractAlmostImmutable):
         """
         pass
 
-    def rate_mean(self, **kwargs):
+    def rate_mean(self, temporal=False, **kwargs):
         """
-        Compute the spatial mean of the firing rate
+        Compute the mean of the firing rate
 
         The contribution of the firing rate in each bin is weighted by the
         occupancy frequency in that bin. If no smoothing has been applied to
@@ -1449,17 +1505,28 @@ class BaseCell(AbstractAlmostImmutable):
 
         Parameters
         ----------
+        temporal : bool, optional
+            If True, the mean is taken over time instead of space.
         **kwargs : dict, optional
-            Keyword arguments are passed to `BaseCell.nspikes` and
-            `BaseCell.total_time`.
+            Keyword arguments are passed to `BaseCell.ratemap`and
+            `BaseCell.occupancy`, alternatively `BaseCell.nspikes` and
+            `BaseCell.total_time` if `temporal=True`.
 
         Returns
         -------
         scalar
-            The spatial mean of the firing rate.
+            The mean of the firing rate.
 
         """
-        return (self.nspikes(**kwargs) / self.total_time(**kwargs))
+        if temporal:
+            return (self.nspikes(**kwargs) / self.total_time(**kwargs))
+        rmap_kw = dict(kwargs)
+        rmap_kw.update(normalize_rate=False)
+        rmap = self.ratemap(**rmap_kw)
+        occ_kw = dict(kwargs)
+        occ_kw.update(normalize_occupancy=False)
+        occ = self.occupancy(**occ_kw)
+        return (rmap * occ).sum() / occ.sum()
 
     def rate_std(self, **kwargs):
         """
@@ -1505,12 +1572,16 @@ class BaseCell(AbstractAlmostImmutable):
             The spatial variance of the firing rate.
 
         """
-        kwargs.update(normalize_occupancy=False)
-        ratemap = self.ratemap(**kwargs)
-        dev = ratemap - self.rate_mean(**kwargs)
-        wdev_sq = self.occupancy(**kwargs) * dev * dev
+        rmean = self.rate_mean(**kwargs)
+        rmap_kw = dict(kwargs)
+        rmap_kw.update(normalize_rate=False)
+        ratemap = self.ratemap(**rmap_kw)
+        dev = ratemap - rmean
+        occ_kw = dict(kwargs)
+        occ_kw.update(normalize_occupancy=False)
+        occ = self.occupancy(**occ_kw)
         n = ratemap.count()
-        return wdev_sq.sum() * n / (n - ddof)
+        return ((dev * dev * occ).sum() / occ.sum()) * (n / (n - ddof))
 
     @memoize_method
     def acorr(self, mode='full', pearson='global', normalize_correlogram=True,
@@ -1539,7 +1610,6 @@ class BaseCell(AbstractAlmostImmutable):
         return self.ratemap(**kwargs).autocorrelate(
             mode=mode, pearson=pearson, normalize=normalize_correlogram)
 
-    @memoize_method
     def corr(self, other, mode='full', pearson='global',
              normalize_correlogram=True, **kwargs):
         """
@@ -1565,9 +1635,11 @@ class BaseCell(AbstractAlmostImmutable):
             See `IntensityMap2D.correlate`.
 
         """
-        # Register this cell for memoize cache clearance whenever this is
-        # performed on the other cell.
-        memoize_method.register_friend(other, self)
+        # Register this cell as a memoize friend of the other. Or not. Memoize
+        # friendships work best when they correspond to hierarchical
+        # relationships. Of course, that means that this method shouldn't be
+        # memoized either.
+        #memoize_method.register_friend(other, self)
         return self.ratemap(**kwargs).correlate(
             other.ratemap(**kwargs), mode=mode, pearson=pearson,
             normalize=normalize_correlogram)
@@ -1768,13 +1840,15 @@ class BaseCell(AbstractAlmostImmutable):
         return numpy.log(self.scale(**kwargs))
 
     @memoize_method
-    def grid_ellipse(self, **kwargs):
+    def grid_ellipse(self, normalize_peaks=False, **kwargs):
         """
         Fit an ellipse through the six peaks around the center of the
         autocorrelogram
 
         Parameters
         ----------
+        normalize_peaks : bool, optional
+            Passed to `BaseCell.grid_peaks`.
         **kwargs : dict, optional
             Keyword arguments are passed to `BaseCell.grid_peaks`.
 
@@ -1785,7 +1859,7 @@ class BaseCell(AbstractAlmostImmutable):
 
         """
         kwargs.update(polar_peaks=False)
-        peaks = self.grid_peaks(**kwargs)
+        peaks = self.grid_peaks(normalize_peaks=normalize_peaks, **kwargs)
         xscale, yscale = 0.5 * peaks[:, 0].ptp(), 0.5 * peaks[:, 1].ptp()
         f0 = numpy.sqrt(xscale * yscale)
         ellipse = Ellipse(fitpoints=peaks, f0=f0)
@@ -1908,11 +1982,14 @@ class BaseCell(AbstractAlmostImmutable):
             `BaseCell.ratemap`, `BaseCell.occupancy`.
 
         """
-        kwargs.update(normalize_occupancy=True)
-        fmean = self.rate_mean(**kwargs)
-        rmap = self.ratemap(**kwargs)
-        wrate_sq = rmap * rmap * self.occupancy(**kwargs)
-        return 1.0 - fmean * fmean / wrate_sq.sum()
+        rmean = self.rate_mean(**kwargs)
+        rmap_kw = dict(kwargs)
+        rmap_kw.update(normalize_rate=False)
+        rmap = self.ratemap(**rmap_kw)
+        occ_kw = dict(kwargs)
+        occ_kw.update(normalize_occupancy=False)
+        occ = self.occupancy(**occ_kw)
+        return 1.0 - rmean * rmean / ((rmap * rmap * occ).sum() / occ.sum())
 
     def stability(self, **kwargs):
         """
@@ -2196,11 +2273,13 @@ class BaseCell(AbstractAlmostImmutable):
             Firing field radius.
 
         """
-        r1 = scale_factor * self.scale(**kwargs)
+        if radius_type != 'scale':
+            r1 = gauss_factor * (
+                linalg.det(self.firing_field(**kwargs)) ** 0.25)
+            if radius_type == 'gauss':
+                return r1
+        r2 = scale_factor * self.scale(**kwargs)
         if radius_type == 'scale':
-            return r1
-        r2 = gauss_factor * (linalg.det(self.firing_field(**kwargs)) ** 0.25)
-        if radius_type == 'gauss':
             return r2
         return numpy.sqrt(r1 * r2)
 
@@ -2209,7 +2288,7 @@ class BaseCell(AbstractAlmostImmutable):
                       min_overlap=1.0 / 30.0, max_overlap=2.0 / 3.0,
                       min_rfactor=1.0, max_rfactor=1.15,
                       num_r=97, threshold_quantile_range=(0.40, 0.60),
-                      **kwargs):
+                      radius_type=None, **kwargs):
         """
         Detect firing fields in the ratemap
 
@@ -2245,10 +2324,12 @@ class BaseCell(AbstractAlmostImmutable):
             Laplacian-of-Gaussian transforms of the ratemap are is computed as
             the difference between these two quantiles of the firing rate
             distribution in the ratemap.
+        radius_type : dict, optional
+            Passed to `BaseCell.firing_field_radius` if not None.
         **kwargs : dict, optional
-            Additional keyword arguments are passed to `BaseCell.firing_field`,
-            `BaseCell.ratemap`, `BaseCell.ideal_firing_fields`, and
-            `BaseCell.firing_field_rates`.
+            Additional keyword arguments are passed to
+            `BaseCell.firing_field_radius`, `BaseCell.ratemap`,
+            `BaseCell.ideal_firing_fields`, and `BaseCell.firing_field_rates`.
 
         Returns
         -------
@@ -2258,14 +2339,22 @@ class BaseCell(AbstractAlmostImmutable):
             self-explanatory.
 
         """
-        radius = self.firing_field_radius(**kwargs)
+        ffr_kw = dict(kwargs)
+        if radius_type is not None:
+            ffr_kw.update(radius_type=radius_type)
+        radius = self.firing_field_radius(**ffr_kw)
+
         rmap = self.ratemap(**kwargs)
         default_bins = rmap.shape
         custom_bins = (2 * default_bins[0], 2 * default_bins[1])
-        custom_rmap = self.ratemap(bins=custom_bins)
+        crmap_kw = dict(kwargs)
+        crmap_kw.update(bins=custom_bins)
+        custom_rmap = self.ratemap(**crmap_kw)
+
         threshold = numpy.diff(
-            numpy.percentile(custom_rmap.data.ravel(),
+            numpy.percentile(numpy.ma.compressed(custom_rmap.data),
                              [100 * p for p in threshold_quantile_range]))[0]
+
         field_arr = custom_rmap.blobs(
             min_r=radius * min_rfactor,
             max_r=radius * max_rfactor,
@@ -2285,7 +2374,7 @@ class BaseCell(AbstractAlmostImmutable):
 
         if clean:
             if ifields is None:
-                ifields = self.ideal_firing_fields(**kwargs)
+                ifields = self.ideal_firing_fields(**ffr_kw)
             rates = self.firing_field_rates(fields=fields, **kwargs)
             fields = pandas.merge(fields, rates)
             fields = clean_fields(fields, ifields, min_overlap=min_overlap)
@@ -2314,7 +2403,8 @@ class BaseCell(AbstractAlmostImmutable):
         margin = template.firing_field_radius(**kwargs)
         range_ = tuple((r[0] - margin, r[1] + margin)
                        for r in self.ratemap().range_)
-        return template.firing_fields(range_=range_, **kwargs)
+        kwargs.update(range_=range_)
+        return template.firing_fields(**kwargs)
 
     def firing_field_rates(self, fields=None, **kwargs):
         """
@@ -2945,16 +3035,15 @@ class BaseCell(AbstractAlmostImmutable):
 
         if template_kw is None:
             template_kw = {}
-        kwargs.update(polar_peaks=False)
 
         ffield = self.firing_field(**kwargs)
         if circular_fields:
             ffield = numpy.identity(2) * numpy.sqrt(linalg.det(ffield))
 
+        kwargs.update(polar_peaks=False)
         peaks = self.grid_peaks(**kwargs)
 
-        template = TemplateGridCell(peaks, ffield, bins, range_,
-                                    **template_kw)
+        template = TemplateGridCell(peaks, ffield, bins, range_, **template_kw)
         template.params['phase'] = self.phase(template)
         return template
 
@@ -3180,7 +3269,7 @@ class TemplateGridCell(BaseCell):
         return self.data['firing_field']
 
     @memoize_method
-    def firing_fields(self, fixed_radius=True, **kwargs):
+    def firing_fields(self, fixed_radius=True, range_=None, **kwargs):
         """
         Detect firing fields in the ratemap
 
@@ -3192,6 +3281,8 @@ class TemplateGridCell(BaseCell):
         fixed_radius : bool, optional
             No effect here; the radius of all fields is given by
             `TemplateGridCell.firing_field_radius`.
+        range_ : sequence
+            Passed to `TemplateGridCell.grid`.
         **kwargs : dict, optional
             Additional keyword arguments are passed to `TemplateGridCell.grid`
             and `TemplateGridCell.firing_field_radius`. Note in particular the
@@ -3205,7 +3296,7 @@ class TemplateGridCell(BaseCell):
             field.
 
         """
-        coordinates = self.grid(**kwargs)
+        coordinates = self.grid(range_=range_, **kwargs)
         radius = self.firing_field_radius(**kwargs)
         fields = pandas.DataFrame(coordinates, columns=['x', 'y'])
         fields['r'] = radius
@@ -3323,69 +3414,33 @@ class PositionCell(BaseCell):
             Kernel bandwidth.
 
         """
-        params = self.params
-        bandwidth = params['bandwidth']
-        if bandwidth != 'cv':
-            return bandwidth
-        data = self.data
-        spike_x, spike_y = data['spike_x'], data['spike_y']
-        mask = (numpy.ma.getmaskarray(spike_x) |
-                numpy.ma.getmaskarray(spike_y))
-        spike_data = numpy.column_stack((spike_x[~mask].data,
-                                         spike_y[~mask].data))
+        return self.params['bandwidth']
 
-        n = spike_data.shape[0]
-        silverman_constant = n ** (-1.0 / 6.0)
-        std = numpy.det(numpy.cov(spike_data.T)) ** 0.25
-        bw_max = 1.1 * silverman_constant * std
-        bw_min = 0.1 * bw_max
-        bandwidths = numpy.linspace(bw_min, bw_max, 100)
-        spike_grid = GridSearchCV(KernelDensity(kernel='gaussian'),
-                                  dict(bandwidth=bandwidths),
-                                  cv=10)
-        spike_grid.fit(spike_data)
-        return spike_grid.best_params_['bandwidth']
-
-    @memoize_method
-    def _spikemap(self, bins, range_, map_mode, bandwidth, kernel):
+    @abstractmethod
+    def _spikemap(self, **kwargs):
         """
-        Compute a map of the recorded spikes
+        Compute a map of the spatial spike distribution
 
-        This part of the computation in `Cell.spikemap` is factored out
-        to optimize memoization.
+        Even for a cell without spiking data, a map of the spiking density must
+        be obtainable in order to compute the ratemap.
+
+        This function should only compute a "raw" spikemap: no normalization of
+        the density, and no smoothing in case of histograms.
+
+        Parameters
+        ----------
+        **kwargs : dict, optional
+
+        Returns
+        -------
+        IntensityMap2D
+            Spike map.
 
         """
-        # We use self._occupancy to instantiate the BinnedSet, to avoid
-        # creating unneccesary instance duplicates.
-        occupancy = self._occupancy(bins, range_)
-        bset = occupancy.bset
-        xedges, yedges = bset.xedges, bset.yedges
-
-        data = self.data
-        spike_x, spike_y = data['spike_x'], data['spike_y']
-        mask = numpy.ma.getmaskarray(spike_x) | numpy.ma.getmaskarray(spike_y)
-        spike_x = spike_x[~mask].data
-        spike_y = spike_y[~mask].data
-
-        if map_mode == 'histogram':
-            values, __, __ = numpy.histogram2d(spike_x, spike_y,
-                                               bins=(xedges, yedges),
-                                               normed=False)
-        elif map_mode == 'kde':
-            xcenters = .5 * (xedges[1:] + xedges[:-1])
-            ycenters = .5 * (yedges[1:] + yedges[:-1])
-            yyc, xxc = numpy.meshgrid(ycenters, xcenters)
-            sample_points = numpy.column_stack((xxc.ravel(), yyc.ravel()))
-            sdata = numpy.column_stack((spike_x, spike_y))
-            kde = kdes[kernel]
-            values = len(sdata) * kde(sdata, sample_points, bandwidth)
-            values = values.reshape(xxc.shape) * bset.area
-        else:
-            raise ValueError("Unknown 'map_mode': {}".format(map_mode))
-        return IntensityMap2D(values, bset)
+        pass
 
     def spikemap(self, normalize_spikemap=False, bins=None, range_=None,
-                 map_mode=None, bandwidth=None, kernel='triweight',
+                 map_mode=None, bandwidth=None, kernel=_DEFAULT_KERNEL,
                  normalize_smoothing=True, **kwargs):
         """
         Compute a map of the spatial spike distribution
@@ -3393,9 +3448,8 @@ class PositionCell(BaseCell):
         Parameters
         ----------
         normalize_spikemap : bool, optional
-            If True, the spike map will be normalized to have sum 1, such that
-            it can be interpreted as a distribution of spatial spiking
-            fractions.
+            If True, the spike map will be normalized by the total number of
+            spikes.
         bins, range_
             See `Cell.occupancy`.
         map_mode : None or {'histogram', 'kde'}, optional
@@ -3553,9 +3607,8 @@ class PositionCell(BaseCell):
         Parameters
         ----------
         normalize_hd_distribution : bool, optional
-            If True, the head direction distribution will be normalized to have
-            sum 1, such that it can be interpreted as a frequency distribution
-            for the head directions.
+            If True, the head direction distribution will be normalized by the
+            total time of the experiment.
         bins
             Bin specification. See `Position.hd_distribution` for details.
         hd_dist_mode : None or {'histogram', 'kde'}, optional
@@ -3570,11 +3623,11 @@ class PositionCell(BaseCell):
         kernel : string, optional
             Kernel used in the smoothing if `hd_dist_mode='histogram'`. See
             `IntensityMap2D.smooth` (..note:: defaults may differ). If
-            `map_mode='kde'`, this keyword has no effect, and the distribution
-            is computed using the von Mises kernel.
+            `hd_dist_mode='kde'`, this keyword has no effect, and the
+            distribution is computed using the von Mises kernel.
         normalize_smoothing
             Passed as keyword 'normalize' to `IntensityMap.smooth` if
-            `map_mode='histogram'`.
+            `hd_dist_mode='histogram'`.
         **kwargs : dict, optional
             Keyword arguments are passed to `PositionCell.nspikes`.
 
@@ -3606,7 +3659,8 @@ class PositionCell(BaseCell):
         Parameters
         ----------
         normalize_rate : bool, optional
-            If True, the firing rate is normalized by the mean firing rate.
+            If True, the firing rate is normalized by the temporal mean of the
+            firing rate.
         bins
             See `PositionCell.hd_distribution`.
         hd_dist_mode : None or {'histogram', 'kde'}, optional
@@ -3625,9 +3679,9 @@ class PositionCell(BaseCell):
             defaults may differ). Passed on to `PositionCell.spike_hd_dist` and
             `PositionCell.hd_dsitribution`.
         smoothing_mode : {'pre', 'post'}, optional
-            If `map_mode='histogram'`, the smoothing filter can be applied at
-            two different times in the computation. This parameter selects
-            which. If `map_mode='kde'`, this parameter has no effect.
+            If `hd_dist_mode='histogram'`, the smoothing filter can be applied
+            at two different times in the computation. This parameter selects
+            which. If `hd_dist_mode='kde'`, this parameter has no effect.
 
             ``pre``
                 The head direction distribution and spiking time head direction
@@ -3680,6 +3734,7 @@ class PositionCell(BaseCell):
 
         hd_rate = spike_hd_dist / hd_distribution
         if normalize_rate:
+            kwargs.update(temporal=True)
             hd_rate /= self.rate_mean(**kwargs)
 
         return hd_rate.smooth(post_bandwidth, kernel=kernel,
