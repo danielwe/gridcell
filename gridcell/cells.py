@@ -3265,41 +3265,37 @@ class TemplateGridCell(BaseCell):
         return tcenters[spikes]
 
 
-class Cell(BaseCell):
+class PositionCell(BaseCell):
     """
-    Represent a real cell with spatially modulated firing rate
+    Base class for representing a cell associated with a Position object.
 
-    The cell is based on recorded spike and position data.
+    This class represents a middle layer containing all
+    the information in `BaseCell` plus a reference to a `Position` object
+    providing an animal trajectory. It contains no information about firing
+    rate, and is therefore still an abstract base class. Derived classes
+    implement different ways of providing the rate.
 
     Parameters
     ----------
     pos : Position
         Position instance representing the movement of the animal.
-    spike_t : array-like
-        Array giving the times at which the cell spiked.
     bins, range_ (range is optional)
         Bin and range specification. See `Position.occupancy` for details.
     map_mode : {'histogram', 'kde'}, optional
-        String to select whether to compute the spike map, occupancy map and
-        ratemap using bin counts (histogram) or kernel density estimation.
+        String to select whether to compute the occupancy map using bin counts
+        (histogram) or kernel density estimation.
     bandwidth : scalar or 'cv', optional
         Bandwidth of the kernel used in the smoothing filter (if
         `map_mode='histogram'`) or kernel density estimation (if
-        `map_mode='kde'`) when computing the firing rate map. Given in the same
-        units as the coordinates in `pos`. If this is set to `'cv'`, the
-        optimal bandwidth is computed using cross validation on kernel density
-        estimates of the spatial spike distribution. The number of folds in the
-        cross validation is equal to the square root of the number of spikes,
-        truncated to integer.
-    threshold : scalar, optional
-        See `BaseCell`
+        `map_mode='kde'`) when computing the occupancy map. Given in the same
+        units as the coordinates in `pos`.
     **kwargs
         See `BaseCell`.
 
     """
-    def __init__(self, position, spike_t, bins, range_=None,
-                 map_mode='kde', bandwidth=0.0, threshold=0.0, **kwargs):
-        BaseCell.__init__(self, threshold=threshold, **kwargs)
+    def __init__(self, position, bins, range_=None, map_mode='kde',
+                 bandwidth=0.0, **kwargs):
+        BaseCell.__init__(self, **kwargs)
         for name in ('params', 'data'):
             if not hasattr(self, name):
                 setattr(self, name, {})
@@ -3310,29 +3306,16 @@ class Cell(BaseCell):
             bandwidth=bandwidth,
         )
 
-        spike_t = numpy.squeeze(spike_t)
-
-        spike_x, spike_y = position.interpolate(spike_t)
-
-        self.data.update(
-            spike_t=spike_t,
-            spike_x=spike_x,
-            spike_y=spike_y,
-        )
-
         memoize_method.register_friend(position, self)
         self.position = position
 
-    @memoize_method
     def bandwidth(self):
         """
         Find the kernel bandwidth to when computing ratemaps
 
-        The bandwidth is looked up in `self.params`. However, if the value
-        `'cv'` is found, the optimal bandwidth is computed using cross
-        validation on Gaussian kernel density estimates of the spatial spike
-        distribution.  The number of folds in the cross validation is equal to
-        the square root of the number of spikes, truncated to integer.
+        The bandwidth is looked up in `self.params`. This is implemented as
+        a function to allow being overridden with more complex logic in derived
+        classes.
 
         Returns
         -------
@@ -3453,33 +3436,305 @@ class Cell(BaseCell):
                                        normalize=normalize_smoothing)
         return spikemap
 
+    @abstractmethod
     def nspikes(self, **kwargs):
         """
-        Count the number of valid spikes recorded from this cell
+        Count or estimate the number of valid spikes emitted from this cell
 
         Parameters
         ----------
         **kwargs : dict, optional
-            Not in use.
 
         Returns
         -------
-        integer
+        scalar
             Number of spikes.
 
         """
-        data = self.data
-        spike_x, spike_y = data['spike_x'], data['spike_y']
-        mask = numpy.ma.getmaskarray(spike_x) | numpy.ma.getmaskarray(spike_y)
-        return numpy.sum((~mask).astype(numpy.int_))
+        pass
 
-    def _occupancy(self, bins, range_, map_mode='kde', bandwidth=None,
-                   kernel='triweight', normalize_occupancy=False):
+    @abstractmethod
+    def _spike_hd_dist(self, **kwargs):
+        """
+        Compute the distribution of head directions at spiking times
+
+        Even for a cell without spiking data, a map of the spiking density in
+        head direction space must be obtainable in order to compute the
+        ratemap.
+
+        This function should only compute a "raw" head direction map: no
+        normalization of the density, and no smoothing in case of histograms.
+
+        Parameters
+        ----------
+        **kwargs : dict, optional
+
+        Returns
+        -------
+        IntensityMap
+            Head direction distribution at spiking times.
+
+        """
+        pass
+
+    def spike_hd_dist(self, normalize_spike_hd_dist=False, bins=_ANGULAR_NBINS,
+                      hd_dist_mode=None, bandwidth=_ANGULAR_BANDWIDTH,
+                      kernel='gaussian', normalize_smoothing=True, **kwargs):
+        """
+        Compute the distribution of head directions at spiking times
+
+        Parameters
+        ----------
+        normalize_spike_hd_dist : bool, optional
+            If True, the spike head direction distribution will be normalized
+            by the total number of spikes.
+        bins
+            See `Cell.hd_distribution`.
+        hd_dist_mode : None or {'histogram', 'kde'}, optional
+            String to select whether to compute the head direction distribution
+            using bin counts (histogram) or kernel density estimation. If None,
+            the default mode for ratemaps, set at initialization and stored in
+            `self.params`, is used.
+        bandwidth : scalar, optional
+            Bandwidth of the kernel used in the smoothing filter (if
+            `hd_dist_mode='histogram'`) or kernel density estimation (if
+            `hd_dist_mode='kde'`).
+        kernel : string, optional
+            Kernel used in the smoothing if `hd_dist_mode='histogram'`. See
+            `IntensityMap2D.smooth` (..note:: defaults may differ). If
+            `hd_dist_mode='kde'`, this keyword has no effect, and the
+            distribution is computed using the von Mises kernel.
+        normalize_smoothing
+            Passed as keyword 'normalize' to `IntensityMap.smooth` if
+            `hd_dist_mode='histogram'`.
+        **kwargs : dict, optional
+            Keyword arguments are passed to `Cell.nspikes`.
+
+        Returns
+        -------
+        IntensityMap
+            Head direction distribution at spiking times.
+
+        """
+        if hd_dist_mode is None:
+            hd_dist_mode = self.params['map_mode']
+
+        spike_hd_dist = self._spike_hd_dist(bins, hd_dist_mode, bandwidth,
+                                            kernel)
+        if normalize_spike_hd_dist:
+            spike_hd_dist /= self.nspikes(**kwargs)
+        if hd_dist_mode == 'histogram':
+            spike_hd_dist = spike_hd_dist.smooth(bandwidth, kernel=kernel,
+                                                 normalize=normalize_smoothing,
+                                                 periodic=True)
+        return spike_hd_dist
+
+    def _hd_distribution(self, bins, hd_dist_mode='kde',
+                         bandwidth=_ANGULAR_BANDWIDTH,
+                         normalize_hd_distribution=False):
+        """
+        Compute the head direction distribution
+
+        This part of the computation in `PositionCell.hd_distribution` is
+        factored out as a courtesy to `PositionCell.spike_hd_dist`.
+
+        """
+        return self.position.hd_distribution(
+            bins=bins, mode=hd_dist_mode, bandwidth=bandwidth,
+            normalize=normalize_hd_distribution)
+
+    def hd_distribution(self, normalize_hd_distribution=False,
+                        bins=_ANGULAR_NBINS, hd_dist_mode=None,
+                        bandwidth=_ANGULAR_BANDWIDTH, kernel='gaussian',
+                        normalize_smoothing=True, **kwargs):
+        """
+        Compute the head direction distribution
+
+        Parameters
+        ----------
+        normalize_hd_distribution : bool, optional
+            If True, the head direction distribution will be normalized to have
+            sum 1, such that it can be interpreted as a frequency distribution
+            for the head directions.
+        bins
+            Bin specification. See `Position.hd_distribution` for details.
+        hd_dist_mode : None or {'histogram', 'kde'}, optional
+            String to select whether to compute the head direction distribution
+            using bin counts (histogram) or kernel density estimation. If None,
+            the default mode for ratemaps, set at initialization and stored in
+            `self.params`, is used.
+        bandwidth : scalar, optional
+            Bandwidth of the kernel used in the smoothing filter (if
+            `hd_dist_mode='histogram'`) or kernel density estimation (if
+            `hd_dist_mode='kde'`).
+        kernel : string, optional
+            Kernel used in the smoothing if `hd_dist_mode='histogram'`. See
+            `IntensityMap2D.smooth` (..note:: defaults may differ). If
+            `map_mode='kde'`, this keyword has no effect, and the distribution
+            is computed using the von Mises kernel.
+        normalize_smoothing
+            Passed as keyword 'normalize' to `IntensityMap.smooth` if
+            `map_mode='histogram'`.
+        **kwargs : dict, optional
+            Keyword arguments are passed to `PositionCell.nspikes`.
+
+        Returns
+        -------
+        IntensityMap
+            Head direction distribution.
+
+        """
+        if hd_dist_mode is None:
+            hd_dist_mode = self.params['map_mode']
+        hd_distribution = self._hd_distribution(
+            bins, hd_dist_mode=hd_dist_mode, bandwidth=bandwidth,
+            normalize_hd_distribution=normalize_hd_distribution)
+        if hd_dist_mode == 'histogram':
+            hd_distribution = hd_distribution.smooth(
+                bandwidth, kernel=kernel, normalize=normalize_smoothing,
+                periodic=True)
+        return hd_distribution
+
+    @memoize_method
+    def hd_rate(self, normalize_rate=False, bins=_ANGULAR_NBINS,
+                hd_dist_mode=None, bandwidth=_ANGULAR_BANDWIDTH,
+                kernel='gaussian', smoothing_mode='pre',
+                normalize_smoothing=True, **kwargs):
+        """
+        Compute the head direction firing rate distribution of the cell
+
+        Parameters
+        ----------
+        normalize_rate : bool, optional
+            If True, the firing rate is normalized by the mean firing rate.
+        bins
+            See `PositionCell.hd_distribution`.
+        hd_dist_mode : None or {'histogram', 'kde'}, optional
+            String to select whether to compute the head direction distribution
+            using bin counts (histogram) or kernel density estimation. If None,
+            the default mode for ratemaps, set at initialization and stored in
+            `self.params`, is used.
+        bandwidth : scalar, optional
+            Bandwidth of the kernel used in the smoothing filter if
+            `hd_dist_mode='histogram'` and `smoothing_mode='post'`. See
+            `IntensityMap2D.smooth` (..note:: defaults may differ). Passed on
+            to `PositionCell.spike_hd_dist` and `PositionCell.hd_dsitribution`.
+        kernel : string, optional
+            Kernel used in the smoothing if `hd_dist_mode='histogram'` and
+            `smoothing_mode='post'`. See `IntensityMap2D.smooth` (..note::
+            defaults may differ). Passed on to `PositionCell.spike_hd_dist` and
+            `PositionCell.hd_dsitribution`.
+        smoothing_mode : {'pre', 'post'}, optional
+            If `map_mode='histogram'`, the smoothing filter can be applied at
+            two different times in the computation. This parameter selects
+            which. If `map_mode='kde'`, this parameter has no effect.
+
+            ``pre``
+                The head direction distribution and spiking time head direction
+                distribution are smoothed individually, and then divided to
+                create the head direction firing rate distribution.
+            ``post``
+                The and spiking time head direction histogram is divided by the
+                head direction histogram to create a raw firing head direction
+                firing rate distribution, and the smoothing filter is applied
+                to this to create the final head direction firing rate
+                distribution.
+        normalize_smoothing
+            Passed on to `PositionCell.spike_hd_dist` and
+            `PositionCell.hd_distribution`.
+        **kwargs: dict, optional
+            Passed on to `PositionCell.spike_hd_dist`,
+            `PositionCell.hd_distribution` and `PositionCell.rate_mean`.
+
+        Returns
+        -------
+        IntensityMap
+            Firing rate map.
+
+        """
+        if hd_dist_mode is None:
+            hd_dist_mode = self.params['map_mode']
+
+        if hd_dist_mode == 'kde' or smoothing_mode == 'pre':
+            pre_bandwidth = bandwidth
+            post_bandwidth = 0.0
+        elif smoothing_mode == 'post':
+            pre_bandwidth = 0.0
+            post_bandwidth = bandwidth
+        else:
+            raise ValueError("Unknown 'smoothing_mode': {}"
+                             .format(smoothing_mode))
+
+        kwargs.update(
+            bins=bins,
+            hd_dist_mode=hd_dist_mode,
+            bandwidth=pre_bandwidth,
+            kernel=kernel,
+            normalize_spike_hd_dist=False,
+            normalize_hd_distribution=False,
+            normalize_smoothing=normalize_smoothing,
+        )
+
+        spike_hd_dist = self.spike_hd_dist(**kwargs)
+        hd_distribution = self.hd_distribution(**kwargs)
+
+        hd_rate = spike_hd_dist / hd_distribution
+        if normalize_rate:
+            hd_rate /= self.rate_mean(**kwargs)
+
+        return hd_rate.smooth(post_bandwidth, kernel=kernel,
+                              normalize=normalize_smoothing, periodic=True)
+
+    def hd_mean(self, **kwargs):
+        """
+        Compute the circular mean of the head direction firing rate of the cell
+
+        Parameters
+        ----------
+        kwargs: dict, optional
+            Keyword arguments are passed to `PositionCell.hd_rate`.
+
+        Returns
+        -------
+        xmean, ymean : scalars
+            Cartesian coordinates of the circular mean.
+
+        """
+        hd_rate = self.hd_rate(**kwargs)
+        centers = hd_rate.bset.centers[0]
+        hd_int = hd_rate.integral()
+        xm = (hd_rate * numpy.cos(centers)).integral() / hd_int
+        ym = (hd_rate * numpy.sin(centers)).integral() / hd_int
+        return xm, ym
+
+    def hd_score(self, **kwargs):
+        """
+        Compute the head direction score of the cell
+
+        The head direction score is the length of the circular mean of the head
+        direction firing rate distribution.
+
+        Parameters
+        ----------
+        kwargs: dict, optional
+            Keyword arguments are passed to `PositionCell.hd_mean`.
+
+        Returns
+        -------
+        hd_score : scalar
+            Head direction score.
+
+        """
+        xm, ym = self.hd_mean(**kwargs)
+        return numpy.sqrt(xm * xm + ym * ym)
+
+    def _occupancy(self, bins, range_, map_mode=None, bandwidth=None,
+                   kernel=None, normalize_occupancy=None):
         """
         Compute a map of occupancy times
 
-        This part of the computation in `Cell.occupancy` is factored out
-        as a courtesy to `Cell.spikemap`.
+        This part of the computation in `PositionCell.occupancy` is factored
+        out as a courtesy to `PositionCell.spikemap`.
 
         """
         params = self.params
@@ -3487,12 +3742,20 @@ class Cell(BaseCell):
             bins = params['bins']
         if range_ is None:
             range_ = params['range_']
-        return self.position.occupancy(bins=bins, range_=range_, mode=map_mode,
-                                       bandwidth=bandwidth, kernel=kernel,
-                                       normalize=normalize_occupancy)
+        if map_mode is None:
+            map_mode = params['map_mode']
+        if bandwidth is None:
+            bandwidth = self.bandwidth()
+        occ_kw = dict(bins=bins, range_=range_, mode=map_mode,
+                      bandwidth=bandwidth)
+        if kernel is not None:
+            occ_kw.update(kernel=kernel)
+        if normalize_occupancy is not None:
+            occ_kw.update(normalize=normalize_occupancy)
+        return self.position.occupancy(**occ_kw)
 
     def occupancy(self, normalize_occupancy=False, bins=None, range_=None,
-                  map_mode=None, bandwidth=None, kernel='triweight',
+                  map_mode=None, bandwidth=None, kernel=_DEFAULT_KERNEL,
                   normalize_smoothing=True, **kwargs):
         """
         Compute a map of occupancy times
@@ -3500,9 +3763,8 @@ class Cell(BaseCell):
         Parameters
         ----------
         normalize_occupancy : bool, optional
-            If True, the occupancy map will be normalized to have sum 1, such
-            that it can be interpreted as a frequency distribution for the
-            occupancy.
+            If True, the occupancy map will be normalized by the total time of
+            the experiment.
         bins, range_
             Bin and range specification. See `Position.occupancy` for details.
             If None, the default specification, set at initialization and
@@ -3534,10 +3796,6 @@ class Cell(BaseCell):
             Occupancy map.
 
         """
-        if bandwidth is None:
-            bandwidth = self.bandwidth()
-        if map_mode is None:
-            map_mode = self.params['map_mode']
         occupancy = self._occupancy(bins, range_, map_mode=map_mode,
                                     bandwidth=bandwidth, kernel=kernel,
                                     normalize_occupancy=normalize_occupancy)
@@ -3565,7 +3823,7 @@ class Cell(BaseCell):
 
     @memoize_method
     def ratemap(self, normalize_rate=False, bins=None, range_=None,
-                map_mode=None, bandwidth=None, kernel='triweight',
+                map_mode=None, bandwidth=None, kernel=_DEFAULT_KERNEL,
                 smoothing_mode='pre', normalize_smoothing=True, **kwargs):
         """
         Compute the firing rate map of the cell
@@ -3573,9 +3831,10 @@ class Cell(BaseCell):
         Parameters
         ----------
         normalize_rate : bool, optional
-            If True, the firing rate is normalized by the mean firing rate.
+            If True, the firing rate is normalized by the temporal mean of the
+            firing rate.
         bins, range_
-            See `Cell.occupancy`.
+            See `PositionCell.occupancy`.
         map_mode : None or {'histogram', 'kde'}, optional
             String to select whether to compute the ratemap using bin counts
             (histogram) or kernel density estimation. If None, the default
@@ -3585,12 +3844,12 @@ class Cell(BaseCell):
             Bandwidth of the kernel used in the smoothing filter if
             `map_mode='histogram'` and `smoothing_mode='post'`. See
             `IntensityMap2D.smooth` (..note:: defaults may differ). Passed on
-            to `Cell.spikemap` and `Cell.occupancy`.
+            to `PositionCell.spikemap` and `PositionCell.occupancy`.
         kernel : string, optional
             Kernel used in the smoothing if `map_mode='histogram'` and
             `smoothing_mode='post'`. See `IntensityMap2D.smooth` (..note::
-            defaults may differ). Passed on to `Cell.spikemap` and
-            `Cell.occupancy`.
+            defaults may differ). Passed on to `PositionCell.spikemap` and
+            `PositionCell.occupancy`.
         smoothing_mode : {'pre', 'post'}, optional
             If `map_mode='histogram'`, the smoothing filter can be applied at
             two different times in the computation. This parameter selects
@@ -3604,10 +3863,10 @@ class Cell(BaseCell):
                 a raw firing rate map, and the smoothing filter is applied to
                 this to create the final firing rate map.
         normalize_smoothing
-            Passed on to `Cell.spikemap` and `Cell.occupancy`.
+            Passed on to `PositionCell.spikemap` and `PositionCell.occupancy`.
         **kwargs: dict, optional
-            Passed on to `Cell.spikemap`, `Cell.occupancy` and
-            `Cell.rate_mean`.
+            Passed on to `PositionCell.spikemap`, `PositionCell.occupancy` and
+            `PositionCell.rate_mean`.
 
         Returns
         -------
@@ -3646,10 +3905,240 @@ class Cell(BaseCell):
 
         ratemap = spikemap / occupancy
         if normalize_rate:
+            kwargs.update(temporal=True)
             ratemap /= self.rate_mean(**kwargs)
 
         return ratemap.smooth(post_bandwidth, kernel=kernel,
                               normalize=normalize_smoothing)
+
+    # This is really a stochastic property and should ideally not be memoized,
+    # but ain't nobody got time for that.
+    @memoize_method
+    def stability(self, **kwargs):
+        """
+        Compute a measure of the spatial stability of the cell firing pattern
+
+        Returns
+        -------
+        scalar
+            The spatial stability of the cell firing pattern.
+        **kwargs : dict, optional
+            Keyword arguments are passed to, `PositionCell.bandwidth`,
+            `PositionCell.ratemap`, `PositionCell.occupancy` and
+            `PositionCell.total_time`.
+
+        """
+        rmap_kw = dict(kwargs)
+        rmap_kw.update(
+            bandwidth=2.0 * self.bandwidth(),
+            normalize_rate=False,
+        )
+        occ_kw = dict(kwargs)
+        occ_kw.update(
+            bandwidth=2.0 * self.bandwidth(),
+            normalize_occupancy=False,
+        )
+        rmap = self.ratemap(**rmap_kw)
+
+        kwargs.update(bandwidth=0.0)
+
+        def _stability_terms(cell1, cell2):
+            dev = cell1.ratemap(**rmap_kw) - cell2.ratemap(**rmap_kw)
+            deviation = dev * dev / rmap
+
+            invtime1 = 1.0 / cell1.occupancy(**occ_kw)
+            invtime2 = 1.0 / cell2.occupancy(**occ_kw)
+            invtime = invtime1 + invtime2
+
+            return deviation.sum(), invtime.sum()
+
+        def _interval_length(int_):
+            return int_[1] - int_[0]
+
+        def _intervals():
+            split1, split2 = numpy.sort(numpy.random.random_sample(2))
+            ints = ((0.0, split1), (split1, split2), (split2, 1.0))
+            return sorted(ints, key=_interval_length, reverse=True)
+
+        deviation_sum = 0.0
+        invtime_sum = 0.0
+        trials = 50
+        for _ in range(trials):
+            int1, int2, _ = _intervals()
+            new_cell1 = self.subinterval(*int1)
+            new_cell2 = self.subinterval(*int2)
+            deviation, invtime = _stability_terms(new_cell1, new_cell2)
+            deviation_sum += deviation
+            invtime_sum += invtime
+
+        mean_sfactor = deviation_sum / invtime_sum
+
+        def _transform(x):
+            return 1.0 / (1.0 + x)
+            #return numpy.exp(-x)
+
+        return _transform(mean_sfactor)
+
+    @abstractmethod
+    def subinterval(self, start, stop):
+        """
+        Create a new object from the data recored in part of the session
+
+        Parameters
+        ----------
+        start, stop : scalar in [0, 1]
+            Start and stop times for the subinterval to use, given as fractions
+            of the total length of the recording session.
+
+        Returns
+        -------
+        PositionCell
+            New object based on the data recorded between
+            ..math:`t_0 + (t_f - t_0) * start` and ..math:`t_0 + (t_f - t_0)
+            * stop`.
+
+        """
+        pass
+
+
+class Cell(PositionCell):
+    """
+    Represent a real cell with firing encoded as a spike train.
+
+    Parameters
+    ----------
+    spike_t : array-like
+        Array giving the times at which the cell spiked.
+    position, bins, range_
+        See `PositionCell`.
+    map_mode : {'histogram', 'kde'}, optional
+        String to select whether to compute the occupancy map, spike map and
+        ratemap using bin counts (histogram) or kernel density estimation.
+    bandwidth : scalar or 'cv', optional
+        Bandwidth of the kernel used in the smoothing filter (if
+        `map_mode='histogram'`) or kernel density estimation (if
+        `map_mode='kde'`) when computing the maps. Given in the same
+        units as the coordinates in `pos`. If this is set to `'cv'`, the
+        optimal bandwidth is computed using cross validation on kernel density
+        estimates of the spatial spike distribution. The number of folds in the
+        cross validation is equal to the square root of the number of spikes,
+        truncated to integer.
+    **kwargs
+        See `PositionCell`.
+
+    """
+    def __init__(self, spike_t, position, bins, range_=None, map_mode='kde',
+                 bandwidth=0.0, **kwargs):
+        PositionCell.__init__(self, position, bins, range_=range_,
+                              map_mode=map_mode, bandwidth=bandwidth, **kwargs)
+
+        spike_t = numpy.squeeze(spike_t)
+
+        spike_x, spike_y = position.interpolate(spike_t)
+
+        self.data.update(
+            spike_t=spike_t,
+            spike_x=spike_x,
+            spike_y=spike_y,
+        )
+
+    @memoize_method
+    def bandwidth(self):
+        """
+        Find the kernel bandwidth to when computing ratemaps
+
+        The bandwidth is looked up in `self.params`. However, if the value
+        `'cv'` is found, the optimal bandwidth is computed using cross
+        validation on Gaussian kernel density estimates of the spatial spike
+        distribution.  The number of folds in the cross validation is equal to
+        the square root of the number of spikes, truncated to integer.
+
+        Returns
+        -------
+        scalar
+            Kernel bandwidth.
+
+        """
+        params = self.params
+        bandwidth = params['bandwidth']
+        if bandwidth != 'cv':
+            return bandwidth
+        data = self.data
+        spike_x, spike_y = data['spike_x'], data['spike_y']
+        mask = (numpy.ma.getmaskarray(spike_x) |
+                numpy.ma.getmaskarray(spike_y))
+        spike_data = numpy.column_stack((spike_x[~mask].data,
+                                         spike_y[~mask].data))
+
+        n = spike_data.shape[0]
+        silverman_constant = n ** (-1.0 / 6.0)
+        std = numpy.det(numpy.cov(spike_data.T)) ** 0.25
+        bw_max = 1.1 * silverman_constant * std
+        bw_min = 0.1 * bw_max
+        bandwidths = numpy.linspace(bw_min, bw_max, 100)
+        spike_grid = GridSearchCV(KernelDensity(kernel='gaussian'),
+                                  dict(bandwidth=bandwidths),
+                                  cv=10)
+        spike_grid.fit(spike_data)
+        return spike_grid.best_params_['bandwidth']
+
+    @memoize_method
+    def _spikemap(self, bins, range_, map_mode, bandwidth, kernel):
+        """
+        Compute a map of the recorded spikes
+
+        This part of the computation in `Cell.spikemap` is factored out
+        to optimize memoization.
+
+        """
+        # We use self._occupancy to instantiate the BinnedSet, to avoid
+        # creating unneccesary instance duplicates.
+        occupancy = self._occupancy(bins, range_)
+        bset = occupancy.bset
+        xedges, yedges = bset.xedges, bset.yedges
+
+        data = self.data
+        spike_x, spike_y = data['spike_x'], data['spike_y']
+        mask = numpy.ma.getmaskarray(spike_x) | numpy.ma.getmaskarray(spike_y)
+        spike_x = spike_x[~mask].data
+        spike_y = spike_y[~mask].data
+
+        if map_mode == 'histogram':
+            values, __, __ = numpy.histogram2d(spike_x, spike_y,
+                                               bins=(xedges, yedges),
+                                               normed=False)
+        elif map_mode == 'kde':
+            xcenters = .5 * (xedges[1:] + xedges[:-1])
+            ycenters = .5 * (yedges[1:] + yedges[:-1])
+            yyc, xxc = numpy.meshgrid(ycenters, xcenters)
+            sample_points = numpy.column_stack((xxc.ravel(), yyc.ravel()))
+            sdata = numpy.column_stack((spike_x, spike_y))
+            kde = kdes[kernel]
+            values = len(sdata) * kde(sdata, sample_points, bandwidth)
+            values = values.reshape(xxc.shape) * bset.area
+        else:
+            raise ValueError("Unknown 'map_mode': {}".format(map_mode))
+        return IntensityMap2D(values, bset)
+
+    def nspikes(self, **kwargs):
+        """
+        Count the number of valid spikes recorded from this cell
+
+        Parameters
+        ----------
+        **kwargs : dict, optional
+            Not in use.
+
+        Returns
+        -------
+        integer
+            Number of spikes.
+
+        """
+        data = self.data
+        spike_x, spike_y = data['spike_x'], data['spike_y']
+        mask = numpy.ma.getmaskarray(spike_x) | numpy.ma.getmaskarray(spike_y)
+        return numpy.sum((~mask).astype(numpy.int_))
 
     def mean_rate_in_region(self, xc, yc, r, **kwargs):
         """
@@ -3735,319 +4224,6 @@ class Cell(BaseCell):
             raise ValueError("Unknown 'hd_dist_mode': {}".format(hd_dist_mode))
         return IntensityMap(values, bset)
 
-    def spike_hd_dist(self, normalize_spike_hd_dist=False, bins=_ANGULAR_NBINS,
-                      hd_dist_mode=None, bandwidth=_ANGULAR_BANDWIDTH,
-                      kernel='gaussian', normalize_smoothing=True, **kwargs):
-        """
-        Compute the distribution of head directions at spiking times
-
-        Parameters
-        ----------
-        normalize_spike_hd_dist : bool, optional
-            If True, the spike head direction distribution will be normalized
-            to have sum 1, such that it can be interpreted as a distribution of
-            spatial spiking fractions.
-        bins
-            See `Cell.hd_distribution`.
-        hd_dist_mode : None or {'histogram', 'kde'}, optional
-            String to select whether to compute the head direction distribution
-            using bin counts (histogram) or kernel density estimation. If None,
-            the default mode for ratemaps, set at initialization and stored in
-            `self.params`, is used.
-        bandwidth : scalar, optional
-            Bandwidth of the kernel used in the smoothing filter (if
-            `hd_dist_mode='histogram'`) or kernel density estimation (if
-            `hd_dist_mode='kde'`).
-        kernel : string, optional
-            Kernel used in the smoothing if `hd_dist_mode='histogram'`. See
-            `IntensityMap2D.smooth` (..note:: defaults may differ). If
-            `map_mode='kde'`, this keyword has no effect, and the distribution
-            is computed using the von Mises kernel.
-        normalize_smoothing
-            Passed as keyword 'normalize' to `IntensityMap.smooth` if
-            `map_mode='histogram'`.
-        **kwargs : dict, optional
-            Keyword arguments are passed to `Cell.nspikes`.
-
-        Returns
-        -------
-        IntensityMap
-            Head direction distribution at spiking times.
-
-        """
-        if hd_dist_mode is None:
-            hd_dist_mode = self.params['map_mode']
-
-        spike_hd_dist = self._spike_hd_dist(bins, hd_dist_mode, bandwidth,
-                                            kernel)
-        if normalize_spike_hd_dist:
-            spike_hd_dist /= self.nspikes(**kwargs)
-        if hd_dist_mode == 'histogram':
-            spike_hd_dist = spike_hd_dist.smooth(bandwidth, kernel=kernel,
-                                                 normalize=normalize_smoothing,
-                                                 periodic=True)
-        return spike_hd_dist
-
-    def _hd_distribution(self, bins, hd_dist_mode='kde',
-                         bandwidth=_ANGULAR_BANDWIDTH,
-                         normalize_hd_distribution=False):
-        """
-        Compute the head direction distribution
-
-        This part of the computation in `Cell.hd_distribution` is factored out
-        as a courtesy to `Cell.spike_hd_dist`.
-
-        """
-        return self.position.hd_distribution(
-            bins=bins, mode=hd_dist_mode, bandwidth=bandwidth,
-            normalize=normalize_hd_distribution)
-
-    def hd_distribution(self, normalize_hd_distribution=False,
-                        bins=_ANGULAR_NBINS, hd_dist_mode=None,
-                        bandwidth=_ANGULAR_BANDWIDTH, kernel='gaussian',
-                        normalize_smoothing=True, **kwargs):
-        """
-        Compute the head direction distribution
-
-        Parameters
-        ----------
-        normalize_hd_distribution : bool, optional
-            If True, the head direction distribution will be normalized to have
-            sum 1, such that it can be interpreted as a frequency distribution
-            for the head directions.
-        bins
-            Bin specification. See `Position.hd_distribution` for details.
-        hd_dist_mode : None or {'histogram', 'kde'}, optional
-            String to select whether to compute the head direction distribution
-            using bin counts (histogram) or kernel density estimation. If None,
-            the default mode for ratemaps, set at initialization and stored in
-            `self.params`, is used.
-        bandwidth : scalar, optional
-            Bandwidth of the kernel used in the smoothing filter (if
-            `hd_dist_mode='histogram'`) or kernel density estimation (if
-            `hd_dist_mode='kde'`).
-        kernel : string, optional
-            Kernel used in the smoothing if `hd_dist_mode='histogram'`. See
-            `IntensityMap2D.smooth` (..note:: defaults may differ). If
-            `map_mode='kde'`, this keyword has no effect, and the distribution
-            is computed using the von Mises kernel.
-        normalize_smoothing
-            Passed as keyword 'normalize' to `IntensityMap.smooth` if
-            `map_mode='histogram'`.
-        **kwargs : dict, optional
-            Keyword arguments are passed to `Cell.nspikes`.
-
-        Returns
-        -------
-        IntensityMap
-            Head direction distribution.
-
-        """
-        if hd_dist_mode is None:
-            hd_dist_mode = self.params['map_mode']
-        hd_distribution = self._hd_distribution(
-            bins, hd_dist_mode=hd_dist_mode, bandwidth=bandwidth,
-            normalize_hd_distribution=normalize_hd_distribution)
-        if hd_dist_mode == 'histogram':
-            hd_distribution = hd_distribution.smooth(
-                bandwidth, kernel=kernel, normalize=normalize_smoothing,
-                periodic=True)
-        return hd_distribution
-
-    @memoize_method
-    def hd_rate(self, normalize_rate=False, bins=_ANGULAR_NBINS,
-                hd_dist_mode=None, bandwidth=_ANGULAR_BANDWIDTH,
-                kernel='gaussian', smoothing_mode='pre',
-                normalize_smoothing=True, **kwargs):
-        """
-        Compute the head direction firing rate distribution of the cell
-
-        Parameters
-        ----------
-        normalize_rate : bool, optional
-            If True, the firing rate is normalized by the mean firing rate.
-        bins
-            See `Cell.hd_distribution`.
-        hd_dist_mode : None or {'histogram', 'kde'}, optional
-            String to select whether to compute the head direction distribution
-            using bin counts (histogram) or kernel density estimation. If None,
-            the default mode for ratemaps, set at initialization and stored in
-            `self.params`, is used.
-        bandwidth : scalar, optional
-            Bandwidth of the kernel used in the smoothing filter if
-            `hd_dist_mode='histogram'` and `smoothing_mode='post'`. See
-            `IntensityMap2D.smooth` (..note:: defaults may differ). Passed on
-            to `Cell.spike_hd_dist` and `Cell.hd_dsitribution`.
-        kernel : string, optional
-            Kernel used in the smoothing if `hd_dist_mode='histogram'` and
-            `smoothing_mode='post'`. See `IntensityMap2D.smooth` (..note::
-            defaults may differ). Passed on to `Cell.spike_hd_dist` and
-            `Cell.hd_dsitribution`.
-        smoothing_mode : {'pre', 'post'}, optional
-            If `map_mode='histogram'`, the smoothing filter can be applied at
-            two different times in the computation. This parameter selects
-            which. If `map_mode='kde'`, this parameter has no effect.
-
-            ``pre``
-                The head direction distribution and spiking time head direction
-                distribution are smoothed individually, and then divided to
-                create the head direction firing rate distribution.
-            ``post``
-                The and spiking time head direction histogram is divided by the
-                head direction histogram to create a raw firing head direction
-                firing rate distribution, and the smoothing filter is applied
-                to this to create the final head direction firing rate
-                distribution.
-        normalize_smoothing
-            Passed on to `Cell.spike_hd_dist` and `Cell.hd_distribution`.
-        **kwargs: dict, optional
-            Passed on to `Cell.spike_hd_dist`, `Cell.hd_distribution` and
-            `Cell.rate_mean`.
-
-        Returns
-        -------
-        IntensityMap
-            Firing rate map.
-
-        """
-        if hd_dist_mode is None:
-            hd_dist_mode = self.params['map_mode']
-
-        if hd_dist_mode == 'kde' or smoothing_mode == 'pre':
-            pre_bandwidth = bandwidth
-            post_bandwidth = 0.0
-        elif smoothing_mode == 'post':
-            pre_bandwidth = 0.0
-            post_bandwidth = bandwidth
-        else:
-            raise ValueError("Unknown 'smoothing_mode': {}"
-                             .format(smoothing_mode))
-
-        kwargs.update(
-            bins=bins,
-            hd_dist_mode=hd_dist_mode,
-            bandwidth=pre_bandwidth,
-            kernel=kernel,
-            normalize_spike_hd_dist=False,
-            normalize_hd_distribution=False,
-            normalize_smoothing=normalize_smoothing,
-        )
-
-        spike_hd_dist = self.spike_hd_dist(**kwargs)
-        hd_distribution = self.hd_distribution(**kwargs)
-
-        hd_rate = spike_hd_dist / hd_distribution
-        if normalize_rate:
-            hd_rate /= self.rate_mean(**kwargs)
-
-        return hd_rate.smooth(post_bandwidth, kernel=kernel,
-                              normalize=normalize_smoothing, periodic=True)
-
-    def hd_mean(self, **kwargs):
-        """
-        Compute the circular mean of the head direction firing rate of the cell
-
-        Parameters
-        ----------
-        kwargs: dict, optional
-            Keyword arguments are passed to `Cell.hd_rate`.
-
-        Returns
-        -------
-        xmean, ymean : scalars
-            Cartesian coordinates of the circular mean.
-
-        """
-        hd_rate = self.hd_rate(**kwargs)
-        centers = hd_rate.bset.centers[0]
-        hd_int = hd_rate.integral()
-        xm = (hd_rate * numpy.cos(centers)).integral() / hd_int
-        ym = (hd_rate * numpy.sin(centers)).integral() / hd_int
-        return xm, ym
-
-    def hd_score(self, **kwargs):
-        """
-        Compute the head direction score of the cell
-
-        The head direction score is the length of the circular mean of the head
-        direction firing rate distribution.
-
-        Parameters
-        ----------
-        kwargs: dict, optional
-            Keyword arguments are passed to `Cell.hd_mean`.
-
-        Returns
-        -------
-        hd_score : scalar
-            Head direction score.
-
-        """
-        xm, ym = self.hd_mean(**kwargs)
-        return numpy.sqrt(xm * xm + ym * ym)
-
-    # This is really a stochastic property and should ideally not be memoized,
-    # but ain't nobody got time for that.
-    @memoize_method
-    def stability(self, **kwargs):
-        """
-        Compute a measure of the spatial stability of the cell firing pattern
-
-        Returns
-        -------
-        scalar
-            The spatial stability of the cell firing pattern.
-        **kwargs : dict, optional
-            Keyword arguments are passed to, `Cell.bandwidth`, `Cell.ratemap`,
-            `Cell.occupancy`, `Cell.nspikes` and `Cell.total_time`.
-
-        """
-        kwargs.update(
-            bandwidth=2.0 * self.bandwidth(),
-            normalize_occupancy=False,
-            normalize_rate=False,
-        )
-        rmap = self.ratemap(**kwargs)
-
-        kwargs.update(bandwidth=0.0)
-
-        def _stability_terms(cell1, cell2):
-            dev = cell1.ratemap(**kwargs) - cell2.ratemap(**kwargs)
-            deviation = dev * dev / rmap
-
-            invtime1 = 1.0 / cell1.occupancy(**kwargs)
-            invtime2 = 1.0 / cell2.occupancy(**kwargs)
-            invtime = invtime1 + invtime2
-
-            return deviation.sum(), invtime.sum()
-
-        def _interval_length(int_):
-            return int_[1] - int_[0]
-
-        def _intervals():
-            split1, split2 = numpy.sort(numpy.random.random_sample(2))
-            ints = ((0.0, split1), (split1, split2), (split2, 1.0))
-            return sorted(ints, key=_interval_length, reverse=True)
-
-        deviation_sum = 0.0
-        invtime_sum = 0.0
-        trials = 50
-        for _ in range(trials):
-            int1, int2, _ = _intervals()
-            new_cell1 = self.subinterval(*int1)
-            new_cell2 = self.subinterval(*int2)
-            deviation, invtime = _stability_terms(new_cell1, new_cell2)
-            deviation_sum += deviation
-            invtime_sum += invtime
-
-        mean_sfactor = deviation_sum / invtime_sum
-
-        def _transform(x):
-            return 1.0 / (1.0 + x)
-            #return numpy.exp(-x)
-
-        return _transform(mean_sfactor)
-
     def subinterval(self, start, stop):
         """
         Create a Cell object from the data recored in part of the session
@@ -4066,50 +4242,19 @@ class Cell(BaseCell):
             * stop`.
 
         """
+        new_pos = self.position.subinterval(start, stop)
+        t = new_pos.data['t']
+
         data = self.data
-        pos = self.position
-        posdata = pos.data
-        posparams = pos.params
-
-        # Masked samples don't count
-        tw = numpy.ma.filled(pos.filtered_data()['tweights'], fill_value=0.0)
-
-        cumtw = numpy.cumsum(tw)
-        length = cumtw[-1]
-        start_length, stop_length = length * start, length * stop
-
-        index = (start_length <= cumtw) & (cumtw < stop_length)
-
-        t = posdata['t'][index]
-        poskwargs = dict(
-            t=t,
-            min_speed=posparams['min_speed'],
-            speed_bandwidth=posparams['speed_bandwidth'],
-        )
-        poskwargs.update(**pos.info)
-        if pos.dual_positions:
-            poskwargs.update(
-                x=posdata['x1'][index],
-                y=posdata['y1'][index],
-                x2=posdata['x2'][index],
-                y2=posdata['y2'][index],
-            )
-        else:
-            poskwargs.update(
-                x=posdata['x'][index],
-                y=posdata['x'][index],
-            )
-
-        new_pos = Position(**poskwargs)
 
         spike_t = data['spike_t']
         spikeindex = (t[0] <= spike_t) & (spike_t < t[-1])
-        new_spike_t = data['spike_t'][spikeindex]
+        new_spike_t = spike_t[spikeindex]
 
         cellkwargs = self.info
         cellkwargs.update(self.params)
 
-        return Cell(position=new_pos, spike_t=new_spike_t, **cellkwargs)
+        return type(self)(spike_t=new_spike_t, position=new_pos, **cellkwargs)
 
     def resample_spikes(self, length=1.0, replace=True):
         """
@@ -4157,7 +4302,8 @@ class Cell(BaseCell):
         kwargs = self.info
         kwargs.update(self.params)
 
-        return Cell(position=self.position, spike_t=new_spike_t, **kwargs)
+        return type(self)(position=self.position, spike_t=new_spike_t,
+                          **kwargs)
 
     def plot_spikes(self, axes=None, path=False, marker='o', alpha=0.25,
                     zorder=10, **kwargs):
@@ -4215,6 +4361,227 @@ class Cell(BaseCell):
             axes.set_ylim(range_[1])
 
         return h
+
+
+class RateCell(PositionCell):
+    """
+    Represent a real cell with firing encoded as a spike train.
+
+    Parameters
+    ----------
+    rate : array-like
+        Array giving the firing rate at each position sample in `position`.
+    position, bins, range_
+        See `PositionCell`.
+    map_mode : {'histogram', 'kde'}, optional
+        String to select whether to compute the occupancy map, spike map and
+        ratemap using bin counts (histogram) or kernel density estimation.
+    bandwidth : scalar or 'cv', optional
+        Bandwidth of the kernel used in the smoothing filter (if
+        `map_mode='histogram'`) or kernel density estimation (if
+        `map_mode='kde'`) when computing the maps. Given in the same
+        units as the coordinates in `pos`.
+    **kwargs
+        See `PositionCell`.
+
+    """
+    def __init__(self, rate, position, bins, range_=None, map_mode='kde',
+                 bandwidth=0.0, **kwargs):
+        PositionCell.__init__(self, position, bins, range_=range_,
+                              map_mode=map_mode, bandwidth=bandwidth, **kwargs)
+
+        rate = numpy.ma.squeeze(rate)
+        ratemask = numpy.ma.getmaskarray(rate) | numpy.isnan(rate)
+        rate = numpy.ma.masked_where(ratemask, rate)
+
+        self.data.update(
+            rate=rate,
+        )
+
+    @memoize_method
+    def _spikemap(self, bins, range_, map_mode, bandwidth, kernel):
+        """
+        Compute a map of the recorded spikes
+
+        This part of the computation in `RateCell.spikemap` is factored out
+        to optimize memoization.
+
+        """
+        # We use self._occupancy to instantiate the BinnedSet, to avoid
+        # creating unneccesary instance duplicates.
+        occupancy = self._occupancy(bins, range_)
+        bset = occupancy.bset
+        xedges, yedges = bset.xedges, bset.yedges
+
+        rate = self.data['rate']
+
+        fdata = self.position.filtered_data()
+        x, y, tw = fdata['x'], fdata['y'], fdata['tweights']
+        mask = (numpy.ma.getmaskarray(x) | numpy.ma.getmaskarray(y) |
+                numpy.ma.getmaskarray(tw) | numpy.ma.getmaskarray(rate))
+        x = x[~mask].data
+        y = y[~mask].data
+        tw = tw[~mask].data
+        rate = rate[~mask].data
+
+        rate_weights = rate * tw
+
+        if map_mode == 'histogram':
+            values, __, __ = numpy.histogram2d(x, y, bins=(xedges, yedges),
+                                               normed=False,
+                                               weights=rate_weights)
+        elif map_mode == 'kde':
+            xcenters = .5 * (xedges[1:] + xedges[:-1])
+            ycenters = .5 * (yedges[1:] + yedges[:-1])
+            yyc, xxc = numpy.meshgrid(ycenters, xcenters)
+            sample_points = numpy.column_stack((xxc.ravel(), yyc.ravel()))
+            pdata = numpy.column_stack((x, y))
+            kde = kdes[kernel]
+            values = kde(pdata, sample_points, bandwidth,
+                         weights=rate_weights)
+            values = values.reshape(xxc.shape) * bset.area
+        else:
+            raise ValueError("Unknown 'map_mode': {}".format(map_mode))
+        return IntensityMap2D(values, bset)
+
+    def nspikes(self, **kwargs):
+        """
+        Count the number of valid spikes recorded from this cell
+
+        Parameters
+        ----------
+        **kwargs : dict, optional
+            Not in use.
+
+        Returns
+        -------
+        scalar
+            Number of spikes.
+
+        """
+        rate = self.data['rate']
+
+        tw = self.position.filtered_data()['tweights']
+        mask = (numpy.ma.getmaskarray(tw) | numpy.ma.getmaskarray(rate))
+        tw = tw[~mask].data
+        rate = rate[~mask].data
+
+        rate_weights = rate * tw
+        return numpy.sum(rate_weights)
+
+    def mean_rate_in_region(self, xc, yc, r, **kwargs):
+        """
+        Compute the mean firing rate of the cell within a circular region
+
+        Reimplements `BaseCell.mean_rate_in_region` method to use firing rates
+        associated with the trajectory of the animal instead of the ratemap to
+        compute the mean rate.
+
+        Parameters
+        ----------
+        xc, yc : scalars
+            Center of the circular region to consider.
+        r : positive scalar
+            Radius of the circular region to consider.
+        **kwargs : dict, optional
+            Keyword arguments are swallowed.
+
+        Returns
+        -------
+        scalar
+            Mean firing rate within the region (the number of spikes recorded
+            within the region divided by the time spent there).
+
+        """
+        rate = self.data['rate']
+
+        fdata = self.position.filtered_data()
+        x, y, tw = fdata['x'], fdata['y'], fdata['tweights']
+        mask = (numpy.ma.getmaskarray(x) | numpy.ma.getmaskarray(y) |
+                numpy.ma.getmaskarray(tw) | numpy.ma.getmaskarray(rate))
+        x = x[~mask].data
+        y = y[~mask].data
+        tw = tw[~mask].data
+        rate = rate[~mask].data
+
+        dx, dy = x - xc, y - yc
+        distance = numpy.sqrt(dx * dx + dy * dy)
+        valid = (distance < r)
+        valid_rate = rate[valid]
+        valid_tw = tw[valid]
+        return numpy.sum(valid_rate * valid_tw) / numpy.sum(valid_tw)
+
+    @memoize_method
+    def _spike_hd_dist(self, bins, hd_dist_mode, bandwidth, kernel):
+        """
+        Compute the distribution of head directions at spiking times
+
+        This part of the computation in `Cell.spike_hd_dist` is factored out
+        to optimize memoization.
+
+        """
+        # We use self._hd_distribution to instantiate the BinnedSet, to avoid
+        # creating unneccesary instance duplicates.
+        hd_distribution = self._hd_distribution(bins)
+        bset = hd_distribution.bset
+        edges = bset.edges[0]
+
+        rate = self.data['rate']
+
+        hd = self.hd()
+        tw = self.filtered_data()['tweights']
+        mask = (numpy.ma.getmaskarray(hd) | numpy.ma.getmaskarray(tw) |
+                numpy.ma.getmaskarray(rate))
+        hd = hd[~mask].data
+        tw = tw[~mask].data
+        rate = rate[~mask].data
+
+        rate_weights = rate * tw
+
+        if hd_dist_mode == 'histogram':
+            range_ = (0.0, _2PI)
+            values, __ = numpy.histogram(hd, bins=edges, range=range_,
+                                         normed=False, weights=rate_weights)
+        elif hd_dist_mode == 'kde':
+            centers = .5 * (edges[1:] + edges[:-1])
+            kde = kdes['vonmises']
+            values = kde(hd, centers, bandwidth, weights=rate_weights)
+            values *= bset.area
+        else:
+            raise ValueError("Unknown 'hd_dist_mode': {}".format(hd_dist_mode))
+        return IntensityMap(values, bset)
+
+    def subinterval(self, start, stop):
+        """
+        Create a Cell object from the data recored in part of the session
+
+        Parameters
+        ----------
+        start, stop : scalar in [0, 1]
+            Start and stop times for the subinterval to use, given as fractions
+            of the total length of the recording session.
+
+        Returns
+        -------
+        Cell
+            New Cell object based on the data recorded between
+            ..math:`t_0 + (t_f - t_0) * start` and ..math:`t_0 + (t_f - t_0)
+            * stop`.
+
+        """
+        pos = self.position
+        t = pos.data['t']
+        new_pos = self.position.subinterval(start, stop)
+        new_t = new_pos.data['t']
+
+        rate = self.data['rate']
+        rateindex = (new_t[0] <= t) & (t <= new_t[-1])
+        new_rate = rate[rateindex]
+
+        cellkwargs = self.info
+        cellkwargs.update(self.params)
+
+        return type(self)(rate=new_rate, position=new_pos, **cellkwargs)
 
 
 class CellCollection(AlmostImmutable, MutableSequence):
@@ -4311,7 +4678,7 @@ class CellCollection(AlmostImmutable, MutableSequence):
                 if key in cell:
                     ckw.update(cell[key])
 
-            ckw.update(position=position, spike_t=cell['spike_t'], bins=bins,
+            ckw.update(spike_t=cell['spike_t'], position=position, bins=bins,
                        range_=range_)
             clist.append(Cell(**ckw))
         return clist
