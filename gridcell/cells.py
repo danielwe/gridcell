@@ -2076,7 +2076,9 @@ class BaseCell(AbstractAlmostImmutable):
                                      numpy.ma.std(rot_ring_olap))
 
                 nbins = numpy.sum((~full_mask).astype(numpy.int_))
-                corr = numpy.ma.sum(ring_olap * rot_ring_olap) / nbins
+                corr = numpy.ma.filled(
+                    numpy.ma.sum(ring_olap * rot_ring_olap),
+                    fill_value=numpy.nan) / nbins
 
                 return corr, nbins
 
