@@ -1056,6 +1056,79 @@ class BasePosition(AlmostImmutable):
 
         return type(self)(**kwargs)
 
+    @memoize_method
+    def temporal_firing_rate(self, spatial_firing_rate, tstep, **kwargs):
+        """
+        Generate a sequence of time bins and corresponding firing rates
+
+        Parameters
+        ----------
+        spatial_firing_rate : callable
+            Function taking an array of x-values and an array of
+            corresponding y-values, returning an array of spatial firing rates
+            at each location (x, y).
+        tstep : float
+            Length of time bins in the sequence of spike probabilities. Given
+            in the same unit as the times used to instantiate this Position
+            object.
+        **kwargs : dict, optional
+            Keyword arguments are passed on to `firing_rate`.
+
+        Returns
+        -------
+        tcenters : ndarray
+            Array of center times of the time bins.
+        spike_probs : ndarray
+            Array of spike probabilities for the corresponding time bins in
+            `tcenters`.
+
+        """
+        data = self.data
+        t, x, y = data['tframed'], data['xframed'], data['yframed']
+
+        tstep_2 = 0.5 * tstep
+        tcenters = numpy.arange(t[0] + tstep_2, t[-1], tstep)
+
+        x = numpy.ma.filled(x, fill_value=numpy.nan)
+        y = numpy.ma.filled(y, fill_value=numpy.nan)
+
+        xcenters = numpy.interp(tcenters, t, x)
+        ycenters = numpy.interp(tcenters, t, y)
+
+        return (
+            tcenters,
+            spatial_firing_rate(xcenters, ycenters, **kwargs)
+        )
+
+    def sample_spikes(self, spatial_firing_rate, tstep=0.005, scale_factor=1.0,
+                      **kwargs):
+        """
+        Generate a spike train for the positions from a spatial firing rate
+
+        Parameters
+        ----------
+        spatial_firing_rate, tstep
+            See `BasePosition.temporal_firing_rate`.
+        scale_factor : float, optional
+            Factor to scale the firing rate by. This arguments alleviates the
+            need to generate unhashable lamdas wrapping `spatial_firing_rate`
+            if sampling at a scaled rate.
+        **kwargs : dict, optional
+            Keyword arguments are passed on to
+            `BasePosition.temporal_firing_rate`.
+
+        Returns
+        -------
+        ndarray
+            Array of spike times.
+
+        """
+        tcenters, rates = self.temporal_firing_rate(spatial_firing_rate,
+                                                    tstep=tstep, **kwargs)
+        spike_probs = tstep * scale_factor * rates
+        spikes = numpy.random.random_sample((len(tcenters), )) < spike_probs
+        return tcenters[spikes]
+
     def plot_path(self, axes=None, linewidth=0.5, color='0.5', alpha=0.5,
                   **kwargs):
         """
@@ -3305,34 +3378,6 @@ class TemplateGridCell(BaseCell):
         fields['Field'] = numpy.arange(1, len(fields) + 1, dtype=numpy.int_)
         return fields
 
-    @memoize_method
-    def _spike_probs(self, pos, mean_rate, tstep=0.005, **kwargs):
-        """
-        Generate a series of time bins and corresponding spike probabilities
-
-        This is factored out from `TemplateGridCell.synthetic_spike_t` to
-        optimize memoization.
-
-        """
-        data = pos.data
-        t, x, y = data['tframed'], data['xframed'], data['yframed']
-
-        tstep_2 = 0.5 * tstep
-        tcenters = numpy.arange(t[0] + tstep_2, t[-1], tstep)
-        tsteps = (numpy.minimum(tcenters + tstep_2, t[-1]) -
-                  (tcenters - tstep_2))
-
-        x = numpy.ma.filled(x, fill_value=numpy.nan)
-        y = numpy.ma.filled(y, fill_value=numpy.nan)
-
-        xcenters = numpy.interp(tcenters, t, x)
-        ycenters = numpy.interp(tcenters, t, y)
-
-        return (
-            tcenters,
-            mean_rate * tsteps * self.firing_rate(xcenters, ycenters, **kwargs)
-        )
-
     def synthetic_spike_t(self, pos, mean_rate, **kwargs):
         """
         Generate a synthetic spike train for a `Position` object
@@ -3345,7 +3390,7 @@ class TemplateGridCell(BaseCell):
             Mean firing rate of the spike train.
         **kwargs : dict, optional
             Keyword arguments will be passed to
-            `TemplateGridCell.synthetic_spike_t`.
+            `pos.sample_spikes`.
 
         Returns
         -------
@@ -3353,9 +3398,8 @@ class TemplateGridCell(BaseCell):
             Array of spike times.
 
         """
-        tcenters, spike_probs = self._spike_probs(pos, mean_rate, **kwargs)
-        spikes = numpy.random.random_sample((len(tcenters), )) < spike_probs
-        return tcenters[spikes]
+        return pos.sample_spikes(self.firing_rate, scale_factor=mean_rate,
+                                 **kwargs)
 
 
 class PositionCell(BaseCell):
