@@ -25,7 +25,8 @@ from __future__ import (absolute_import, division, print_function,
 import numpy
 from scipy import signal, fftpack, special
 from scipy.ndimage import filters, measurements, interpolation
-#from skimage import feature  #, exposure
+from skimage.feature import peak_local_max
+from skimage.morphology import watershed
 from matplotlib import pyplot
 
 from .utils import (AlmostImmutable, sensibly_divide, pearson_correlogram,
@@ -1243,7 +1244,7 @@ class IntensityMap(AlmostImmutable):
         return self._data
 
     @property
-    def unmasked_data(self):
+    def unmasked_data(self): 
         """
         A representation of the intensity data with missing values as nans
         instead of masked. This requires casting the data to float.
@@ -1408,6 +1409,48 @@ class IntensityMap(AlmostImmutable):
 
         return type(self)(new_data, new_bset)
 
+    def _correlate(self, other, mode, pearson, normalize):
+        sdata = self.data
+        if isinstance(other, type(self)) or isinstance(self, type(other)):
+            odata = other.data
+        else:
+            other = self.new_from_array(other)
+            odata = other.data
+
+        new_bset = self.bset.correlate(other.bset, mode=mode)
+
+        if pearson == 'local':
+            new_data = pearson_correlogram(sdata, odata, mode=mode)
+
+            # Remove the outer frame of nonsense
+            n = self.ndim
+            sl_all = slice(None)
+            sl_firstlast = (0, -1)
+            for axis in range(n):
+                s = [sl_all] * n
+                s[axis] = sl_firstlast
+                new_data[s] = numpy.ma.masked
+        else:
+            if pearson == 'global':
+                sdata = ((sdata - numpy.ma.mean(sdata)) /
+                         (numpy.ma.std(sdata)))
+                odata = ((odata - numpy.ma.mean(odata)) /
+                         (numpy.ma.std(odata)))
+            elif pearson is not None:
+                raise ValueError("'pearson' must be either 'global', 'local', "
+                                 "or None.")
+
+            def corrfunc(arr1, arr2):
+                max_overlap = [min(s1, s2)
+                               for (s1, s2) in zip(arr1.shape, arr2.shape)]
+                max_size_sq = numpy.sqrt(numpy.prod(max_overlap))
+                return signal.correlate(arr1 / max_size_sq, arr2 / max_size_sq,
+                                        mode=mode)
+
+            new_data = _safe_mmap(normalize, corrfunc, (sdata, odata))
+
+        return new_data, new_bset
+
     def correlate(self, other, mode='full', pearson=None, normalize=False):
         """
         Compute the cross-correlogram of this and another IntensityMap instance
@@ -1449,52 +1492,16 @@ class IntensityMap(AlmostImmutable):
             and the other instance.
 
         """
-        sdata = self.data
-        if isinstance(other, type(self)) or isinstance(self, type(other)):
-            odata = other.data
-        else:
-            other = self.new_from_array(other)
-            odata = other.data
-
-        new_bset = self.bset.correlate(other.bset, mode=mode)
-
-        if pearson == 'local':
-            new_data = pearson_correlogram(sdata, odata, mode=mode)
-
-            # Remove the outer frame of nonsense
-            n = self.ndim
-            sl_all = slice(None)
-            sl_firstlast = (0, -1)
-            for axis in range(n):
-                s = [sl_all] * n
-                s[axis] = sl_firstlast
-                new_data[s] = numpy.ma.masked
-        else:
-            if pearson == 'global':
-                sdata = ((sdata - numpy.ma.mean(sdata)) /
-                         (numpy.ma.std(sdata)))
-                odata = ((odata - numpy.ma.mean(odata)) /
-                         (numpy.ma.std(odata)))
-            elif pearson is not None:
-                raise ValueError("'pearson' must be either 'global', 'local', "
-                                 "or None.")
-
-            def corrfunc(arr1, arr2):
-                max_overlap = [min(s1, s2)
-                               for (s1, s2) in zip(arr1.shape, arr2.shape)]
-                max_size_sq = numpy.sqrt(numpy.prod(max_overlap))
-                return signal.correlate(arr1 / max_size_sq, arr2 / max_size_sq,
-                                        mode=mode)
-
-            new_data = _safe_mmap(normalize, corrfunc, (sdata, odata))
-
+        new_data, new_bset = self._correlate(other, mode, pearson, normalize)
         return type(self)(new_data, new_bset)
 
     def autocorrelate(self, mode='full', pearson=None, normalize=False):
         """
         Compute the autocorrelogram of this IntensityMap instance
 
-        This is a convenience wrapper for calling `self.correlate(self, ...)`.
+        In addition to wrapping `self.correlate(self, ...)`, this method clips
+        the result such that the maximum absolute value is always in the center
+        (zero-lag) bin.
 
         Parameters
         ----------
@@ -1507,27 +1514,71 @@ class IntensityMap(AlmostImmutable):
             See `IntensityMap.correlate`.
 
         """
-        return self.correlate(self, mode=mode, pearson=pearson,
-                              normalize=normalize)
+        new_data, new_bset = self._correlate(self, mode, pearson, normalize)
+        n, m = new_data.shape
+        center = new_data[n // 2, m // 2]
+        new_data = numpy.ma.clip(new_data, -center, center)
+        return type(self)(new_data, new_bset)
 
-    def labels(self, threshold):
+    def labels(self, threshold, segment=True, exclude_border=0):
         """
         Label connected regions of intensities larger than a threshold
 
         This method is a simple wrapper around scipy.measurements.label()
 
-        :threshold: lower bound defining the connected regions to be labeled
-        :returns: array of labels, and the number of labeled regions
+        Parameters
+        ----------
+        threshold : float
+            Lower bound defining the connected regions to be labeled.
+        segment : bool, optional
+            If True, watershed segmentation is used to further divide connected
+            regions into basins associated with each local maxima.
+        exclude_border : int
+            See `skimage.feature.peak_local_max`. Only relevant if
+            `subsegment == True`r.
+
+        Returns
+        -------
+        ndarray
+            Array of labels corresponding to the regions.
+        integer
+            Total number of labeled regions.
 
         """
         data = self.unmasked_data
+        isfin = numpy.isfinite(data)
+        data[~isfin] = numpy.amin(data[isfin])
         regions = (data > threshold)
-        data_thres = numpy.zeros_like(data)
-        data_thres[regions] = data[regions]
-        labels, n = measurements.label(data_thres)
+        if segment:
+            local_max = peak_local_max(data, indices=False,
+                                       exclude_border=0,
+                                       footprint=numpy.ones((3, 3)),
+                                       labels=regions)
+            markers = measurements.label(local_max)[0]
+            labels = watershed(-data, markers, mask=regions)
+            if exclude_border > 0:
+                # Remove basins originating from edge peaks
+                diff = numpy.zeros_like(local_max)
+                for i in range(local_max.ndim):
+                    local_max = local_max.swapaxes(0, i)
+                    diff = diff.swapaxes(0, i)
+                    diff[:exclude_border] = local_max[:exclude_border]
+                    diff[-exclude_border:] = local_max[-exclude_border:]
+                    diff = diff.swapaxes(0, i)
+                    local_max = local_max.swapaxes(0, i)
+                
+                for l in numpy.sort(labels[diff])[::-1]:
+                    labels[labels == l] = 0
+                    labels[labels > l] -= 1
+            ulabels = numpy.unique(labels)
+            n = ulabels[ulabels != 0].size
+        else:
+            data_thres = numpy.zeros_like(data)
+            data_thres[regions] = data[regions]
+            labels, n = measurements.label(data_thres)
         return labels, n
 
-    def peaks(self, threshold):
+    def peaks(self, threshold, **kwargs):
         """
         Detect peaks in the IntensityMap instance
 
@@ -1537,21 +1588,32 @@ class IntensityMap(AlmostImmutable):
         region and computing the radius of the circle (hyperball) with this
         area (volume).
 
-        :threshold: lower intensity bound defining the regions in which peaks
-                    are found. This value must be high enough that the supports
-                    of different peaks become disjoint regions, but lower than
-                    the peak intensities themselves.
-        :returns:
-            - an array with a row [x, y, r] for each detected peak, where x and
-              y are the coordinates of the peak and r is an estimate of the
-              radius of the elevated region around the peak
-            - array of labels giving the connected region around the peaks,
-              such that labels == i is an index to the region surrounding the
-              ith peak detected (at index i - 1 in the returned array of peaks)
-            - the number of peaks and labeled regions found
+        Parameters
+        ----------
+        threshold : float
+            Lower intensity bound defining the regions in which peaks can be
+            found. This value must be high enough that the supports of
+            different peaks become disjoint regions, but lower than the peak
+            intensities themselves (note: this requirement can be relaxed by
+            watershed segmentation, see `IntensityMap.labels`).
+        **kwargs : dict, optional
+            Passed to `IntensityMap.labels`.
+
+        Returns
+        -------
+        ndarray
+            Array with a row [x, y, r] for each detected peak, where x and
+            y are the coordinates of the peak and r is an estimate of the
+            radius of the elevated region around the peak.
+        ndarray
+            Array of labels giving the connected region around the peaks, such
+            that labels == i is an index to the region surrounding the ith peak
+            detected (at index i - 1 in the returned array of peaks).
+        integer
+            The number of peaks and labeled regions found.
 
         """
-        labels, n = self.labels(threshold)
+        labels, n = self.labels(threshold, **kwargs)
         if n == 0:
             raise ValueError("no peaks found, try lowering 'threshold'")
 
