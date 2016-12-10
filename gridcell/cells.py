@@ -2397,7 +2397,13 @@ class BaseCell(AbstractAlmostImmutable):
         rmap = self.ratemap(bandwidth=ffbandwidth, **kwargs)
         threshold = numpy.percentile(numpy.ma.compressed(rmap.data),
                                      100.0 * threshold_quantile)
-        peaks, __, __ = rmap.peaks(threshold, exclude_border=1)
+        try:
+            peaks, __, __ = rmap.peaks(threshold, exclude_border=1)
+        except ValueError:
+            emptydict = dict(x=[], y=[], r=[], Field=[])
+            if clean:
+                emptydict['Rate'] = []
+            return pandas.DataFrame(emptydict)
         fields = pandas.DataFrame(peaks, columns=['x', 'y', 'r'])
         fields['Field'] = numpy.arange(1, len(peaks) + 1, dtype=numpy.int_)
 
