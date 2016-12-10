@@ -645,10 +645,18 @@ def disc_overlap(disc1, disc2):
     Returns
     -------
     scalar
-        Fraction of the area of the intersection of the discs to the area of
-        the
+        Square root of the fraction of the
+        #Fraction of the
+        area
+        #common secant
+        of the intersection of the discs to the
+        area
+        #diameter
+        #sum of radii
+        of the
         #union of the discs.
         smallest of the discs.
+        #discs.
 
     """
     # Let disc1 be the larger disc
@@ -659,8 +667,9 @@ def disc_overlap(disc1, disc2):
     d_2 = xdiff * xdiff + ydiff * ydiff
     d = numpy.sqrt(d_2)
     if d <= r1 - r2:
-        #return (r2 * r2) / (r1 * r1)  # union
         return 1.0  # smallest
+        #return 2.0 * r2 / (r1 + r2)  # sum, secant
+        #return (r2 * r2) / (r1 * r1)  # union, area
     rsum = r1 + r2
     minimum_distance_sq = rsum * rsum
     if d_2 < minimum_distance_sq:
@@ -668,6 +677,10 @@ def disc_overlap(disc1, disc2):
         h_2 = (2 * (r1_2 * r2_2 + r1_2 * d_2 + r2_2 * d_2) -
                (r1_2 * r1_2 + r2_2 * r2_2 + d_2 * d_2)) / (4 * d_2)
         h = numpy.sqrt(h_2)
+        #return h / r2  # smallest, secant
+
+        #return 2.0 * h / (r2 + r2)  # sum, secant
+
         d1 = numpy.sqrt(r1_2 - h_2)
         d2 = d - d1
         theta1, theta2 = numpy.arcsin(h / r1), numpy.arcsin(h / r2)
@@ -675,14 +688,15 @@ def disc_overlap(disc1, disc2):
             theta2 = _PI - theta2
         overlap_area = r1_2 * theta1 - h * d1 + r2_2 * theta2 - h * d2
         disc2_area = _PI * r2_2
-        return overlap_area / disc2_area  # smallest
+        return numpy.sqrt(overlap_area / disc2_area)  # smallest, area
+
         #disc1_area = _PI * r1_2
         #total_area = disc1_area + disc2_area - overlap_area
-        #return overlap_area / total_area  # union
+        #return overlap_area / total_area  # union, area
     return 0.0
 
 
-def matching_disc_pairs(discs1, discs2, min_overlap=0.0, priority=None,
+def matching_disc_pairs(discs1, discs2, min_overlap=0.0, priority_weights=None,
                         max_overlap=1.0):
     """
     Pair up the best matching discs from two sets
@@ -694,13 +708,13 @@ def matching_disc_pairs(discs1, discs2, min_overlap=0.0, priority=None,
         in `disc_overlap`.
     min_overlap : scalar, optional
         Minimum overlap between two matching discs
-    priority : sequence, optional
-        Sequence of prioirty weights for discs in `disc1`. Pairs will be
+    priority_weights : sequence, optional
+        Sequence of priority weights for discs in `disc1`. Pairs will be
         selected such that each disc in `discs2` will be paired up with the
         disc in `discs1` for which the product of the priority and
-        `sin(overlap * pi / 2)` is highest (only considering pairs satisfying
-        the `min_overlap` requirement). This sequence must have the same length
-        as `discs1`. If None, the most overlapping disc will have the highest
+        the overlap is highest (only considering pairs satisfying the
+        `min_overlap` requirement). This sequence must have the same length as
+        `discs1`. If None, the most overlapping disc will have the highest
         priority.
     max_overlap : scalar, optional
         Maximum overlap between discs from the same input sequence
@@ -713,21 +727,19 @@ def matching_disc_pairs(discs1, discs2, min_overlap=0.0, priority=None,
         of decreasing overlap. The first element is a disc from `discs1` and
         the second from `discs2`. Each disc only appears in one pair, the
         closest match for which the matching disc did not have an even closer
-        match with another disc. No overlapping discs from the same input
-        sequence will be included.
+        match with another disc.
 
     """
     pairs = []
     for i, disc1 in enumerate(discs1):
-        if priority is not None:
-            p = priority[i]
+        if priority_weights is not None:
+            p = priority_weights[i]
         else:
             p = 1.0
         for disc2 in discs2:
             overlap = disc_overlap(disc1, disc2)
             if overlap > min_overlap:
-                pair = (-(p * numpy.sin(_PI_2 * overlap)),
-                        tuple(disc1), tuple(disc2))
+                pair = (-(p * overlap), tuple(disc1), tuple(disc2))
                 heapq.heappush(pairs, pair)
     matches = []
     used1 = set()
@@ -757,9 +769,8 @@ def clean_fields(fields, ideal_fields, min_overlap=0.0):
         radius. The `ideal_fields` dataframe must also contain a column
         `Field` containing an index for each field. These indices will be
         transferred to the matching fields in `fields` that are returned. If
-        `fields` contains a column `'Rate'`, the cube of the values in this
-        column will be used as the `priority` parameter to
-        `matching_disc_pairs`.
+        `fields` contains a column `'Rate'`, the values in this column will be
+        used as the `priority_weights` parameter to `matching_disc_pairs`.
     min_overlap : scalar, optional
         Minimum overlap of a field with one of the ideal fields in order to be
         considered a match.
@@ -776,12 +787,12 @@ def clean_fields(fields, ideal_fields, min_overlap=0.0):
     field_arr = fields[['x', 'y', 'r']].values
     ideal_field_arr = ideal_fields[['x', 'y', 'r']].values
     if 'Rate' in fields:
-        p = fields['Rate'].values
-        priority = p ** 5
+        priority_weights = fields['Rate'].values
     else:
-        priority = None
+        priority_weights = None
     matches = matching_disc_pairs(field_arr, ideal_field_arr,
-                                  min_overlap=min_overlap, priority=priority,
+                                  min_overlap=min_overlap,
+                                  priority_weights=priority_weights,
                                   max_overlap=0.0)
     try:
         fields_unordered, ideal_unordered = zip(*matches)

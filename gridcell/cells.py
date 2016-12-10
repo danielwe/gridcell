@@ -1100,7 +1100,7 @@ class BasePosition(AlmostImmutable):
             spatial_firing_rate(xcenters, ycenters, **kwargs)
         )
 
-    def sample_spikes(self, spatial_firing_rate, tstep=0.005, scale_factor=1.0,
+    def sample_spikes(self, spatial_firing_rate, tstep=0.005, ratefactor=1.0,
                       **kwargs):
         """
         Generate a spike train for the positions from a spatial firing rate
@@ -1109,7 +1109,7 @@ class BasePosition(AlmostImmutable):
         ----------
         spatial_firing_rate, tstep
             See `BasePosition.temporal_firing_rate`.
-        scale_factor : float, optional
+        ratefactor : float, optional
             Factor to scale the firing rate by. This arguments alleviates the
             need to generate unhashable lamdas wrapping `spatial_firing_rate`
             if sampling at a scaled rate.
@@ -1125,7 +1125,7 @@ class BasePosition(AlmostImmutable):
         """
         tcenters, rates = self.temporal_firing_rate(spatial_firing_rate,
                                                     tstep=tstep, **kwargs)
-        spike_probs = tstep * scale_factor * rates
+        spike_probs = tstep * ratefactor * rates
         spikes = numpy.random.random_sample((len(tcenters), )) < spike_probs
         return tcenters[spikes]
 
@@ -1733,19 +1733,19 @@ class BaseCell(AbstractAlmostImmutable):
         imap : IntensityMap
             IntensityMap to detect peaks in.
         threshold : scalar
-            Peak detection threshold -- a connected region of bins with
-            intensity greater than this value corresponds to one peak.
+            Peak detection threshold. See `IntensityMap.peaks` for details.
         n : integer
             The number of peaks to detect and return.
 
         Returns
         -------
-        ndarray, shape (n, 2)
-            Array containing the peak locations. The most central peak has [x,
-            y]-coordinates given by `peaks[0]`, and the coordinates of the six
-            peaks closest to it follow in `peaks[i], i = 1, ..., n`. The peaks
-            are sorted by the angle between the positive x axis and the line
-            from the central peak out to the peripheral peak.
+        ndarray, shape (n, 3)
+            Array containing the peak locations and a size scale for each peak.
+            The most central peak has [x, y, r]-values given by `peaks[0]`, and
+            the coordinates of the six peaks closest to it follow in `peaks[i],
+            i = 1, ..., n`. The peaks are sorted by the angle between the
+            positive x axis and the line from the central peak out to the
+            peripheral peak.
         labels : ndarray
             Label array identifying the regions surrounding the detected
             peaks: `labels == i` is an index to the region surrounding
@@ -1783,8 +1783,8 @@ class BaseCell(AbstractAlmostImmutable):
             asort = numpy.roll(asort, -start_index)
             sort = numpy.hstack((rsort[0], rsort[1:n][asort]))
 
-        # Grab the sorted peaks, discard the radius information for now
-        peaks = all_peaks[sort, :2]
+        # Grab the sorted peaks
+        peaks = all_peaks[sort]
 
         # Find corresponding labels
         new_labels = numpy.zeros_like(labels)
@@ -1798,8 +1798,8 @@ class BaseCell(AbstractAlmostImmutable):
         acorr = self.acorr(**kwargs)
         peaks, __ = self.detect_central_peaks(acorr, threshold, 7)
 
-        # Discard center peak
-        return peaks[1:]
+        # Discard center peak, and radius information
+        return peaks[1:, :2]
 
     def grid_peaks(self, threshold=None, polar_peaks=False, project_peaks=True,
                    normalize_peaks=False, **kwargs):
@@ -2253,19 +2253,20 @@ class BaseCell(AbstractAlmostImmutable):
         """
         return self.ratemap(**kwargs).ball((xc, yc), r).mean()
 
-    def firing_field(self, threshold=None, **kwargs):
+    def firing_field(self, ffthreshold=0.55, **kwargs):
         """
         Compute a covariance matrix characterizing the average firing field
         shape
 
-        The estimate is found by fitting a gaussian to the region surrounding
-        the central peak in the autocorrelogram of the firing rate of the cell.
+        The estimate is found by measuring the area of the central
+        autocorrelogram peak basin exceeding `ffthreshold`, and finding the
+        circular 2D Gaussian that exceeds a fraction `ffthreshold` of it's peak
+        value in a region of the same area.
 
         Parameters
         ----------
-        threshold : scalar in [-1, 1] or None, optional
-            Threshold value defining the central peak region. If None, the
-            parameter `self.params['threshold']` is used.
+        ffthreshold : scalar in (0, 1], optional
+            Threshold value defining the central peak basin.
         **kwargs : dict, optional
             Additional keyword arguments are passed to `BaseCell.acorr`.
 
@@ -2275,16 +2276,11 @@ class BaseCell(AbstractAlmostImmutable):
             The estimated covariance matrix.
 
         """
-        if threshold is None:
-            threshold = self.params['threshold']
-
         acorr = self.acorr(**kwargs)
-        __, labels = self.detect_central_peaks(acorr, threshold, 1)
-
-        central_mask = ~(labels == 1)
-        __, __, firing_field = acorr.fit_gaussian(mask=central_mask)
-
-        return firing_field
+        peaks, __ = self.detect_central_peaks(acorr, ffthreshold, 1)
+        peak_r = peaks[0, 2]
+        return (numpy.identity(2) * peak_r * peak_r /
+                (-2.0 * numpy.log(ffthreshold)))
 
     def firing_field_map(self, **kwargs):
         """
@@ -2318,52 +2314,35 @@ class BaseCell(AbstractAlmostImmutable):
 
         return IntensityMap2D(ffarr, bset)
 
-    def firing_field_radius(self, radius_type='gmean', scale_factor=0.25,
-                            gauss_factor=1.6, **kwargs):
+    def firing_field_radius(self, radius_factor=1.6, **kwargs):
         """
         Compute a radius approximating the average firing field size
 
+        The radius is computed as the geometric mean of the marginal standard
+        deviations extracted from the average firing field covariance matrix,
+        times a constant factor.
+
         Parameters
         ----------
-        radius_type : {'scale', 'gauss', 'gmean'}, optional
-            Choose how to compute the radius. If `'scale'`, the radius will be
-            proportional to the grid scale. IF `'gauss'`, the radius will be
-            proportional to the square root of the geometric mean of
-            the eigenvalues of the covariance matrix returned from
-            `BaseCell.firing_field` (i.e. the geometric mean of the standard
-            deviations of the marginal distributions along the separable
-            directions of the fitted Gaussian). Otherwise, the radius will be
-            the geometric mean of the two variants.
-        scale_factor : scalar, optional
-            The constant of proportionality when `radius_type='scale'`.
-        gauss_factor : scalar, optional
-            The constant of proportionality when `radius_type='gauss'`.
+        radius_factor : scalar, optional
+            The constant of proportionality.
         **kwargs : dict, optional
-            Keyword arguments are passed to `BaseCell.scale` or
-            `BaseCell.firing_field`.
+            Keyword arguments are passed to `BaseCell.firing_field`.
 
         Returns
         -------
-        scalar
+        float
             Firing field radius.
 
         """
-        if radius_type != 'scale':
-            r1 = gauss_factor * (
-                linalg.det(self.firing_field(**kwargs)) ** 0.25)
-            if radius_type == 'gauss':
-                return r1
-        r2 = scale_factor * self.scale(**kwargs)
-        if radius_type == 'scale':
-            return r2
-        return numpy.sqrt(r1 * r2)
+        return radius_factor * (linalg.det(self.firing_field(**kwargs)) **
+                                0.25)
+
 
     @memoize_method
     def firing_fields(self, fixed_radius=True, clean=True, ifields=None,
-                      min_overlap=1.0 / 30.0, max_overlap=2.0 / 3.0,
-                      min_rfactor=1.0, max_rfactor=1.15,
-                      num_r=97, threshold_quantile_range=(0.40, 0.60),
-                      radius_type=None, **kwargs):
+                      min_overlap=0.25, ffbandwidth=None, bandwidth_factor=1.5,
+                      threshold_quantile=0.25, **kwargs):
         """
         Detect firing fields in the ratemap
 
@@ -2372,6 +2351,9 @@ class BaseCell(AbstractAlmostImmutable):
         fixed_radius : bool, optional
             If True, the returned firing fields will all have a common radius
             given by `BaseCell.firing_field_radius`. Otherwise, the radius
+            returned from `IntensityMap.peaks` will be used (note that this
+            will typically be very large. Consider scaling it by  e.g. `2/3`
+            before use).
             corresponding to the scale at which the blob was detected will be
             used.
         clean : bool, optional
@@ -2384,23 +2366,16 @@ class BaseCell(AbstractAlmostImmutable):
             The minimum overlap fraction of a detected and an idealized firing
             field in order to be considered a match. This parameter has no
             effect if `clean=False`.
-        max_overlap : scalar, optional
-            The maximum overlap fraction of two detected firing fields --
-            when fields overlap more than this, only the larger field is kept.
-        min_rfactor, max_rfactor : scalars, optional
-            Constants defining the radius interval for the blob detection
-            algorithm. The interval is bounded by these constants multiplied by
-            the firing field radius.
-        num_r : integer, optional
-            The number of radii to use in the blob detection algorithm.  The
-            values will be logarithmically spaced in the radius interval.
-        threshold_quantile_range : sequence, optional
-            The peak detection threshold on the negative scaled
-            Laplacian-of-Gaussian transforms of the ratemap are is computed as
-            the difference between these two quantiles of the firing rate
-            distribution in the ratemap.
-        radius_type : dict, optional
-            Passed to `BaseCell.firing_field_radius` if not None.
+        ffbandwidth : float, optional
+            The ratemap segmentation is performed on a ratemap smoothed with
+            this bandwidth. If `None`, `bandwidth_factor * self.bandwidth()` is
+            used.
+        bandwidth_factor : float, optional
+            See `ffbandwidth` for explanation. No effect if `ffbandwidth` is
+            not `None`.
+        threshold_quantile : float, optional
+            Segmentation will be performed on the region(s) of the ratemap
+            exceeding this quantile in the distribution of values.
         **kwargs : dict, optional
             Additional keyword arguments are passed to
             `BaseCell.firing_field_radius`, `BaseCell.ratemap`,
@@ -2414,42 +2389,24 @@ class BaseCell(AbstractAlmostImmutable):
             self-explanatory.
 
         """
-        ffr_kw = dict(kwargs)
-        if radius_type is not None:
-            ffr_kw.update(radius_type=radius_type)
-        radius = self.firing_field_radius(**ffr_kw)
+        radius = self.firing_field_radius(**kwargs)
 
-        rmap = self.ratemap(**kwargs)
-        default_bins = rmap.shape
-        custom_bins = (2 * default_bins[0], 2 * default_bins[1])
-        crmap_kw = dict(kwargs)
-        crmap_kw.update(bins=custom_bins)
-        custom_rmap = self.ratemap(**crmap_kw)
+        if ffbandwidth is None:
+            ffbandwidth = bandwidth_factor * self.bandwidth()
 
-        threshold = numpy.diff(
-            numpy.percentile(numpy.ma.compressed(custom_rmap.data),
-                             [100 * p for p in threshold_quantile_range]))[0]
-
-        field_arr = custom_rmap.blobs(
-            min_r=radius * min_rfactor,
-            max_r=radius * max_rfactor,
-            num_r=num_r,
-            max_overlap=max_overlap,
-            threshold=threshold,
-            log_scale=True,
-            exclude_edges=1,
-            exclude_scale_endpoints=False,
-            ignore_missing=True,
-        )
-        fields = pandas.DataFrame(field_arr, columns=['x', 'y', 'r'])
-        fields['Field'] = numpy.arange(1, len(field_arr) + 1, dtype=numpy.int_)
+        rmap = self.ratemap(bandwidth=ffbandwidth, **kwargs)
+        threshold = numpy.percentile(numpy.ma.compressed(rmap.data),
+                                     100.0 * threshold_quantile)
+        peaks, __, __ = rmap.peaks(threshold, exclude_border=1)
+        fields = pandas.DataFrame(peaks, columns=['x', 'y', 'r'])
+        fields['Field'] = numpy.arange(1, len(peaks) + 1, dtype=numpy.int_)
 
         if fixed_radius:
             fields['r'] = radius
 
         if clean:
             if ifields is None:
-                ifields = self.ideal_firing_fields(**ffr_kw)
+                ifields = self.ideal_firing_fields(**kwargs)
             rates = self.firing_field_rates(fields=fields, **kwargs)
             fields = pandas.merge(fields, rates)
             fields = clean_fields(fields, ifields, min_overlap=min_overlap)
@@ -2771,7 +2728,7 @@ class BaseCell(AbstractAlmostImmutable):
         corr = self.corr(other, **kwargs)
         peaks, __ = self.detect_central_peaks(corr, threshold, 1)
 
-        return numpy.array(peaks[0])
+        return numpy.array(peaks[0, :2])
 
     def plot_ratemap(self, vmin=0.0, rate_kw=None, **kwargs):
         """
@@ -2906,7 +2863,7 @@ class BaseCell(AbstractAlmostImmutable):
 
         gkw = {}
         if grid_kw is not None:
-            grid_kw.update(grid_kw)
+            gkw.update(grid_kw)
         gkw.update(polar_peaks=False)
         peaks = self.grid_peaks(**gkw)
 
@@ -3070,7 +3027,7 @@ class BaseCell(AbstractAlmostImmutable):
         return ffield.plot(**kwargs)
 
     @memoize_method
-    def template(self, circular_fields=True, template_kw=None, **kwargs):
+    def template(self, template_kw=None, **kwargs):
         """
         Create an idealized template ratemap from this cell
 
@@ -3079,11 +3036,6 @@ class BaseCell(AbstractAlmostImmutable):
 
         Parameters
         ----------
-        circular_fields : bool, optional
-            If True, the firing fields in the template will be circular
-            symmetric Gaussians. If False, they will be general 2D Gaussians
-            with covariance matrix given by `BaseCell.firing_field`. The
-            determinant of the covariance matrix is the same in both cases.
         template_kw : None or dict, optional
             Keyword arguments passed to `TemplateGridCell`.
         **kwargs : dict, optional
@@ -3112,8 +3064,6 @@ class BaseCell(AbstractAlmostImmutable):
             template_kw = {}
 
         ffield = self.firing_field(**kwargs)
-        if circular_fields:
-            ffield = numpy.identity(2) * numpy.sqrt(linalg.det(ffield))
 
         kwargs.update(polar_peaks=False)
         peaks = self.grid_peaks(**kwargs)
@@ -3398,7 +3348,7 @@ class TemplateGridCell(BaseCell):
             Array of spike times.
 
         """
-        return pos.sample_spikes(self.firing_rate, scale_factor=mean_rate,
+        return pos.sample_spikes(self.firing_rate, ratefactor=mean_rate,
                                  **kwargs)
 
 
